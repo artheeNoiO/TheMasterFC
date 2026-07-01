@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String    @id
+  email            String    @unique
+  displayName      String?
+  playMode         String    @default("sandbox")
+  onlineUnlocked   Boolean   @default(false)
+  onlineUnlockedAt DateTime?
+  createdAt        DateTime  @default(now())
+  club             Club?
+}
+
+model LeagueShard {
+  id           String   @id @default(cuid())
+  name         String
+  division     Int      @default(1)
+  seasonNumber Int      @default(1)
+  dayNumber    Int      @default(1)
+  isFull       Boolean  @default(false)
+  clubs        Club[]
+  matches      Match[]
+  createdAt    DateTime @default(now())
+}
+
+model Club {
+  id             String      @id @default(cuid())
+  userId         String?     @unique
+  user           User?       @relation(fields: [userId], references: [id])
+  shardId        String
+  shard          LeagueShard @relation(fields: [shardId], references: [id])
+  name           String
+  shortCode      String
+  logoIndex      Int         @default(0)
+  primaryColor   String
+  secondaryColor String      @default("#f2f0e6")
+  shirtColor     String?
+  shortsColor    String?
+  budget         Int         @default(3000000)
+  tier           Int         @default(-3)
+  formation      String      @default("4-4-2")
+  chemistry      Int         @default(50)
+  isBot          Boolean     @default(false)
+  managerJson    String?
+  autoMode       Boolean     @default(true)
+  players        Player[]
+  standing       Standing?
+  homeMatches    Match[]     @relation("HomeClub")
+  awayMatches    Match[]     @relation("AwayClub")
+}
+
+model Standing {
+  id     String @id @default(cuid())
+  clubId String @unique
+  club   Club   @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  played Int    @default(0)
+  w      Int    @default(0)
+  d      Int    @default(0)
+  l      Int    @default(0)
+  gf     Int    @default(0)
+  ga     Int    @default(0)
+  pts    Int    @default(0)
+}
+
+model Player {
+  id              String @id
+  clubId          String
+  club            Club   @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  name            String
+  position        String
+  age             Int
+  attrs           String
+  attack          Int
+  defense         Int
+  rating          Int
+  potential       Int
+  value           Int
+  wage            Int
+  morale          Int
+  stamina         Int
+  injuryDays      Int    @default(0)
+  careerGoals     Int    @default(0)
+  careerApps      Int    @default(0)
+  role            String @default("balanced")
+  contractEndsDay Int?
+}
+
+model Match {
+  id         String      @id @default(cuid())
+  shardId    String
+  shard      LeagueShard @relation(fields: [shardId], references: [id], onDelete: Cascade)
+  dayNumber  Int
+  homeClubId String
+  awayClubId String
+  homeClub   Club        @relation("HomeClub", fields: [homeClubId], references: [id])
+  awayClub   Club        @relation("AwayClub", fields: [awayClubId], references: [id])
+  played     Boolean     @default(false)
+  homeGoals  Int?
+  awayGoals  Int?
+
+  @@index([shardId, dayNumber])
+}
