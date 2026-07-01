@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: the-socker-manager-api
+    runtime: node
+    rootDir: server
+    buildCommand: npm install && npm run db:generate && npx prisma db push
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: DATABASE_URL
+        sync: false
+      - key: CLIENT_URL
+        value: https://www.thesockermanager.com
+      - key: CRON_SECRET
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+  - type: cron
+    name: day-tick
+    runtime: node
+    schedule: "0 * * * *"
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node -e "fetch(process.env.API_URL+'/api/cron/day-tick',{method:'POST',headers:{'x-cron-secret':process.env.CRON_SECRET}}).then(r=>r.text()).then(console.log).catch(console.error)"
+    envVars:
+      - key: API_URL
+        fromService:
+          type: web
+          name: the-socker-manager-api
+          property: host
+      - key: CRON_SECRET
+        fromService:
+          type: web
+          name: the-socker-manager-api
+          envVarKey: CRON_SECRET

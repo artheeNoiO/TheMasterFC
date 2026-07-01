@@ -854,7 +854,7 @@ function RadarStats({ stats }) {
 }
 
 /* ============================== MAIN APP ============================== */
-export default function App() {
+export default function App({ onMigrateToServer } = {}) {
   const [profile, setProfile] = useState(null);
   const [career, setCareer] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -911,11 +911,25 @@ export default function App() {
   }, [persist]);
 
   function showToast(msg) { setToast(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(null), 2600); }
-  function enterOnlineMode() {
+  async function enterOnlineMode() {
+    const fin = computeTeamFinances(career);
+    if (!career?.onlineUnlocked || !canUnlockOnline(fin)) return;
+    const apiUrl = typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL;
+    if (onMigrateToServer && apiUrl) {
+      const email = window.prompt("อีเมลสำหรับบัญชีออนไลน์ (ใช้ล็อกอินครั้งถัดไป)");
+      if (!email?.trim()) return;
+      try {
+        await onMigrateToServer(career, email.trim());
+        showToast("ย้ายขึ้นเซิร์ฟเวอร์ออนไลน์แล้ว!");
+        return;
+      } catch (e) {
+        showToast(e.message || "ย้ายออนไลน์ไม่สำเร็จ");
+        return;
+      }
+    }
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
-      const fin = computeTeamFinances(c);
-      if (!c.onlineUnlocked || !canUnlockOnline(fin)) return c;
+      if (!c.onlineUnlocked || !canUnlockOnline(computeTeamFinances(c))) return c;
       c.playMode = "online";
       c.onlineEnteredAt = Date.now();
       c.log = [`🌐 เข้าสู่โลกออนไลน์แล้ว! จากนี้จะแข่งกับผู้เล่นจริงเมื่อเซิร์ฟเวอร์พร้อม`, ...c.log];

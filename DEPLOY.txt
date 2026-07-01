@@ -1,0 +1,40 @@
+# Deploy checklist — The Socker Manager
+
+## 1) Vercel (หน้าเกม — playtest)
+
+1. สร้าง repo บน GitHub แล้ว push โปรเจกต์นี้
+2. https://vercel.com/new → Import GitHub repo
+3. ค่าเริ่มต้นจาก vercel.json ใช้ได้เลย → Deploy
+4. ได้ URL เช่น https://xxx.vercel.app แชร์ให้เพื่อนลองเล่น
+
+หรือจากเครื่อง (ต้อง login Vercel ครั้งแรก):
+  Deploy-Playtest.bat
+
+## 2) โดเมน thesockermanager.com
+
+1. ซื้อโดเมนที่ Cloudflare Registrar / Namecheap (~$12/ปี)
+2. Vercel → Project → Settings → Domains → Add:
+   - thesockermanager.com
+   - www.thesockermanager.com
+3. ตั้ง DNS ตามที่ Vercel บอก (มักเป็น):
+   - A @ → 76.76.21.21
+   - CNAME www → cname.vercel-dns.com
+4. ตั้ง redirect: thesockermanager.com → www.thesockermanager.com
+
+## 3) API ออนไลน์ (Render)
+
+1. https://render.com → New Blueprint → เชื่อม repo → ใช้ render.yaml
+2. สร้าง Supabase project → คัดลอก DATABASE_URL (PostgreSQL)
+3. แก้ server/prisma/schema.prisma provider เป็น postgresql ก่อน deploy production
+4. ใส่ env บน Render: DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+5. Vercel env: VITE_API_URL=https://your-api.onrender.com
+
+## 4) Cron เกมเดินวัน
+
+Render cron ใน render.yaml เรียก /api/cron/day-tick ทุก 1 ชม.
+
+## 5) Supabase Auth (production)
+
+1. Supabase → Authentication → Email
+2. ใส่ใน Vercel: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
+3. ใส่ใน Render: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY

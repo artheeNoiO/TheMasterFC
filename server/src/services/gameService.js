@@ -71,7 +71,23 @@ export async function getClubForUser(userId) {
   });
   if (!club) return null;
   const finances = computeClubFinances(club, club.players);
-  return { ...club, finances };
+  const lineup = club.lineupJson ? JSON.parse(club.lineupJson) : [];
+  return { ...club, lineup, finances };
+}
+
+export async function updateClubTactics(userId, { formation, lineup, autoMode, gameState }) {
+  const club = await prisma.club.findFirst({ where: { userId } });
+  if (!club) throw new Error("ไม่พบสโมสร");
+  const data = {};
+  if (formation) data.formation = formation;
+  if (typeof autoMode === "boolean") data.autoMode = autoMode;
+  if (Array.isArray(lineup)) data.lineupJson = JSON.stringify(lineup.slice(0, 11));
+  if (gameState != null) data.gameStateJson = JSON.stringify(gameState);
+  return prisma.club.update({
+    where: { id: club.id },
+    data,
+    include: { shard: true, standing: true, players: true },
+  }).then((c) => ({ ...c, lineup: c.lineupJson ? JSON.parse(c.lineupJson) : [] }));
 }
 
 export async function createClubForUser(userId, config) {

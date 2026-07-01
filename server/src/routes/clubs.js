@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth.js";
-import { createClubForUser, getClubForUser } from "../services/gameService.js";
+import { createClubForUser, getClubForUser, updateClubTactics } from "../services/gameService.js";
 
 const router = Router();
 
@@ -26,6 +26,15 @@ router.post("/", requireAuth, async (req, res) => {
       logoIndex: logoIndex ?? 0,
     });
     res.status(201).json({ club });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.patch("/me/tactics", requireAuth, async (req, res) => {
+  try {
+    const club = await updateClubTactics(req.user.id, req.body ?? {});
+    res.json({ club });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

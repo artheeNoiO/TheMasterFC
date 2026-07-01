@@ -50,6 +50,8 @@ model Club {
   isBot          Boolean     @default(false)
   managerJson    String?
   autoMode       Boolean     @default(true)
+  lineupJson     String?
+  gameStateJson  String?
   players        Player[]
   standing       Standing?
   homeMatches    Match[]     @relation("HomeClub")

@@ -139,6 +139,8 @@ function CreateClubScreen({ onCreated }) {
 function Dashboard({ club, playMode, onlineUnlocked, onRefresh }) {
   const [table, setTable] = useState([]);
   const [fixtures, setFixtures] = useState(null);
+  const [formation, setFormation] = useState(club.formation || "4-4-2");
+  const [saving, setSaving] = useState(false);
   const fin = club.finances || {};
   const pct = fin.teamValue != null ? Math.min(100, (fin.teamValue / (fin.unlockTarget || 50000000)) * 100) : 0;
 
@@ -185,6 +187,45 @@ function Dashboard({ club, playMode, onlineUnlocked, onRefresh }) {
             {m.homeClubId === club.id || m.awayClubId === club.id ? " ⭐" : ""}
           </div>
         ))}
+      </Panel>
+
+      <Panel style={{ maxWidth: 720, marginBottom: 16 }}>
+        <h3 style={{ margin: "0 0 10px", color: C.amber }}>แทคติก (บันทึกบนเซิร์ฟเวอร์)</h3>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {["4-4-2", "4-3-3", "3-5-2", "5-3-2"].map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setFormation(f)}
+              style={{
+                padding: "8px 12px", borderRadius: 8, cursor: "pointer",
+                border: `2px solid ${formation === f ? C.amber : C.steel}`,
+                background: formation === f ? "rgba(224,164,88,.12)" : "transparent",
+                color: C.chalk, fontSize: 12,
+              }}
+            >
+              {f}
+            </button>
+          ))}
+          <button
+            type="button"
+            disabled={saving}
+            onClick={async () => {
+              setSaving(true);
+              try {
+                await api("/api/clubs/me/tactics", { method: "PATCH", body: JSON.stringify({ formation }) });
+                await onRefresh();
+              } catch (e) {
+                alert(e.message);
+              } finally {
+                setSaving(false);
+              }
+            }}
+            style={{ ...btn(C.good), maxWidth: 140, flex: "none" }}
+          >
+            {saving ? "..." : "บันทึกแผน"}
+          </button>
+        </div>
       </Panel>
 
       <Panel style={{ maxWidth: 720 }}>
