@@ -1,0 +1,5 @@
+server/
+render.yaml
+model/
+*.zip
+*.lnk

@@ -3470,6 +3470,15 @@ function FMHeader({ uTeam, career, userLeague, budget, wageBill, sockerCoins = 0
         <button type="button" onClick={onOpenShop} className="fc-header-chip">
           🪙 {sockerCoins}
         </button>
+        <a
+          href={GAME_DISCORD_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="fc-header-chip fc-header-discord"
+          title={GAME_DISCORD_HINT}
+        >
+          💬 Discord
+        </a>
         <div style={{ textAlign: "right" }}>
           <div className="fc-header-budget">{formatMoney(budget)}</div>
           <div className="fc-header-meta">ค่าเหนื่อย {formatMoney(wageBill)}/วัน</div>

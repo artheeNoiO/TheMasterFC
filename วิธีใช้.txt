@@ -1,0 +1,31 @@
+# วิธีใช้ The Master FC — สั้นๆ
+
+## เล่นเกม (เครื่องตัวเอง)
+ดับเบิลคลิก **Play-Game.bat** → เปิดเบราว์เซอร์ http://localhost:5173/play
+
+## อัพเว็บจริง (themasterfc.com)
+หลังแก้โค้ดแล้ว:
+1. ดับเบิลคลิก **อัพเว็บ.bat** (หรือ Deploy-Cloudflare.bat)
+2. รอจนขึ้น **SUCCESS**
+3. เปิด https://www.themasterfc.com แล้วกด **Ctrl+F5**
+
+> เว็บจริงอยู่บน **Cloudflare Pages** — ไม่ใช่ Vercel  
+> push GitHub อย่างเดียว **ไม่** อัพเว็บอัตโนมัติ ต้องรัน bat นี้
+
+## Discord + Feedback (v0.9.4+)
+| ที่ | ดูอะไร |
+|-----|--------|
+| หน้าแรก | ปุ่ม Discord มุมขวาล่าง + section Feedback |
+| /play | ปุ่ม **Discord** บน header |
+| ในเกม | More → Feedback |
+
+ลิงก์ Discord: https://discord.gg/arEP4BPFb
+
+## API (feedback ร่วมกันทุกคน)
+รัน **Start-Game-Server.bat** หรือ home server ที่ api.themasterfc.com
+
+## Git / GitHub
+- Repo: https://github.com/artheeNoiO/TheMasterFC
+- ถ้า git พัง: เปิด terminal ในโฟลเดอร์โปรเจกต์ แล้วรัน  
+  `git fetch origin master`  
+  `git reset --hard origin/master`

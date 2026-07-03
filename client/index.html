@@ -15,6 +15,21 @@
   </head>
   <body>
     <div id="root"></div>
+    <a
+      id="tmfc-discord-fallback"
+      href="https://discord.gg/arEP4BPFb"
+      target="_blank"
+      rel="noopener noreferrer"
+      style="position:fixed;right:16px;bottom:16px;z-index:9999;padding:12px 16px;border-radius:999px;background:#5865F2;color:#fff;font:bold 13px/1 'Segoe UI',sans-serif;text-decoration:none;box-shadow:0 8px 24px rgba(88,101,242,.45)"
+    >Discord</a>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      setTimeout(function () {
+        var fb = document.getElementById("tmfc-discord-fallback");
+        if (fb && (document.querySelector(".landing-root") || document.querySelector(".fc-header"))) {
+          fb.style.display = "none";
+        }
+      }, 5000);
+    </script>
   </body>
 </html>

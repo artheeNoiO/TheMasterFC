@@ -110,6 +110,18 @@
   font-weight: 700;
 }
 
+a.fc-header-chip {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.fc-header-discord {
+  background: rgba(88, 101, 242, 0.15);
+  border-color: rgba(88, 101, 242, 0.45);
+  color: #aeb4ff;
+}
+
 .fc-header-short {
   margin-left: auto;
   color: #d4af37;
