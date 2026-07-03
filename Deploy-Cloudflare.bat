@@ -27,13 +27,16 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/2] Deploying to Cloudflare Pages...
+echo [2/2] Deploying to Cloudflare Pages (dist + functions)...
 echo First time: browser opens for Cloudflare login.
 echo Project name: themasterfc
+echo KV binding: ONLINE_KV (ตั้งใน Cloudflare Dashboard แล้ว)
 echo.
 
-call npx wrangler pages deploy "client\dist" --project-name=themasterfc --commit-dirty=true --branch=master
+cd /d "%~dp0client"
+call npx wrangler pages deploy dist --project-name=themasterfc --commit-dirty=true --branch=master
 set WR_EXIT=%ERRORLEVEL%
+cd /d "%~dp0"
 if not %WR_EXIT%==0 (
   echo.
   echo DEPLOY FAILED
