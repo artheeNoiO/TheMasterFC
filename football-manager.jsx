@@ -42,6 +42,7 @@ import {
 } from "./live-pitch-ambient.js";
 import "./fc-ui-theme.css";
 import FeedbackBoard from "@feedback";
+import { stadiumProgressSteps } from "@stadium";
 
 /* ============================== DESIGN TOKENS (match landing / themasterfc.com) ============================== */
 const C = {
@@ -3705,6 +3706,21 @@ export default function App({ onMigrateToServer } = {}) {
   const toastTimer = useRef(null);
 
   useEffect(() => { const iv = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(iv); }, []);
+  // นับคนออนไลน์ — heartbeat ไม่ระบุตัวตนทุก 45 วิ ขณะเปิดแอปค้างอยู่ (ไม่ว่าจะอยู่หน้าไหนในเกม)
+  // sessionId สุ่มใหม่ทุกครั้งที่โหลดหน้าเว็บ ไม่ผูกกับผู้เล่นจริง แค่ใช้นับจำนวนแท็บที่เปิดอยู่
+  useEffect(() => {
+    const sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    function beat() {
+      fetch("/api/heartbeat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId }),
+      }).catch(() => {}); // เงียบไว้ — ห้ามกระทบเกมถ้า endpoint ล่ม/ไม่มี
+    }
+    beat();
+    const iv = setInterval(beat, 45000);
+    return () => clearInterval(iv);
+  }, []);
   useEffect(() => {
     if (loading) return;
     const t = setTimeout(() => setSplashDone(true), 2000);
@@ -5835,6 +5851,36 @@ function LoginBackdrop({ children, style }) {
 }
 
 /* ============================== TITLE SCREEN ============================== */
+/** จำนวนคนออนไลน์ตอนนี้ — ดึงจาก /api/online-count (Cloudflare Pages Function ที่เก็บ Umami API
+ * key ไว้ฝั่งเซิร์ฟเวอร์) โพลทุก 45 วิ ถ้า fetch ล้มเหลว/endpoint ไม่มี ให้ซ่อนเงียบๆ ไม่โชว์อะไรเลย
+ * (ห้ามกระทบหน้าเข้าเกมแม้ analytics จะล่ม) */
+function OnlineCountBadge() {
+  const [online, setOnline] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    async function poll() {
+      try {
+        const res = await fetch("/api/online-count");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (alive && typeof data.online === "number") setOnline(data.online);
+      } catch {
+        // เงียบไว้ — ไม่ให้กระทบหน้าเข้าเกม
+      }
+    }
+    poll();
+    const iv = setInterval(poll, 45000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+  if (online == null) return null;
+  return (
+    <div style={{ fontSize: 11, color: C.good, fontFamily: MONO_FONT, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.good, display: "inline-block" }} />
+      {online} คนออนไลน์ตอนนี้
+    </div>
+  );
+}
+
 function TitleScreen({ onEnter, hasProfile, hasCareer, profile, career }) {
   const teamName = hasCareer ? career?.teams?.find((t) => t.id === career.userTeamId)?.name : null;
   const [shareMsg, setShareMsg] = useState(null);
@@ -5859,6 +5905,7 @@ function TitleScreen({ onEnter, hasProfile, hasCareer, profile, career }) {
   return (
     <LoginBackdrop>
       <span className="fc-eyebrow">🧪 เวอร์ชันทดลอง — เล่นฟรี ไม่ต้องสมัคร</span>
+      <OnlineCountBadge />
       <img src={BRAND_SPLASH_LOGO} alt={GAME_NAME} className="fc-title-logo" />
       <p className="fc-title-tagline">{GAME_TAGLINE}</p>
       <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 28, lineHeight: 1.55 }}>
@@ -6940,23 +6987,91 @@ function ClubBoardPanel({ career, uTeam, posInTable, uiLang = "th" }) {
 function ClubStadiumPanel({ career, uiLang = "th", onUpgradeStadium }) {
   const level = getStadiumLevel(career);
   const def = getStadiumDef(career);
+  const steps = stadiumProgressSteps(level);
   const maxed = level >= STADIUM_LEVELS.length;
   const cost = stadiumUpgradeCost(level);
   const canAfford = (career.budget || 0) >= cost;
+  const nextDef = !maxed ? STADIUM_LEVELS[level] : null;
   return (
     <Panel accent={C.blue}>
       <SectionLabel sub={`${t(uiLang, "club.stadiumCap")} ${def.capacity.toLocaleString()} · ${t(uiLang, "club.stadiumRev")} ×${def.matchRevMult}`}>
         🏟️ {t(uiLang, "club.stadium")} — {stadiumName(career, uiLang)}
       </SectionLabel>
-      <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.55, marginBottom: 8 }}>
-        {t(uiLang, "club.stadiumFanBonus")} +{stadiumFanCapBonus(career).toLocaleString()} · Lv.{level}/{STADIUM_LEVELS.length}
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 10,
+      }}>
+        <div style={{ background: C.panel2, borderRadius: 6, padding: "10px 8px", border: `1px solid ${C.steel}`, textAlign: "center" }}>
+          <div style={{ fontSize: 9, color: C.textDim }}>{t(uiLang, "club.stadiumCap")}</div>
+          <div style={{ fontFamily: MONO_FONT, fontSize: 15, fontWeight: 700, color: C.chalk }}>{def.capacity.toLocaleString()}</div>
+        </div>
+        <div style={{ background: C.panel2, borderRadius: 6, padding: "10px 8px", border: `1px solid ${C.steel}`, textAlign: "center" }}>
+          <div style={{ fontSize: 9, color: C.textDim }}>{t(uiLang, "club.stadiumFanBonus")}</div>
+          <div style={{ fontFamily: MONO_FONT, fontSize: 15, fontWeight: 700, color: C.good }}>+{stadiumFanCapBonus(career).toLocaleString()}</div>
+        </div>
+        <div style={{ background: C.panel2, borderRadius: 6, padding: "10px 8px", border: `1px solid ${C.steel}`, textAlign: "center" }}>
+          <div style={{ fontSize: 9, color: C.textDim }}>{t(uiLang, "club.stadiumRev")}</div>
+          <div style={{ fontFamily: MONO_FONT, fontSize: 15, fontWeight: 700, color: C.amber }}>×{def.matchRevMult}</div>
+        </div>
       </div>
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6 }}>
+          {t(uiLang, "club.stadiumProgress")} · Lv.{level}/{STADIUM_LEVELS.length}
+        </div>
+        <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+          {steps.map((s) => (
+            <div
+              key={s.level}
+              title={uiLang === "en" ? s.nameEn : s.nameTh}
+              style={{
+                flex: 1, height: 6, borderRadius: 3,
+                background: s.current ? C.good : s.unlocked ? "rgba(61,186,106,.45)" : C.steel,
+                boxShadow: s.current ? `0 0 0 1px ${C.good}` : "none",
+              }}
+            />
+          ))}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {steps.map((s) => (
+            <div
+              key={s.level}
+              style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
+                padding: "6px 8px", borderRadius: 6,
+                background: s.current ? "rgba(61,186,106,.1)" : s.unlocked ? C.panel2 : "transparent",
+                border: `1px solid ${s.current ? C.good : s.unlocked ? C.steel : "rgba(255,255,255,.06)"}`,
+                opacity: s.unlocked ? 1 : 0.55,
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: s.current ? 700 : 500, color: s.current ? C.good : C.chalk }}>
+                Lv.{s.level} {uiLang === "en" ? s.nameEn : s.nameTh}
+                {s.current && " · " + (uiLang === "en" ? "current" : "ปัจจุบัน")}
+              </div>
+              <div style={{ fontSize: 9, color: C.textDim, fontFamily: MONO_FONT, textAlign: "right" }}>
+                {s.capacity.toLocaleString()} · +{s.fanCapBonus.toLocaleString()} · ×{s.matchRevMult}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      {!maxed && nextDef && (
+        <div style={{
+          marginBottom: 10, padding: "8px 10px", borderRadius: 8,
+          background: C.panel2, border: `1px solid ${C.steel}`, fontSize: 10.5, color: C.textDim, lineHeight: 1.55,
+        }}>
+          <div style={{ color: C.chalk, fontWeight: 700, marginBottom: 4 }}>
+            {t(uiLang, "club.stadiumUpgrade")} → {uiLang === "en" ? nextDef.nameEn : nextDef.nameTh}
+          </div>
+          {uiLang === "en"
+            ? `Capacity ${nextDef.capacity.toLocaleString()} · fan cap +${nextDef.fanCapBonus.toLocaleString()} · home match revenue ×${nextDef.matchRevMult}`
+            : `ความจุ ${nextDef.capacity.toLocaleString()} · เพดานแฟน +${nextDef.fanCapBonus.toLocaleString()} · รายได้แมตช์เหย้า ×${nextDef.matchRevMult}`}
+        </div>
+      )}
       {!maxed ? (
         <button type="button" disabled={!canAfford} onClick={onUpgradeStadium} style={{
           ...btnStyle(canAfford ? C.good : "#2b332f", canAfford ? "#08150e" : C.textDim),
           width: "100%", fontSize: 11, padding: "8px 0", cursor: canAfford ? "pointer" : "not-allowed",
         }}>
-          {t(uiLang, "club.stadiumUpgrade")} → {uiLang === "en" ? STADIUM_LEVELS[level]?.nameEn : STADIUM_LEVELS[level]?.nameTh} ({formatMoney(cost)})
+          {t(uiLang, "club.stadiumUpgrade")} ({formatMoney(cost)})
         </button>
       ) : (
         <div style={{ fontSize: 11, color: C.gold }}>{t(uiLang, "club.stadiumMax")}</div>
@@ -7162,7 +7277,7 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
       </Panel>
 
       <Panel accent={C.gold} style={{ cursor: onGoClub ? "pointer" : "default" }} onClick={onGoClub}>
-        <SectionLabel sub="แฟนบอล · สปอนเซอร์ · การเงิน — ดูรายละเอียดที่แท็บสโมสร">🏟️ สโมสร & แฟนบอล</SectionLabel>
+        <SectionLabel sub={`${stadiumName(career)} · Lv.${getStadiumLevel(career)}/${STADIUM_LEVELS.length} — แฟนบอล · สปอนเซอร์ · อัปเกรดสนาม`}>🏟️ สโมสร & แฟนบอล</SectionLabel>
         <div style={{ display: "grid", gridTemplateColumns: career.board ? "1fr 1fr 1fr" : "1fr 1fr", gap: 8 }}>
           <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
             <div style={{ fontSize: 9, color: C.textDim }}>แฟนบอล</div>

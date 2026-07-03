@@ -19,7 +19,15 @@
 | League pick modal — full roster label | ✅ |
 | Scout ก่อนเกม — ดาวเด่น 5 คน | ✅ |
 | Roster โปรตุเกส / ซาอุ / ไทย | ✅ |
-| Deploy production | ✅ v0.9.3 committed — push เพื่อ deploy Vercel |
+| Deploy production | ✅ v0.9.6 — Stadium Progression visuals (Club UI + assets) |
+
+---
+
+## Stadium Progression (v0.9.6 MVP — system only, no art yet)
+
+- 5 ระดับสนาม · อัปเกรดด้วยเงิน · ความจุ / แฟน / รายได้เหย้า
+- UI แท็บสโมสร: stat cards + progress bar + รายการทุก level
+- รูปสนาม — **ยังไม่ใส่** รอ asset จากผู้ใช้ → wire ใน `stadium-progression.js` ทีหลัง
 
 ---
 

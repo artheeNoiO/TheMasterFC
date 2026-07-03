@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   GAME_NAME, GAME_NAME_SHORT, GAME_SITE_URL, GAME_TAGLINE, GAME_VERSION,
   GAME_DONATE_URL, GAME_DONATE_LABEL, MASTER_COIN_LABEL,
@@ -120,6 +120,35 @@ function scrollTo(id) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
 }
 
+/** จำนวนคนออนไลน์ตอนนี้ — ดึงจาก /api/online-count (Cloudflare Pages Function อ่าน Cloudflare KV)
+ * โพลทุก 45 วิ ถ้า fetch ล้มเหลว/endpoint ไม่มี ให้ซ่อนเงียบๆ ไม่โชว์อะไรเลย */
+function OnlineCountBadge() {
+  const [online, setOnline] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    async function poll() {
+      try {
+        const res = await fetch("/api/online-count");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (alive && typeof data.online === "number") setOnline(data.online);
+      } catch {
+        // เงียบไว้ — ไม่ให้กระทบหน้า landing
+      }
+    }
+    poll();
+    const iv = setInterval(poll, 45000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+  if (online == null) return null;
+  return (
+    <div className="landing-online-badge">
+      <span className="landing-online-badge-dot" aria-hidden />
+      {online} คนออนไลน์ตอนนี้
+    </div>
+  );
+}
+
 export default function LandingPage({ onPlay }) {
   useEffect(() => {
     document.title = `${GAME_NAME} — ${GAME_TAGLINE}`;
@@ -162,6 +191,7 @@ export default function LandingPage({ onPlay }) {
       <main className="landing-hero">
         <div className="landing-hero-inner">
           <span className="landing-eyebrow">Playtest · Free on browser</span>
+          <OnlineCountBadge />
           <div className="landing-logo-wrap">
             <img src={LOGO} alt={GAME_NAME} className="landing-hero-logo" />
           </div>

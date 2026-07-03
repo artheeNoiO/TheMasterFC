@@ -135,6 +135,26 @@
   background: rgba(61, 186, 106, 0.08);
 }
 
+.landing-online-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #3dba6a;
+  margin: -10px auto 18px;
+}
+.landing-online-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3dba6a;
+  display: inline-block;
+}
+
 .landing-logo-wrap {
   width: min(260px, 68vw);
   height: min(260px, 68vw);

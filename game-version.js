@@ -29,7 +29,7 @@ export const GAME_DISCORD_HINT =
 /** Premium / event currency label (Socker Coins in-game may map here later) */
 export const MASTER_COIN_LABEL = "Master Coin";
 
-export const GAME_VERSION = "0.9.5";
+export const GAME_VERSION = "0.9.6";
 
 /** Frozen baseline tag — same as GAME_VERSION after a stable release */
 export const STABLE_VERSION = "0.9.0";

@@ -30,6 +30,7 @@ export default defineConfig({
       "@coach": path.resolve(root, "../coach-system.js"),
       "@training": path.resolve(root, "../training-system.js"),
       "@feedback": path.resolve(root, "../feedback-board.jsx"),
+      "@stadium": path.resolve(root, "../stadium-progression.js"),
     },
   },
 });
