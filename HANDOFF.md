@@ -1,6 +1,6 @@
 # HANDOFF — The Master Football Club (เดิม The Socker Manager / siam-manager-online)
 
-**อัปเดตล่าสุด:** 2026-07-03 | **Baseline:** `v0.9.0-stable`
+**อัปเดตล่าสุด:** 2026-07-03 | **Baseline:** `v0.9.0-stable` (commit `69de209`)
 
 ## Baseline & Patch workflow (2026-07-03)
 

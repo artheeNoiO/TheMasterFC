@@ -11,6 +11,13 @@ import {
   formatNationality, ensurePlayerNationality, resolvePlayerNationality,
 } from "@nat";
 import { t, resolveUiLang, UI_LANGS } from "@i18n";
+import {
+  STADIUM_LEVELS, EXTRA_STAFF_EFFECTS, getStadiumLevel, getStadiumDef, stadiumName,
+  stadiumUpgradeCost, stadiumAssetValue, stadiumFanCapBonus,
+  initBoard, boardTargetLabel, staffSupportBonuses, mergeManagerPlanWithStaff,
+  refreshBoardAfterUserMatch, processBoardSeasonEnd,
+  headMedicalTeamBuff, dailyMedicalRecoveryDays, headMedicalRehabStaminaBonus, headMedicalLongInjuryClear,
+} from "@club";
 import { useStadiumCrowd, isCrowdMuted, setCrowdMuted } from "@crowd";
 import { TrackerMatchView, pitchToWide, V0PitchSVG, TrackerPlayerDots } from "@tracker";
 import { ClubBadge, LOGO_ICONS, shadeColor } from "./club-badge.jsx";
@@ -619,9 +626,7 @@ function genScout() {
 }
 
 /* ============================== STAFF CARD GACHA ============================== */
-/* ตำแหน่งสตาฟช่องเดี่ยว (ไม่มี specialty ย่อยเหมือน COACH/DOCTOR) — จ้างได้ทีมละ 1 คน เก็บใน
- * career.staff[teamId][type] ตัวเดียวกับ COACH/DOCTOR เป๊ะ (ใช้ type เป็น "specialty" ของตัวเอง)
- * หมายเหตุ: v1 นี้แค่เข้าระบบการ์ด/สุ่ม/จ้างได้ ยังไม่มีเอฟเฟกต์ในเกมจริง (รอทำแยกทีละตำแหน่ง) */
+/* ตำแหน่งสตาฟช่องเดี่ยว — จ้างได้ทีมละ 1 คน เก็บใน career.staff[teamId][type] */
 const EXTRA_STAFF_TYPES = ["ASSISTANT", "ANALYST", "DIRECTOR", "HEAD_MEDICAL"];
 const STAFF_CARD_TYPES = ["MANAGER", "COACH", "SCOUT", "DOCTOR", ...EXTRA_STAFF_TYPES];
 const STAFF_CARD_TYPE_TH = {
@@ -896,14 +901,18 @@ function staffCardToCoach(card) {
   };
 }
 
-function staffCardStatLine(card) {
+function staffCardStatLine(card, lang = "th") {
   if (card.type === "MANAGER") {
     const vals = Object.values(card.stats || {});
     if (!vals.length) return null;
     const avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
     return `เฉลี่ยสเตต ${avg} · ถนัด ${card.preferredFormation}`;
   }
-  if (card.type === "COACH" || card.type === "DOCTOR" || EXTRA_STAFF_TYPES.includes(card.type)) {
+  if (EXTRA_STAFF_TYPES.includes(card.type)) {
+    const fx = EXTRA_STAFF_EFFECTS[card.type];
+    return fx ? (lang === "en" ? fx.en : fx.th) : `เกรด ${card.grade}/7 · โบนัส +${card.boost}`;
+  }
+  if (card.type === "COACH" || card.type === "DOCTOR") {
     return `เกรด ${card.grade}/7 · โบนัส +${card.boost}`;
   }
   if (card.type === "SCOUT") {
@@ -1003,6 +1012,13 @@ function managerPlanProfile(team) {
   };
 }
 
+/** ผจก. + โบนัสจากผู้ช่วย/Data Analyst (ไม่แตะ engine แมตช์สด) */
+function enrichedManagerPlan(c, team) {
+  const base = managerPlanProfile(team);
+  if (!c || team?.id !== c.userTeamId) return base;
+  return mergeManagerPlanWithStaff(base, staffSupportBonuses(c, team.id));
+}
+
 function bootstrapStarterStaff(c) {
   ensureStaffCardFields(c);
   const pulled = Array.from({ length: CARDS_PER_STAFF_PULL }, () => genStaffCard());
@@ -1062,6 +1078,16 @@ function bootstrapStarterStaff(c) {
       ...c.log,
     ];
   }
+  EXTRA_STAFF_TYPES.forEach((type) => {
+    if (c.staff[c.userTeamId][type]) return;
+    const card = pickBest(type);
+    if (card) {
+      c.staff[c.userTeamId][type] = { ...staffCardToCoach(card), hiredSeason: c.season };
+      usedIds.add(card.cardId);
+      c.staffCardBag = c.staffCardBag.filter((x) => x.cardId !== card.cardId);
+    }
+  });
+  initBoard(c, t);
   return c;
 }
 
@@ -1093,11 +1119,11 @@ const COIN_PACKAGES = [
   { id: "pack_300", coins: 300, priceLabel: "฿129", tag: "ยอดนิยม" },
   { id: "pack_650", coins: 650, priceLabel: "฿249", tag: "สุดคุ้ม" },
 ];
-function genScoutFind(scout, userTier, day, leagueId = "thailand") {
+function genScoutFind(scout, userTier, day, leagueId = "thailand", ratingBonus = 0) {
   const pos = Math.random() < 0.55 ? scout.specialtyPos : choice(["GK", "DF", "MF", "FW"]);
   const tier = clamp(userTier + rand(-5, -2), -10, -2);
   const p = genPlayer(pos, tier, "scout_find", rand(18, 28), day, { leagueId });
-  const targetRating = clamp(rand(44 + scout.grade * 2, 50 + scout.grade * 4), 42, 66);
+  const targetRating = clamp(rand(44 + scout.grade * 2, 50 + scout.grade * 4) + ratingBonus, 42, 72);
   forcePlayerRating(p, targetRating);
   p.potential = clamp(p.rating + rand(3, 12 + scout.grade * 2), p.rating, 78);
   const buyFee = Math.round((40000 + p.rating * p.rating * 550) / 5000) * 5000;
@@ -1312,8 +1338,9 @@ function fanIncomeMultiplier(fanBase) {
 function divisionIncomeMult(division) {
   return division === 0 ? 1.35 : 1;
 }
-function getFanCap(division) {
-  return FAN_CAP[division] ?? FAN_CAP[1];
+function getFanCap(division, c) {
+  const base = FAN_CAP[division] ?? FAN_CAP[1];
+  return base + (c ? stadiumFanCapBonus(c) : 0);
 }
 function qualifySponsorTier(fanBase) {
   let tier = 0;
@@ -1372,7 +1399,7 @@ function applyFanChangeAfterMatch(c, m, homeGoals, awayGoals) {
   delta = Math.round(delta * (uIsHome ? 1.15 : 0.85));
   if (getLast5LeaguePts(c, true) <= 4) delta -= rand(30, 60);
   const before = c.fanBase || 0;
-  c.fanBase = clamp(before + delta, 500, getFanCap(uT.division));
+  c.fanBase = clamp(before + delta, 500, getFanCap(uT.division, c));
   c.fanDeltaToday = c.fanBase - before;
   autoUpgradeSponsor(c, true);
   if (c.fanDeltaToday !== 0) {
@@ -1387,12 +1414,12 @@ function processSeasonEndFans(c, prevPos, prevRow, prevDivision, wasPromoted, wa
   c.log = [`🏆 รางวัลลีกอันดับ ${prevPos}: +${formatMoney(prize)}`, ...c.log];
   if (wasPromoted) {
     c.budget += PROMOTION_BONUS;
-    c.fanBase = clamp(Math.round((c.fanBase || 0) * 1.08) + rand(500, 1500), 500, getFanCap(uT.division));
+    c.fanBase = clamp(Math.round((c.fanBase || 0) * 1.08) + rand(500, 1500), 500, getFanCap(uT.division, c));
     c.log = [`🎉 โบนัสเลื่อนชั้น +${formatMoney(PROMOTION_BONUS)} · แฟนบอลเพิ่ม`, ...c.log];
   }
   if (wasRelegated) {
     c.budget += RELEGATION_PARACHUTE;
-    c.fanBase = clamp(Math.round((c.fanBase || 0) * 0.92), 500, getFanCap(uT.division));
+    c.fanBase = clamp(Math.round((c.fanBase || 0) * 0.92), 500, getFanCap(uT.division, c));
     c.log = [`🪂 เงินช่วยเหลือตกชั้น +${formatMoney(RELEGATION_PARACHUTE)}`, ...c.log];
   }
   const snap = c.lastSeasonSnapshot;
@@ -1400,12 +1427,12 @@ function processSeasonEndFans(c, prevPos, prevRow, prevDivision, wasPromoted, wa
   const lastScore = snap ? snap.pts * 10 - snap.pos : curScore;
   if (curScore < lastScore - 5) {
     const loss = rand(3000, 8000);
-    c.fanBase = clamp((c.fanBase || 0) - loss, 500, getFanCap(uT.division));
+    c.fanBase = clamp((c.fanBase || 0) - loss, 500, getFanCap(uT.division, c));
     c.badSeasonStreak = (c.badSeasonStreak || 0) + 1;
     c.log = [`😞 ฤดูกาลแย่กว่าปีก่อน แฟนบอล -${loss.toLocaleString()}`, ...c.log];
   } else if (curScore > lastScore + 5) {
     const gain = rand(2000, 6000);
-    c.fanBase = clamp((c.fanBase || 0) + gain, 500, getFanCap(uT.division));
+    c.fanBase = clamp((c.fanBase || 0) + gain, 500, getFanCap(uT.division, c));
     c.badSeasonStreak = 0;
     c.log = [`🙌 ฤดูกาลดีกว่าปีก่อน แฟนบอล +${gain.toLocaleString()}`, ...c.log];
   } else {
@@ -1414,7 +1441,7 @@ function processSeasonEndFans(c, prevPos, prevRow, prevDivision, wasPromoted, wa
   if ((c.badSeasonStreak || 0) >= 2) {
     const pct = c.badSeasonStreak >= 3 ? 0.25 : 0.15;
     const drop = Math.round((c.fanBase || 0) * pct);
-    c.fanBase = clamp((c.fanBase || 0) - drop, 500, getFanCap(uT.division));
+    c.fanBase = clamp((c.fanBase || 0) - drop, 500, getFanCap(uT.division, c));
     c.log = [`📉 แฟนหนี ${c.badSeasonStreak} ฤดูกาลติดต่อกัน -${Math.round(pct * 100)}% (${drop.toLocaleString()})`, ...c.log];
     if (c.badSeasonStreak >= 3 && (c.sponsorTier ?? 0) > 0) {
       c.sponsorTier -= 1;
@@ -1422,8 +1449,9 @@ function processSeasonEndFans(c, prevPos, prevRow, prevDivision, wasPromoted, wa
     }
   }
   c.lastSeasonSnapshot = { pos: prevPos, pts: prevRow.pts, w: prevRow.w, d: prevRow.d, l: prevRow.l, division: prevDivision };
-  c.fanBase = clamp(c.fanBase || 0, 500, getFanCap(uT.division));
+  c.fanBase = clamp(c.fanBase || 0, 500, getFanCap(uT.division, c));
   autoUpgradeSponsor(c, true);
+  processBoardSeasonEnd(c, uT, prevPos);
 }
 function computePlayerWage(rating) {
   const raw = ((rating * rating * PLAYER_WAGE_DAILY_MULT) / 100) * starWageMultiplier(rating);
@@ -1459,10 +1487,12 @@ function applyUserMatchRevenue(c, m, homeGoals, awayGoals) {
     loss: { home: [105000, 155000], away: [60000, 90000] },
   };
   const [lo, hi] = ranges[result][venue];
-  const amount = rand(lo, hi);
+  let amount = rand(lo, hi);
+  if (uIsHome) amount = Math.round(amount * getStadiumDef(c).matchRevMult);
   c.budget += amount;
   const resultTh = result === "win" ? "ชนะ" : result === "draw" ? "เสมอ" : "แพ้";
-  c.log = [`💰 รายได้แมตช์ (${uIsHome ? "เหย้า" : "เยือน"}, ${resultTh}): +${formatMoney(amount)}`, ...c.log];
+  const stadiumNote = uIsHome && getStadiumLevel(c) > 1 ? ` · สนาม Lv.${getStadiumLevel(c)}` : "";
+  c.log = [`💰 รายได้แมตช์ (${uIsHome ? "เหย้า" : "เยือน"}, ${resultTh}): +${formatMoney(amount)}${stadiumNote}`, ...c.log];
 }
 
 /* โลกจำลอง → ปลดล็อกออนไลน์เมื่อมูลค่าสโมสรรวมทุกอย่างถึงเกณฑ์และไม่ติดลบ */
@@ -1497,7 +1527,7 @@ function computeTeamFinances(career) {
   const squadValue = squad.reduce((s, p) => s + (p.value || 0), 0);
   const academyValue = academy.reduce((s, p) => s + (p.value || 0), 0);
   const prospectValue = prospects.reduce((s, p) => s + (p.value || p.signingCost || 0), 0);
-  const facilitiesValue = facilitiesAssetValue(career.facilities);
+  const facilitiesValue = facilitiesAssetValue(career.facilities) + stadiumAssetValue(career);
   const coachesValue = staffAssetValue(career.staff?.[career.userTeamId]);
   const managerValue = contractAssetValue(uTeam?.manager, 40);
   const scoutValue = contractAssetValue(career.marketScout, 30) + contractAssetValue(career.youthScout, 30);
@@ -1679,6 +1709,18 @@ function migrateSaveV7ToV8(c) {
   return c;
 }
 
+/** v9 — stadium, board, extra staff in-game effects */
+function migrateSaveV8ToV9(c) {
+  if (!c.clubSystemsV9) {
+    c.stadiumLevel = c.stadiumLevel ?? 1;
+    const uT = c.teams?.find((t) => t.id === c.userTeamId);
+    if (!c.board && uT) initBoard(c, uT);
+    c.clubSystemsV9 = true;
+    c.log = [`🏟️ ระบบสนาม · บอร์ด · สตาฟสนับสนุน — มีผลในเกมแล้ว`, ...c.log];
+  }
+  return c;
+}
+
 const SAVE_MIGRATIONS = [
   migrateSaveV0ToV1,
   migrateSaveV1ToV2,
@@ -1688,6 +1730,7 @@ const SAVE_MIGRATIONS = [
   migrateSaveV5ToV6,
   migrateSaveV6ToV7,
   migrateSaveV7ToV8,
+  migrateSaveV8ToV9,
 ];
 
 function normalizeCareerSave(c) {
@@ -1751,6 +1794,8 @@ function normalizeCareerSave(c) {
     }
   });
   ensureStaffCardFields(c); // เซฟเก่าก่อนมีระบบภาพเหมือนการ์ดสตาฟ — เติม portrait ย้อนหลังให้ครบทุกใบ
+  if (c.stadiumLevel == null) c.stadiumLevel = 1;
+  if (!c.board && uT) initBoard(c, uT);
   return c;
 }
 
@@ -2381,7 +2426,7 @@ function buildMatchScoutReport(career, uTeam, opponent, uSquad, oppSquad, xi, is
 
   let userCtx = buildMatchContext(uTeam, uAvail, filledXI, opponent.formation, isHome, uTeam.chemistry, userSlotAssignMap(career));
   let oppCtx = buildMatchContext(opponent, oppAvail, oppXI, uTeam.formation, !isHome, opponent.chemistry);
-  const managerPlan = managerPlanProfile(uTeam);
+  const managerPlan = enrichedManagerPlan(career, uTeam);
   userCtx = applyMatchPrepToContext(userCtx, prep, { team: uTeam, squad: uAvail, xiIds: filledXI, familiarityMult });
   oppCtx = applyOppositionMarkToContext(oppCtx, prep.markPlayerId, oppAvail, oppXI, managerPlan.tactics);
 
@@ -2561,7 +2606,11 @@ function familiarityMultiplier(matches) {
 }
 function updateTacticFamiliarity(c, formation, manager) {
   const fam = c.tacticFamiliarity || { formation, matches: 0 };
-  const extra = manager ? managerPlanProfile({ manager }).famBonus : 0;
+  let extra = manager ? managerPlanProfile({ manager }).famBonus : 0;
+  if (c && manager) {
+    const uT = c.teams?.find((t) => t.id === c.userTeamId);
+    if (uT?.manager?.id === manager.id) extra += staffSupportBonuses(c, c.userTeamId).famBonusExtra || 0;
+  }
   if (fam.formation === formation) fam.matches = Math.min(20, fam.matches + 1 + extra);
   else { fam.formation = formation; fam.matches = 0; }
   c.tacticFamiliarity = fam;
@@ -3100,6 +3149,7 @@ function createNewCareer(customClub) {
     pendingLeaguePick: false,
     matchPrep: defaultMatchPrep(),
     fanBase: 2500, sponsorTier: 0, badSeasonStreak: 0, lastSeasonSnapshot: null, fanDeltaToday: 0,
+    stadiumLevel: 1,
     monthlyGoals: {}, monthlyApps: {}, sockerCupSeason: null,
     saveVersion: SAVE_VERSION,
     gameVersion: GAME_VERSION,
@@ -3666,13 +3716,14 @@ export default function App({ onMigrateToServer } = {}) {
         checkMilestone(c, p, "apps");
         const doctor = (c.staff[p.teamId] || {}).PHYSIO;
         const medicalLevel = p.teamId === c.userTeamId && c.facilities ? c.facilities.medical : 1;
+        const headBuff = isUserPlayer ? headMedicalTeamBuff((c.staff[c.userTeamId] || {}).HEAD_MEDICAL) : { physioBoostMult: 1 };
+        const doctorEff = doctor ? doctor.boost * headBuff.physioBoostMult : 0;
         const injuryChance = clamp((100 - p.stamina) / 100 * 0.06 + 0.004, 0.003, 0.07)
-          * (doctor ? 1 - doctor.boost * 0.3 : 1)
+          * (doctor ? 1 - doctorEff * 0.3 : 1)
           * (1 - (medicalLevel - 1) * 0.1)
           * (isUserPlayer ? userInjuryMult : 1);
         if (Math.random() < injuryChance) {
-          const doctorBoost = doctor ? doctor.boost : 0;
-          p.injuryDays = Math.max(1, Math.round(rand(1, 7) * (1 - doctorBoost * 0.25) * (1 - (medicalLevel - 1) * 0.12)));
+          p.injuryDays = Math.max(1, Math.round(rand(1, 7) * (1 - doctorEff * 0.25) * (1 - (medicalLevel - 1) * 0.12)));
         }
       } else {
         p.appearHistory = [false, ...(p.appearHistory || [])].slice(0, 5);
@@ -3736,7 +3787,7 @@ export default function App({ onMigrateToServer } = {}) {
       applyTrainingToPlayer(p, effectiveType);
     });
     if (uT.manager && trainingType !== "REST") {
-      const mp = managerPlanProfile(uT);
+      const mp = enrichedManagerPlan(c, uT);
       const devBump = ((uT.manager.stats?.development || 40) / 100) * 0.05 * mp.devMult;
       if (devBump > 0) uSquad.filter((p) => !playedTodayIds.has(p.id)).forEach((p) => bumpAttrs(p, devBump));
     }
@@ -3758,21 +3809,35 @@ export default function App({ onMigrateToServer } = {}) {
 
     // daily stamina recovery for everyone (all clubs, so bots stay fair too)
     const myFacilities = c.facilities || { fitness: 1, training: 1, techLab: 1, medical: 1 };
+    const userHeadMed = (c.staff[c.userTeamId] || {}).HEAD_MEDICAL;
+    const headMedLongClears = [];
     c.players.forEach((p) => {
       const teamFitness = (c.staff[p.teamId] || {}).FITNESS;
       const facilityBonus = p.teamId === c.userTeamId ? (myFacilities.fitness - 1) * 2 : 0;
       const fitnessSynergy = p.teamId === c.userTeamId && trainingType === "FITNESS" ? 1.5 : 1;
       const restBoost = p.teamId === c.userTeamId && isRestDay ? 10 : 0;
       const postMatchBoost = p.teamId === c.userTeamId && playedTodayIds.has(p.id) && !isRestDay ? 12 : 0;
-      const recover = (isRestDay && p.teamId === c.userTeamId ? 22 : 12) + (teamFitness ? teamFitness.boost * 10 * fitnessSynergy : 0) + facilityBonus + restBoost + postMatchBoost;
+      const headMedStamina = (p.teamId === c.userTeamId && userHeadMed && p.injuryDays > 0)
+        ? headMedicalRehabStaminaBonus(userHeadMed)
+        : 0;
+      const recover = (isRestDay && p.teamId === c.userTeamId ? 22 : 12) + (teamFitness ? teamFitness.boost * 10 * fitnessSynergy : 0) + facilityBonus + restBoost + postMatchBoost + headMedStamina;
       p.stamina = clamp(p.stamina + recover, 0, 100);
       if (p.injuryDays > 0) {
+        const doctor = (c.staff[p.teamId] || {}).PHYSIO;
         const physiotherapist = (c.staff[p.teamId] || {}).PHYSIOTHERAPIST;
-        let recoverDays = 1;
-        if (physiotherapist && Math.random() < physiotherapist.boost * 0.5) recoverDays += 1;
+        const headMedForPlayer = p.teamId === c.userTeamId ? userHeadMed : null;
+        let recoverDays = dailyMedicalRecoveryDays(doctor, physiotherapist, headMedForPlayer);
+        if (headMedForPlayer) {
+          const longFx = headMedicalLongInjuryClear(headMedForPlayer, p.injuryDays);
+          recoverDays += longFx.extraDays;
+          if (longFx.longClear) headMedLongClears.push(p.name);
+        }
         p.injuryDays = Math.max(0, p.injuryDays - recoverDays);
       }
     });
+    if (headMedLongClears.length) {
+      c.log = [`⚕️ ${userHeadMed.name} เร่งรักษาอาการยาว (เหลือ >5 วัน) — ตัดวันพักเพิ่มให้ ${headMedLongClears.slice(0, 3).join(", ")}${headMedLongClears.length > 3 ? ` +${headMedLongClears.length - 3} คน` : ""}`, ...c.log];
+    }
     // training boosts from position coaches (main squad, all clubs) — ยิ่งวันฝึกตรงสายโค้ช ยิ่งได้ผลมาก
     if (!isRestDay) {
       Object.keys(c.staff).forEach((teamId) => {
@@ -3835,7 +3900,8 @@ export default function App({ onMigrateToServer } = {}) {
       const uTScout = c.teams.find((t) => t.id === c.userTeamId);
       const maxFinds = 3 + c.marketScout.grade;
       if (c.scoutFinds.length < maxFinds && Math.random() < c.marketScout.findChance * 0.85) {
-        const find = genScoutFind(c.marketScout, uTScout.tier, c.day, c.legendLeagueId || "thailand");
+        const dirBonus = staffSupportBonuses(c, c.userTeamId).scoutRatingBonus || 0;
+        const find = genScoutFind(c.marketScout, uTScout.tier, c.day, c.legendLeagueId || "thailand", dirBonus);
         c.scoutFinds.push(find);
         c.log = [`🔭 ${c.marketScout.name} พบ ${find.name} (${playerPosTH(find)}, OVR ${find.rating}) ราคา ${formatMoney(find.buyFee)} — ดูที่ตลาด`, ...c.log];
       }
@@ -3964,6 +4030,17 @@ export default function App({ onMigrateToServer } = {}) {
     applyMatchWearAndInjury(c, awaySquad, awayXI);
     attributeGoals(c, homeSquad, homeXI, homeGoals);
     attributeGoals(c, awaySquad, awayXI, awayGoals);
+    if (m.home === c.userTeamId || m.away === c.userTeamId) {
+      const uT = c.teams.find((t) => t.id === c.userTeamId);
+      const uIsHome = m.home === c.userTeamId;
+      const won = uIsHome ? homeGoals > awayGoals : awayGoals > homeGoals;
+      const draw = homeGoals === awayGoals;
+      const moraleBonus = enrichedManagerPlan(c, uT).moraleBonus;
+      c.players.filter((p) => p.teamId === c.userTeamId).forEach((p) => {
+        const delta = won ? rand(2, 6) + moraleBonus : draw ? 0 : -(rand(2, 6) - Math.floor(moraleBonus / 2));
+        p.morale = clamp(p.morale + delta, 10, 99);
+      });
+    }
     c.lineups[m.home] = homeXI;
     c.lineups[m.away] = awayXI;
     return `${homeTeam.short} ${homeGoals} - ${awayGoals} ${awayTeam.short}`;
@@ -4258,6 +4335,10 @@ export default function App({ onMigrateToServer } = {}) {
     }
     applyUserMatchRevenue(c, m, homeGoals, awayGoals);
     applyFanChangeAfterMatch(c, m, homeGoals, awayGoals);
+    if (m.home === c.userTeamId || m.away === c.userTeamId) {
+      const uT = c.teams.find((t) => t.id === c.userTeamId);
+      refreshBoardAfterUserMatch(c, uT, homeGoals, awayGoals, m.home === c.userTeamId);
+    }
     // weekly quest progress tracking (user's club only)
     if (m.home === c.userTeamId || m.away === c.userTeamId) {
       const uIsHome = m.home === c.userTeamId;
@@ -4290,7 +4371,7 @@ export default function App({ onMigrateToServer } = {}) {
       const uIsHome = m.home === c.userTeamId;
       const won = uIsHome ? homeGoals > awayGoals : awayGoals > homeGoals;
       const draw = homeGoals === awayGoals;
-      const moraleBonus = managerPlanProfile(uT).moraleBonus;
+      const moraleBonus = enrichedManagerPlan(c, uT).moraleBonus;
       c.players.filter((p) => p.teamId === c.userTeamId).forEach((p) => {
         const delta = won ? rand(2, 6) + moraleBonus : draw ? 0 : -(rand(2, 6) - Math.floor(moraleBonus / 2));
         p.morale = clamp(p.morale + delta, 10, 99);
@@ -4317,7 +4398,7 @@ export default function App({ onMigrateToServer } = {}) {
       if (idx < 0) return c;
       const f = c.scoutFinds[idx];
       const uT = c.teams.find((t) => t.id === c.userTeamId);
-      const negPct = uT?.manager ? managerPlanProfile(uT).negotiationPct : 0;
+      const negPct = enrichedManagerPlan(c, uT).negotiationPct;
       const finalFee = Math.round(f.buyFee * (1 - negPct));
       if (c.budget < finalFee) return c;
       c.budget -= finalFee;
@@ -4451,7 +4532,7 @@ export default function App({ onMigrateToServer } = {}) {
       const p = c.players.find((pl) => pl.id === playerId);
       const squad = c.players.filter((pl) => pl.teamId === c.userTeamId);
       if (!p || squad.length <= MIN_SELL_SQUAD) return c;
-      const price = Math.round((p.value * (0.75 + Math.random() * 0.25)) / 1000) * 1000;
+      const price = Math.round((p.value * (0.75 + Math.random() * 0.25) * (1 + (staffSupportBonuses(c, c.userTeamId).sellBonus || 0))) / 1000) * 1000;
       c.budget += price;
       c.players = c.players.filter((pl) => pl.id !== playerId);
       removePlayerFromLineups(c, playerId);
@@ -4475,6 +4556,21 @@ export default function App({ onMigrateToServer } = {}) {
       return c;
     });
     showToast("ต่อสัญญาสำเร็จ!");
+  }
+  function upgradeStadium() {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const level = getStadiumLevel(c);
+      if (level >= STADIUM_LEVELS.length) return c;
+      const cost = stadiumUpgradeCost(level);
+      if (c.budget < cost) return c;
+      c.budget -= cost;
+      c.stadiumLevel = level + 1;
+      const def = getStadiumDef(c);
+      c.log = [`🏟️ อัปเกรดสนาม → ${def.nameTh} (ความจุ ${def.capacity.toLocaleString()} · รายได้เหย้า ×${def.matchRevMult}) · ${formatMoney(cost)}`, ...c.log];
+      return c;
+    });
+    showToast("อัปเกรดสนามสำเร็จ!");
   }
   function upgradeFacility(type) {
     updateCareer((prev) => {
@@ -5193,7 +5289,9 @@ export default function App({ onMigrateToServer } = {}) {
             onSetPrepField={setMatchPrepField} onBoardMove={moveBoardPiece} />
         )}
         {tab === "club" && (
-          <ClubHubView career={career} uTeam={uTeam} standings={standings} seasonOver={seasonOver} onUpgradeSponsor={upgradeSponsor} />
+          <ClubHubView career={career} uTeam={uTeam} standings={standings} seasonOver={seasonOver}
+            onUpgradeSponsor={upgradeSponsor} onUpgradeStadium={upgradeStadium}
+            onHireCard={requestHireFromStaffCard} uiLang={uiLang} />
         )}
         {tab === "profile" && (
           <ProfileView career={career} uTeam={uTeam} standings={standings} />
@@ -6371,7 +6469,7 @@ function ClubFansPanel({ career, uTeam, seasonOver, posInTable, userRow, onUpgra
   const nextTier = SPONSOR_TIERS[(career.sponsorTier ?? 0) + 1];
   const sponsorDaily = computeSponsorDaily(career, uTeam);
   const merchDaily = computeMerchDaily(career, uTeam);
-  const fanCap = getFanCap(uTeam.division);
+  const fanCap = getFanCap(uTeam.division, career);
   const canUpgrade = nextTier && (career.fanBase || 0) >= nextTier.minFans && (career.sponsorTier ?? 0) < qualifySponsorTier(career.fanBase || 0);
   const leaguePrize = seasonOver ? getLeaguePrize(uTeam.division, posInTable) : 0;
 
@@ -6422,7 +6520,101 @@ function ClubFansPanel({ career, uTeam, seasonOver, posInTable, userRow, onUpgra
 }
 
 /* ============================== CLUB HUB ============================== */
-function ClubHubView({ career, uTeam, standings, seasonOver, onUpgradeSponsor }) {
+function ClubBoardPanel({ career, uTeam, posInTable, uiLang = "th" }) {
+  const board = career.board;
+  if (!board) return null;
+  const sat = board.satisfaction ?? 70;
+  const satColor = sat >= 75 ? C.good : sat >= 45 ? C.amber : C.crimson;
+  const budgetOk = (career.budget || 0) >= (board.minBudget || 0);
+  return (
+    <Panel accent={satColor}>
+      <SectionLabel sub={t(uiLang, "club.boardSub")}>🤝 {t(uiLang, "club.board")}</SectionLabel>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+        <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+          <div style={{ fontSize: 9, color: C.textDim }}>{t(uiLang, "club.boardSat")}</div>
+          <div style={{ fontFamily: MONO_FONT, fontSize: 16, fontWeight: 700, color: satColor }}>{sat}%</div>
+          {board.warned && <div style={{ fontSize: 9, color: C.crimson, marginTop: 2 }}>{t(uiLang, "club.boardWarn")}</div>}
+        </div>
+        <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+          <div style={{ fontSize: 9, color: C.textDim }}>{t(uiLang, "club.boardTarget")}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.chalk }}>{boardTargetLabel(board, uiLang)}</div>
+          <div style={{ fontSize: 10, color: C.textDim, marginTop: 2 }}>{t(uiLang, "club.boardNow")} #{posInTable || "-"}</div>
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.55 }}>
+        {t(uiLang, "club.boardMinBudget")} <b style={{ color: budgetOk ? C.good : C.crimson }}>{formatMoney(board.minBudget || 0)}</b>
+        {" · "}{t(uiLang, "club.boardEndBonus")}
+      </div>
+    </Panel>
+  );
+}
+
+function ClubStadiumPanel({ career, uiLang = "th", onUpgradeStadium }) {
+  const level = getStadiumLevel(career);
+  const def = getStadiumDef(career);
+  const maxed = level >= STADIUM_LEVELS.length;
+  const cost = stadiumUpgradeCost(level);
+  const canAfford = (career.budget || 0) >= cost;
+  return (
+    <Panel accent={C.blue}>
+      <SectionLabel sub={`${t(uiLang, "club.stadiumCap")} ${def.capacity.toLocaleString()} · ${t(uiLang, "club.stadiumRev")} ×${def.matchRevMult}`}>
+        🏟️ {t(uiLang, "club.stadium")} — {stadiumName(career, uiLang)}
+      </SectionLabel>
+      <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.55, marginBottom: 8 }}>
+        {t(uiLang, "club.stadiumFanBonus")} +{stadiumFanCapBonus(career).toLocaleString()} · Lv.{level}/{STADIUM_LEVELS.length}
+      </div>
+      {!maxed ? (
+        <button type="button" disabled={!canAfford} onClick={onUpgradeStadium} style={{
+          ...btnStyle(canAfford ? C.good : "#2b332f", canAfford ? "#08150e" : C.textDim),
+          width: "100%", fontSize: 11, padding: "8px 0", cursor: canAfford ? "pointer" : "not-allowed",
+        }}>
+          {t(uiLang, "club.stadiumUpgrade")} → {uiLang === "en" ? STADIUM_LEVELS[level]?.nameEn : STADIUM_LEVELS[level]?.nameTh} ({formatMoney(cost)})
+        </button>
+      ) : (
+        <div style={{ fontSize: 11, color: C.gold }}>{t(uiLang, "club.stadiumMax")}</div>
+      )}
+    </Panel>
+  );
+}
+
+function ClubExtraStaffPanel({ career, uiLang = "th", onHireCard }) {
+  const st = career.staff?.[career.userTeamId] || {};
+  const bagCards = (career.staffCardBag || []).filter((c) => EXTRA_STAFF_TYPES.includes(c.type));
+  return (
+    <Panel>
+      <SectionLabel sub={t(uiLang, "club.extraStaffSub")}>🧢 {t(uiLang, "club.extraStaff")}</SectionLabel>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {EXTRA_STAFF_TYPES.map((type) => {
+          const hired = st[type];
+          const fx = EXTRA_STAFF_EFFECTS[type];
+          return (
+            <div key={type} style={{ padding: "8px 10px", borderRadius: 6, background: C.panel2, border: `1px solid ${hired ? C.good : C.steel}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>{STAFF_CARD_TYPE_ICON[type]} {STAFF_CARD_TYPE_TH[type]}</div>
+                {hired ? (
+                  <span style={{ fontSize: 10, color: C.good, fontFamily: MONO_FONT }}>{hired.name} · +{hired.boost}</span>
+                ) : (
+                  <span style={{ fontSize: 10, color: C.textDim }}>{t(uiLang, "club.vacant")}</span>
+                )}
+              </div>
+              {fx && <div style={{ fontSize: 10, color: C.textDim, marginTop: 4, lineHeight: 1.45 }}>{uiLang === "en" ? fx.en : fx.th}</div>}
+            </div>
+          );
+        })}
+      </div>
+      {bagCards.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6 }}>{t(uiLang, "club.extraStaffCards")}</div>
+          <div style={CARD_LIST_SCROLL}>
+            {bagCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireCard} {...staffCardLockInfo(career, card)} />)}
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function ClubHubView({ career, uTeam, standings, seasonOver, onUpgradeSponsor, onUpgradeStadium, onHireCard, uiLang = "th" }) {
   const posInTable = standings.findIndex((s) => s.team.id === uTeam.id) + 1;
   const userRow = standings.find((s) => s.team.id === uTeam.id);
   const sponsorTier = SPONSOR_TIERS[career.sponsorTier ?? 0] || SPONSOR_TIERS[0];
@@ -6441,6 +6633,10 @@ function ClubHubView({ career, uTeam, standings, seasonOver, onUpgradeSponsor })
       </Panel>
 
       <ClubFansPanel career={career} uTeam={uTeam} seasonOver={seasonOver} posInTable={posInTable} userRow={userRow} onUpgradeSponsor={onUpgradeSponsor} />
+
+      <ClubBoardPanel career={career} uTeam={uTeam} posInTable={posInTable} uiLang={uiLang} />
+      <ClubStadiumPanel career={career} uiLang={uiLang} onUpgradeStadium={onUpgradeStadium} />
+      <ClubExtraStaffPanel career={career} uiLang={uiLang} onHireCard={onHireCard} />
 
       <Panel>
         <SectionLabel sub="ยิ่งฐานแฟนเยอะ ยิ่งปลดล็อกสปอนเซอร์เกรดสูง">🪜 บันไดสปอนเซอร์</SectionLabel>
@@ -6579,7 +6775,7 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
 
       <Panel accent={C.gold} style={{ cursor: onGoClub ? "pointer" : "default" }} onClick={onGoClub}>
         <SectionLabel sub="แฟนบอล · สปอนเซอร์ · การเงิน — ดูรายละเอียดที่แท็บสโมสร">🏟️ สโมสร & แฟนบอล</SectionLabel>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: career.board ? "1fr 1fr 1fr" : "1fr 1fr", gap: 8 }}>
           <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
             <div style={{ fontSize: 9, color: C.textDim }}>แฟนบอล</div>
             <div style={{ fontFamily: MONO_FONT, fontSize: 16, fontWeight: 700, color: C.amber }}>{(career.fanBase || 0).toLocaleString()}</div>
@@ -6588,6 +6784,14 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
             <div style={{ fontSize: 9, color: C.textDim }}>สปอนเซอร์</div>
             <div style={{ fontSize: 11, fontWeight: 700, color: C.chalk }}>{(SPONSOR_TIERS[career.sponsorTier ?? 0] || SPONSOR_TIERS[0]).name}</div>
           </div>
+          {career.board && (
+            <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+              <div style={{ fontSize: 9, color: C.textDim }}>บอร์ด</div>
+              <div style={{ fontFamily: MONO_FONT, fontSize: 16, fontWeight: 700, color: (career.board.satisfaction ?? 70) >= 75 ? C.good : (career.board.satisfaction ?? 70) >= 45 ? C.amber : C.crimson }}>
+                {career.board.satisfaction ?? 70}%
+              </div>
+            </div>
+          )}
         </div>
         {onGoClub && <div style={{ fontSize: 10.5, color: C.gold, marginTop: 8, textAlign: "right" }}>ดูรายละเอียดสโมสร →</div>}
       </Panel>
@@ -10096,6 +10300,7 @@ function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, o
   const packCount = inventory?.injury_pack || 0;
   const doctor = career.staff?.[career.userTeamId]?.PHYSIO;
   const physio = career.staff?.[career.userTeamId]?.PHYSIOTHERAPIST;
+  const headMed = career.staff?.[career.userTeamId]?.HEAD_MEDICAL;
   const medicalLevel = (career.facilities || {}).medical || 1;
   const medicalCost = facilityUpgradeCost(medicalLevel);
   const medicalMaxed = medicalLevel >= 5;
@@ -10141,6 +10346,12 @@ function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, o
           <StaffOfferCard spec="PHYSIO" co={doctor} offer={career.coachOffers ? career.coachOffers.PHYSIO : null} locked={isStaffRoleLocked(doctor, career.season)} budget={budget} onHire={onHireCoach} />
           <StaffOfferCard spec="PHYSIOTHERAPIST" co={physio} offer={career.coachOffers ? career.coachOffers.PHYSIOTHERAPIST : null} locked={isStaffRoleLocked(physio, career.season)} budget={budget} onHire={onHireCoach} />
         </div>
+        {headMed && (
+          <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 6, background: "rgba(46,204,113,.08)", border: `1px solid ${C.good}`, fontSize: 11, lineHeight: 1.5 }}>
+            ⚕️ หัวหน้าแพทย์: <b>{headMed.name}</b> ({headMed.cardStars || "?"}★)
+            <div style={{ color: C.textDim, marginTop: 4 }}>{EXTRA_STAFF_EFFECTS.HEAD_MEDICAL.th}</div>
+          </div>
+        )}
       </Panel>
 
       <Panel>

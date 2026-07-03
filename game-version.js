@@ -23,7 +23,7 @@ export const GAME_DONATE_LABEL = "Support development";
 /** Premium / event currency label (Socker Coins in-game may map here later) */
 export const MASTER_COIN_LABEL = "Master Coin";
 
-export const GAME_VERSION = "0.9.1";
+export const GAME_VERSION = "0.9.2";
 
 /** Frozen baseline tag — same as GAME_VERSION after a stable release */
 export const STABLE_VERSION = "0.9.0";
@@ -33,7 +33,7 @@ export const STABLE_TAG = "v0.9.0-stable";
 export const STARTING_BUDGET = 10_000_000;
 
 /** Integer — increments when save migrations are required */
-export const SAVE_VERSION = 8;
+export const SAVE_VERSION = 9;
 
 /**
  * UI / feature gates keyed off save version (applied after migrateCareerSave).
@@ -48,6 +48,7 @@ export const FEATURES = {
   playerNationality: SAVE_VERSION >= 6,
   economyBalanceV3: SAVE_VERSION >= 7,
   economyStarWages: SAVE_VERSION >= 8,
+  clubSystems: SAVE_VERSION >= 9,
 };
 
 /** Human-readable migration notes (mirrors CHANGELOG save entries) */
@@ -60,4 +61,5 @@ export const SAVE_MIGRATION_NOTES = {
   6: "Player nationality + Latin-script names (Thai romanized)",
   7: "Economy v3 — lower daily wages, reserve wage discount, higher sponsor/merch/match income",
   8: "Star-tier wages — 1–4★ players paid much less than 5–7★",
+  9: "Club systems — stadium upgrades, board satisfaction, extra staff bonuses",
 };

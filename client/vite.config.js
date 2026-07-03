@@ -25,6 +25,7 @@ export default defineConfig({
       "@roadmap": path.resolve(root, "../features-roadmap.js"),
       "@nat": path.resolve(root, "../player-nationalities.js"),
       "@i18n": path.resolve(root, "../game-i18n.js"),
+      "@club": path.resolve(root, "../club-systems.js"),
     },
   },
 });

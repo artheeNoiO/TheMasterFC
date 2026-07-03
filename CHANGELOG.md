@@ -8,6 +8,19 @@ Game release version (`GAME_VERSION`) lives in `game-version.js`. Save migration
 
 _(nothing yet)_
 
+## 0.9.2 (2026-07-03)
+
+**GAME_VERSION:** `0.9.2` · **SAVE_VERSION:** `9` (migration v9 on load)
+
+### New — สตาฟ · บอร์ด · สนาม
+- **`club-systems.js`** — สนาม 5 ระดับ (ความจุ · เพดานแฟน · รายได้เหย้า) · บอร์ด (ความพอใจ · เป้าอันดับ · โบนัส/ปรับปลายฤดูกาล)
+- **สตาฟสนับสนุนมีผลในเกม** — ผู้ช่วย (morale/fam/dev) · Analyst (scout report) · Director (ซื้อ/ขาย/scout) · หัวหน้าแพทย์ (บาดเจ็บ/ฟื้นฟู)
+- **Club hub UI** — แผงบอร์ด · อัปเกรดสนาม · สตาฟสนับสนุน + การ์ดในกระเป๋า
+- **i18n** — ข้อความ club/board/stadium/staff (TH/EN)
+
+### Save migration
+- **v9** — `stadiumLevel`, `board`, `clubSystemsV9`
+
 ## 0.9.1 (2026-07-03)
 
 **GAME_VERSION:** `0.9.1` · **SAVE_VERSION:** `8` (migrations v6–v8 on load)
