@@ -1,0 +1,100 @@
+import React from "react";
+
+export const LOGO_ICONS = [
+  { id: "star", path: "M12 2l2.9 6.9L22 9.3l-5.5 4.8L18 22l-6-3.8L6 22l1.5-7.9L2 9.3l7.1-.4z" },
+  { id: "shield", path: "M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z" },
+  { id: "bolt", path: "M13 2L3 14h7l-1 8 11-13h-7z" },
+  { id: "crown", path: "M3 8l4 3 5-6 5 6 4-3-2 11H5z" },
+  { id: "ball", circle: true },
+  { id: "wing", path: "M2 12c4-6 9-8 10-8s6 2 10 8c-4 3-9 4-10 4s-6-1-10-4z" },
+  { id: "mountain", path: "M3 20l6-10 4 6 3-5 5 9z" },
+  { id: "flame", path: "M12 2c1 4-3 5-3 9a3 3 0 006 0c0-2-1-3-1-5 2 1 4 4 4 7a6 6 0 01-12 0c0-5 4-7 6-11z" },
+  { id: "diamond", path: "M12 2l6 8-6 12-6-12z" },
+  { id: "ring", ring: true },
+];
+
+export function shadeColor(hex, percent) {
+  try {
+    const f = parseInt(hex.slice(1), 16), t = percent < 0 ? 0 : 255, p = Math.abs(percent) / 100;
+    const R = f >> 16, G = (f >> 8) & 0x00ff, B = f & 0x0000ff;
+    const nr = Math.round((t - R) * p) + R, ng = Math.round((t - G) * p) + G, nb = Math.round((t - B) * p) + B;
+    return "#" + (0x1000000 + nr * 0x10000 + ng * 0x100 + nb).toString(16).slice(1);
+  } catch (e) { return hex; }
+}
+
+/** แปลงข้อมูลทีมจากเซฟ/ออนไลน์ให้ตรงกับ ClubBadge ทุกที่ */
+export function teamForBadge(team) {
+  if (!team) return { color: "#2d4a3a", secondaryColor: "#e8ece9", logoIndex: 0 };
+  const color = team.color || team.primaryColor || "#2d4a3a";
+  let logoIndex = team.logoIndex;
+  if (logoIndex == null || logoIndex === "") {
+    const seed = team.legendTeamKey || team.id || team.short || "team";
+    logoIndex = [...String(seed)].reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0) % LOGO_ICONS.length;
+  }
+  return {
+    color,
+    secondaryColor: team.secondaryColor || "#e8ece9",
+    logoIndex: ((Number(logoIndex) % LOGO_ICONS.length) + LOGO_ICONS.length) % LOGO_ICONS.length,
+  };
+}
+
+/** ตราโลโก้ทีม — gradient + ไอคอนที่เลือกตอนสร้างสโมสร */
+export function ClubBadge({ team, size = 40, fill = false, secondaryFallback = "#e8ece9", iconScale = 0.52 }) {
+  const crest = teamForBadge(team);
+  const logo = LOGO_ICONS[crest.logoIndex];
+  const primary = crest.color;
+  const secondary = crest.secondaryColor || secondaryFallback;
+  const px = typeof size === "number" ? size : 40;
+
+  return (
+    <div style={{
+      width: fill ? "100%" : px,
+      height: fill ? "100%" : px,
+      aspectRatio: "1",
+      borderRadius: fill ? "28%" : px * 0.28,
+      flexShrink: 0,
+      background: `linear-gradient(155deg, ${primary}, ${shadeColor(primary, -22)})`,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      boxShadow: "0 3px 8px rgba(0,0,0,.35)",
+      border: `2px solid ${secondary}55`,
+    }}>
+      <svg viewBox="0 0 24 24" width={fill ? `${iconScale * 100}%` : px * iconScale} height={fill ? `${iconScale * 100}%` : px * iconScale}>
+        {logo.circle ? <circle cx="12" cy="12" r="9" fill={secondary} /> :
+          logo.ring ? <circle cx="12" cy="12" r="7.5" fill="none" stroke={secondary} strokeWidth="3" /> :
+          <path d={logo.path} fill={secondary} />}
+      </svg>
+    </div>
+  );
+}
+
+/** ตราโลโก้ทีมในกรอบหกเหลี่ยม — ใช้บนสกอร์บอร์ด live */
+export function HexTeamBadge({ team, hexFill = "#15261e", hexStroke = "#2d4a3a", size = "scoreboard" }) {
+  const crest = teamForBadge(team);
+  const hexWidth = size === "scoreboard"
+    ? "clamp(44px, 8.4vw, 66px)"
+    : "clamp(28px, 5.5vw, 48px)";
+  const innerPad = size === "scoreboard" ? "8% 10% 10%" : "20% 22% 22%";
+  return (
+    <div style={{
+      flex: "0 0 auto",
+      width: hexWidth,
+      position: "relative",
+      aspectRatio: "44 / 48",
+      filter: "drop-shadow(0 4px 8px rgba(0,0,0,.45))",
+    }}>
+      <svg viewBox="0 0 44 48" width="100%" height="100%" style={{ display: "block", overflow: "visible" }}>
+        <polygon
+          points="22,2 40,12 40,32 22,42 4,32 4,12"
+          fill={hexFill} stroke={hexStroke} strokeWidth="1.5"
+        />
+      </svg>
+      <div style={{
+        position: "absolute", inset: 0,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: innerPad,
+      }}>
+        <ClubBadge team={crest} fill iconScale={size === "scoreboard" ? 0.62 : 0.52} />
+      </div>
+    </div>
+  );
+}

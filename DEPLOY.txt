@@ -21,9 +21,21 @@
    - CNAME www → cname.vercel-dns.com
 4. ตั้ง redirect: thesockermanager.com → www.thesockermanager.com
 
-## 3) API ออนไลน์ (Render)
+## 3) API ออนไลน์
 
-1. https://render.com → New Blueprint → เชื่อม repo → ใช้ render.yaml
+### ตัวเลือก A — Home Server (ฟรี, คอมเป็น API)
+
+  อ่าน HOME-SERVER.txt ทั้งฉบับ
+
+  สรุป:
+    Start-Home-Server.bat     → API :3001 + SQLite
+    Start-Home-Tunnel.bat     → Cloudflare Tunnel → api.thesockermanager.com
+    Vercel env: VITE_API_URL=https://api.thesockermanager.com
+    Run-Game-Cron.bat         → day-tick (Task Scheduler ทุก 1 ชม.)
+
+### ตัวเลือก B — Render (จ่าย ~$7+/เดือน, 24/7 ไม่ต้องเปิดคอม)
+
+  1. https://render.com → New Blueprint → เชื่อม repo → ใช้ render.yaml
 2. สร้าง Supabase project → คัดลอก DATABASE_URL (PostgreSQL)
 3. แก้ server/prisma/schema.prisma provider เป็น postgresql ก่อน deploy production
 4. ใส่ env บน Render: DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY

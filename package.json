@@ -1,6 +1,8 @@
 {
   "name": "siam-manager-online",
+  "version": "0.4.1",
   "private": true,
+  "type": "module",
   "workspaces": [
     "packages/*",
     "server",
@@ -8,6 +10,8 @@
   ],
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "home-server": "npm run db:generate -w server && npm run db:push -w server && npm start -w server",
+    "home-cron": "node server/scripts/run-cron.js",
     "build": "npm run build -w packages/game-engine && npm run build -w server && npm run build -w client",
     "db:generate": "npm run db:generate -w server",
     "db:push": "npm run db:push -w server",

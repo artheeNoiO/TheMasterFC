@@ -89,10 +89,10 @@ export function simulateInstant(homeTeam, homeSquad, homeXI, awayTeam, awaySquad
 export function applyMatchWear(squad, xiIds) {
   squad.forEach((p) => {
     if (xiIds.includes(p.id)) {
-      p.stamina = clamp(p.stamina - Math.floor(Math.random() * 13) - 16, 5, 100);
+      p.stamina = clamp(p.stamina - Math.floor(Math.random() * 9) - 10, 5, 100);
       p.careerApps = (p.careerApps || 0) + 1;
-      if (Math.random() < clamp((100 - p.stamina) / 100 * 0.1 + 0.015, 0.01, 0.15)) {
-        p.injuryDays = Math.max(1, Math.floor(Math.random() * 14) + 3);
+      if (Math.random() < clamp((100 - p.stamina) / 100 * 0.06 + 0.004, 0.003, 0.07)) {
+        p.injuryDays = Math.max(1, Math.floor(Math.random() * 7) + 1);
       }
     }
   });

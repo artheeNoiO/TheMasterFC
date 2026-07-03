@@ -19,6 +19,26 @@ services:
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
 
+  # Stake League — ยิง tick ทุก 10 นาที (สำรองกรณี in-process interval ของ web ไม่ทำงาน)
+  - type: cron
+    name: stake-tick
+    runtime: node
+    schedule: "*/10 * * * *"
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node -e "fetch(process.env.API_URL+'/api/cron/stake-tick',{method:'POST',headers:{'x-cron-secret':process.env.CRON_SECRET}}).then(r=>r.text()).then(console.log).catch(console.error)"
+    envVars:
+      - key: API_URL
+        fromService:
+          type: web
+          name: the-socker-manager-api
+          property: host
+      - key: CRON_SECRET
+        fromService:
+          type: web
+          name: the-socker-manager-api
+          envVarKey: CRON_SECRET
+
   - type: cron
     name: day-tick
     runtime: node

@@ -1,0 +1,17 @@
+# Cloudflare Tunnel — คัดลอกเป็น cloudflared-config.yml แล้วแก้ค่า
+#
+# ขั้นต่อ (ครั้งแรก):
+#   1. winget install Cloudflare.cloudflared
+#   2. cloudflared tunnel login
+#   3. cloudflared tunnel create the-socker-manager
+#   4. cloudflared tunnel route dns the-socker-manager api.thesockermanager.com
+#   5. แก้ credentials-file ด้านล่างให้ชี้ไฟล์ .json ที่ได้
+#   6. Start-Home-Server.bat + Start-Home-Tunnel.bat
+
+tunnel: the-socker-manager
+credentials-file: C:\Users\YOUR_USER\.cloudflared\YOUR_TUNNEL_ID.json
+
+ingress:
+  - hostname: api.thesockermanager.com
+    service: http://localhost:3001
+  - service: http_status:404

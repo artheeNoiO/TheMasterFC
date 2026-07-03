@@ -1,14 +1,31 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import {
+  LEGEND_LEAGUES, LEGEND_TEAMS, LEGEND_PLAYERS, LEGEND_INACTIVE_DAYS,
+  LEGEND_ACQUIRE_MIN_TEAM_VALUE, canBidForLegend,
+  getLegendsForTeam, getLegendById,
+} from "@legend";
+import { starsFromRating, getPlayerStarProfile, STAR_LABEL_TH, STAR_MAX } from "@stars";
+import { GAME_VERSION, SAVE_VERSION, FEATURES, STARTING_BUDGET } from "@version";
+import { useStadiumCrowd, isCrowdMuted, setCrowdMuted } from "@crowd";
+import { TrackerMatchView, pitchToWide, V0PitchSVG, TrackerPlayerDots } from "@tracker";
+import { ClubBadge, LOGO_ICONS, shadeColor } from "./club-badge.jsx";
+import {
+  createAmbientPitchState, advanceAmbientPitch, ambientAsBallSim,
+  computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene,
+  slotToPitchAmbient,
+} from "./live-pitch-ambient.js";
 
-/* ============================== DESIGN TOKENS ============================== */
+/* ============================== DESIGN TOKENS (FM Mobile) ============================== */
 const C = {
-  pitchDark: "#0b2318", pitch: "#153d29", pitchLine: "#e8f0e6", chalk: "#f2f0e6",
-  panel: "#132a20", panel2: "#0f2119", amber: "#e0a458", amberDim: "#a97a3e",
-  crimson: "#c1440e", good: "#6fae5a", steel: "#26433a", steelLight: "#345245",
-  textDim: "#a9bdb1", gold: "#f4c95d", blue: "#5a9bd5", purple: "#9d6fe0",
+  pitchDark: "#0a1210", pitch: "#121f18", pitchLine: "#e8ece9", chalk: "#e8ece9",
+  panel: "#1a2e24", panel2: "#15261e", amber: "#c9a227", amberDim: "#8a7020",
+  crimson: "#d45a3a", good: "#4caf6a", steel: "#2d4a3a", steelLight: "#3a5c48",
+  textDim: "#8fa396", gold: "#d4af37", blue: "#5a9bd5", purple: "#9d6fe0",
+  fmAccent: "#c9a227", fmBorder: "#2d4a3a", fmRowHi: "rgba(201,162,39,.12)",
 };
-const DISPLAY_FONT = "'Arial Black', Impact, 'Segoe UI', sans-serif";
-const MONO_FONT = "'Courier New', ui-monospace, monospace";
+const DISPLAY_FONT = "'Segoe UI', system-ui, sans-serif";
+const MONO_FONT = "ui-monospace, 'SF Mono', 'Courier New', monospace";
+const FM_FONT = "'Segoe UI', system-ui, -apple-system, sans-serif";
 
 /* ============================== DATA POOLS ============================== */
 const FIRST_NAMES = ["กันต์","ชัย","ธนา","วิชัย","สมชาย","อนันต์","ปิติ","ณัฐ","กิตติ","สุรศักดิ์","เอกชัย","ภูมิ","ธีระ","วรุตม์","ชนะ","อดิศักดิ์","ปกรณ์","ศักดิ์ดา","พีระ","จักรพันธ์","ไกรวิทย์","ณรงค์","บุญรอด","ปัณณวิชญ์","วีรภัทร","สิทธิชัย","อภิสิทธิ์","เจษฎา","ทวีศักดิ์","ยศพล"];
@@ -55,58 +72,131 @@ const CHALLENGER_TEAM_DEFS = [
 ];
 
 /* 10 selectable crest icons + color-shade helper, used by ClubBadge for every team in the league */
-const LOGO_ICONS = [
-  { id: "star", path: "M12 2l2.9 6.9L22 9.3l-5.5 4.8L18 22l-6-3.8L6 22l1.5-7.9L2 9.3l7.1-.4z" },
-  { id: "shield", path: "M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z" },
-  { id: "bolt", path: "M13 2L3 14h7l-1 8 11-13h-7z" },
-  { id: "crown", path: "M3 8l4 3 5-6 5 6 4-3-2 11H5z" },
-  { id: "ball", circle: true },
-  { id: "wing", path: "M2 12c4-6 9-8 10-8s6 2 10 8c-4 3-9 4-10 4s-6-1-10-4z" },
-  { id: "mountain", path: "M3 20l6-10 4 6 3-5 5 9z" },
-  { id: "flame", path: "M12 2c1 4-3 5-3 9a3 3 0 006 0c0-2-1-3-1-5 2 1 4 4 4 7a6 6 0 01-12 0c0-5 4-7 6-11z" },
-  { id: "diamond", path: "M12 2l6 8-6 12-6-12z" },
-  { id: "ring", ring: true },
-];
-function shadeColor(hex, percent) {
-  try {
-    const f = parseInt(hex.slice(1), 16), t = percent < 0 ? 0 : 255, p = Math.abs(percent) / 100;
-    const R = f >> 16, G = (f >> 8) & 0x00ff, B = f & 0x0000ff;
-    const nr = Math.round((t - R) * p) + R, ng = Math.round((t - G) * p) + G, nb = Math.round((t - B) * p) + B;
-    return "#" + (0x1000000 + nr * 0x10000 + ng * 0x100 + nb).toString(16).slice(1);
-  } catch (e) { return hex; }
+/* ============================== ตำแหน่งละเอียดแบบ FM (14 ตำแหน่ง) ============================== */
+/* p.position = กลุ่มหยาบ (GK/DF/MF/FW) ใช้กับโค้ช/ซ้อม/engine เหมือนเดิม
+   p.pos      = ตำแหน่งละเอียดแบบ FM · p.altPos = ตำแหน่งรอง (เล่นได้ โดนโทษน้อย) */
+const DETAIL_POSITIONS = ["GK", "DL", "DC", "DR", "WBL", "WBR", "DM", "ML", "MC", "MR", "AML", "AMC", "AMR", "ST"];
+const POS_GROUP = {
+  GK: "GK", DL: "DF", DC: "DF", DR: "DF", WBL: "DF", WBR: "DF",
+  DM: "MF", ML: "MF", MC: "MF", MR: "MF", AML: "MF", AMC: "MF", AMR: "MF", ST: "FW",
+  DF: "DF", MF: "MF", FW: "FW", // เผื่อรับค่ากลุ่มหยาบตรงๆ
+};
+const DPOS_TH = {
+  GK: "ผู้รักษาประตู", DL: "แบ็คซ้าย", DC: "เซ็นเตอร์แบ็ค", DR: "แบ็คขวา",
+  WBL: "วิงแบ็คซ้าย", WBR: "วิงแบ็คขวา", DM: "มิดฟิลด์ตัวรับ",
+  ML: "มิดฟิลด์ซ้าย", MC: "มิดฟิลด์ตัวกลาง", MR: "มิดฟิลด์ขวา",
+  AML: "ปีกซ้าย", AMC: "ตัวรุกหมายเลข 10", AMR: "ปีกขวา", ST: "กองหน้าตัวเป้า",
+};
+/* พิกัดเชิงแถว/ฝั่ง ใช้คำนวณความคุ้นเคยข้ามตำแหน่ง (row มาก = สูงขึ้นสนาม) */
+const DPOS_META = {
+  GK: { row: 0, side: "C" },
+  DL: { row: 1, side: "L" }, DC: { row: 1, side: "C" }, DR: { row: 1, side: "R" },
+  WBL: { row: 1.7, side: "L" }, WBR: { row: 1.7, side: "R" },
+  DM: { row: 2.3, side: "C" },
+  ML: { row: 3, side: "L" }, MC: { row: 3, side: "C" }, MR: { row: 3, side: "R" },
+  AML: { row: 3.8, side: "L" }, AMC: { row: 3.8, side: "C" }, AMR: { row: 3.8, side: "R" },
+  ST: { row: 4.6, side: "C" },
+};
+/* ความคุ้นเคยของตำแหน่งธรรมชาติ nat เมื่อไปยืนช่อง slot (1 = ตรงตำแหน่ง) */
+function dposFamiliarity(nat, slot) {
+  if (!slot || nat === slot) return 1;
+  if (nat === "GK" || slot === "GK") return 0.45;
+  const a = DPOS_META[nat], b = DPOS_META[slot];
+  if (!a || !b) return 0.8;
+  let pen = Math.abs(a.row - b.row) * 0.085;
+  if (a.side !== b.side) pen += a.side !== "C" && b.side !== "C" ? 0.06 : 0.10;
+  return clamp(1 - pen, 0.4, 0.97);
+}
+/* ความคุ้นเคยที่ดีที่สุดของนักเตะต่อช่องหนึ่ง — คิดตำแหน่งรองให้ด้วย (รองเพดาน 0.95 แบบ FM) */
+function playerSlotFamiliarity(p, slotDpos) {
+  if (!slotDpos) return 1;
+  const nat = p.pos || p.position;
+  let best = dposFamiliarity(nat, slotDpos);
+  (p.altPos || []).forEach((ap) => {
+    const f = ap === slotDpos ? 0.95 : dposFamiliarity(ap, slotDpos) * 0.9;
+    if (f > best) best = f;
+  });
+  return best;
+}
+/* ตัวคูณโทษยืนผิดตำแหน่ง — รองรับทั้งช่องละเอียด (DL/AMR/...) และค่ากลุ่มหยาบเก่า */
+function playerOopMult(p, slotPos) {
+  if (!slotPos) return 1;
+  if (DPOS_META[slotPos]) {
+    if (!p.pos) return outOfPositionMult(p.position, POS_GROUP[slotPos]);
+    return playerSlotFamiliarity(p, slotPos);
+  }
+  return outOfPositionMult(p.position, slotPos);
 }
 
 const FORMATIONS = {
-  "4-4-2": { label: "4-4-2", counts: { GK: 1, DF: 4, MF: 4, FW: 2 },
+  "4-4-2": { label: "4-4-2",
     slots: [
-      { pos: "GK", x: 50, y: 92 },
-      { pos: "DF", x: 15, y: 72 }, { pos: "DF", x: 38, y: 76 }, { pos: "DF", x: 62, y: 76 }, { pos: "DF", x: 85, y: 72 },
-      { pos: "MF", x: 15, y: 48 }, { pos: "MF", x: 38, y: 52 }, { pos: "MF", x: 62, y: 52 }, { pos: "MF", x: 85, y: 48 },
-      { pos: "FW", x: 37, y: 22 }, { pos: "FW", x: 63, y: 22 },
+      { dpos: "GK", x: 50, y: 92 },
+      { dpos: "DL", x: 15, y: 72 }, { dpos: "DC", x: 38, y: 76 }, { dpos: "DC", x: 62, y: 76 }, { dpos: "DR", x: 85, y: 72 },
+      { dpos: "ML", x: 15, y: 48 }, { dpos: "MC", x: 38, y: 52 }, { dpos: "MC", x: 62, y: 52 }, { dpos: "MR", x: 85, y: 48 },
+      { dpos: "ST", x: 37, y: 22 }, { dpos: "ST", x: 63, y: 22 },
     ] },
-  "4-3-3": { label: "4-3-3", counts: { GK: 1, DF: 4, MF: 3, FW: 3 },
+  "4-3-3": { label: "4-3-3",
     slots: [
-      { pos: "GK", x: 50, y: 92 },
-      { pos: "DF", x: 15, y: 72 }, { pos: "DF", x: 38, y: 76 }, { pos: "DF", x: 62, y: 76 }, { pos: "DF", x: 85, y: 72 },
-      { pos: "MF", x: 25, y: 50 }, { pos: "MF", x: 50, y: 54 }, { pos: "MF", x: 75, y: 50 },
-      { pos: "FW", x: 18, y: 22 }, { pos: "FW", x: 50, y: 18 }, { pos: "FW", x: 82, y: 22 },
+      { dpos: "GK", x: 50, y: 92 },
+      { dpos: "DL", x: 15, y: 72 }, { dpos: "DC", x: 38, y: 76 }, { dpos: "DC", x: 62, y: 76 }, { dpos: "DR", x: 85, y: 72 },
+      { dpos: "MC", x: 25, y: 50 }, { dpos: "DM", x: 50, y: 54 }, { dpos: "MC", x: 75, y: 50 },
+      { dpos: "AML", x: 18, y: 22 }, { dpos: "ST", x: 50, y: 18 }, { dpos: "AMR", x: 82, y: 22 },
     ] },
-  "3-5-2": { label: "3-5-2", counts: { GK: 1, DF: 3, MF: 5, FW: 2 },
+  "3-5-2": { label: "3-5-2",
     slots: [
-      { pos: "GK", x: 50, y: 92 },
-      { pos: "DF", x: 25, y: 74 }, { pos: "DF", x: 50, y: 78 }, { pos: "DF", x: 75, y: 74 },
-      { pos: "MF", x: 10, y: 50 }, { pos: "MF", x: 32, y: 54 }, { pos: "MF", x: 50, y: 46 }, { pos: "MF", x: 68, y: 54 }, { pos: "MF", x: 90, y: 50 },
-      { pos: "FW", x: 37, y: 22 }, { pos: "FW", x: 63, y: 22 },
+      { dpos: "GK", x: 50, y: 92 },
+      { dpos: "DC", x: 25, y: 74 }, { dpos: "DC", x: 50, y: 78 }, { dpos: "DC", x: 75, y: 74 },
+      { dpos: "WBL", x: 10, y: 50 }, { dpos: "MC", x: 32, y: 54 }, { dpos: "MC", x: 50, y: 46 }, { dpos: "MC", x: 68, y: 54 }, { dpos: "WBR", x: 90, y: 50 },
+      { dpos: "ST", x: 37, y: 22 }, { dpos: "ST", x: 63, y: 22 },
     ] },
-  "5-3-2": { label: "5-3-2", counts: { GK: 1, DF: 5, MF: 3, FW: 2 },
+  "5-3-2": { label: "5-3-2",
     slots: [
-      { pos: "GK", x: 50, y: 92 },
-      { pos: "DF", x: 8, y: 68 }, { pos: "DF", x: 29, y: 76 }, { pos: "DF", x: 50, y: 78 }, { pos: "DF", x: 71, y: 76 }, { pos: "DF", x: 92, y: 68 },
-      { pos: "MF", x: 25, y: 48 }, { pos: "MF", x: 50, y: 52 }, { pos: "MF", x: 75, y: 48 },
-      { pos: "FW", x: 37, y: 22 }, { pos: "FW", x: 63, y: 22 },
+      { dpos: "GK", x: 50, y: 92 },
+      { dpos: "WBL", x: 8, y: 68 }, { dpos: "DC", x: 29, y: 76 }, { dpos: "DC", x: 50, y: 78 }, { dpos: "DC", x: 71, y: 76 }, { dpos: "WBR", x: 92, y: 68 },
+      { dpos: "MC", x: 25, y: 48 }, { dpos: "DM", x: 50, y: 52 }, { dpos: "MC", x: 75, y: 48 },
+      { dpos: "ST", x: 37, y: 22 }, { dpos: "ST", x: 63, y: 22 },
+    ] },
+  "4-2-3-1": { label: "4-2-3-1",
+    slots: [
+      { dpos: "GK", x: 50, y: 92 },
+      { dpos: "DL", x: 15, y: 72 }, { dpos: "DC", x: 38, y: 76 }, { dpos: "DC", x: 62, y: 76 }, { dpos: "DR", x: 85, y: 72 },
+      { dpos: "DM", x: 32, y: 58 }, { dpos: "DM", x: 68, y: 58 }, { dpos: "AML", x: 18, y: 38 }, { dpos: "AMC", x: 50, y: 34 }, { dpos: "AMR", x: 82, y: 38 },
+      { dpos: "ST", x: 50, y: 16 },
+    ] },
+  "4-1-4-1": { label: "4-1-4-1",
+    slots: [
+      { dpos: "GK", x: 50, y: 92 },
+      { dpos: "DL", x: 15, y: 72 }, { dpos: "DC", x: 38, y: 76 }, { dpos: "DC", x: 62, y: 76 }, { dpos: "DR", x: 85, y: 72 },
+      { dpos: "DM", x: 50, y: 62 }, { dpos: "ML", x: 15, y: 46 }, { dpos: "MC", x: 38, y: 50 }, { dpos: "MC", x: 62, y: 50 }, { dpos: "MR", x: 85, y: 46 },
+      { dpos: "ST", x: 50, y: 16 },
+    ] },
+  "3-4-3": { label: "3-4-3",
+    slots: [
+      { dpos: "GK", x: 50, y: 92 },
+      { dpos: "DC", x: 25, y: 74 }, { dpos: "DC", x: 50, y: 78 }, { dpos: "DC", x: 75, y: 74 },
+      { dpos: "ML", x: 15, y: 50 }, { dpos: "MC", x: 38, y: 54 }, { dpos: "MC", x: 62, y: 54 }, { dpos: "MR", x: 85, y: 50 },
+      { dpos: "AML", x: 18, y: 22 }, { dpos: "ST", x: 50, y: 18 }, { dpos: "AMR", x: 82, y: 22 },
+    ] },
+  "3-4-2-1": { label: "3-4-2-1",
+    slots: [
+      { dpos: "GK", x: 50, y: 92 },
+      { dpos: "DC", x: 25, y: 74 }, { dpos: "DC", x: 50, y: 78 }, { dpos: "DC", x: 75, y: 74 },
+      { dpos: "ML", x: 15, y: 52 }, { dpos: "MC", x: 38, y: 56 }, { dpos: "MC", x: 62, y: 56 }, { dpos: "MR", x: 85, y: 52 },
+      { dpos: "AMC", x: 32, y: 28 }, { dpos: "AMC", x: 68, y: 28 }, { dpos: "ST", x: 50, y: 14 },
     ] },
 };
+/* เติม pos (กลุ่มหยาบ) ต่อช่อง + counts ต่อแผน จาก dpos โดยอัตโนมัติ */
+Object.values(FORMATIONS).forEach((f) => {
+  f.slots.forEach((s) => { s.pos = POS_GROUP[s.dpos]; });
+  f.counts = { GK: 0, DF: 0, MF: 0, FW: 0 };
+  f.slots.forEach((s) => { f.counts[s.pos] += 1; });
+});
 const FORMATION_KEYS = Object.keys(FORMATIONS);
+const DEFAULT_FORMATION = "4-4-2";
+function resolveFormation(key) {
+  return FORMATIONS[key] ? key : DEFAULT_FORMATION;
+}
 /* rock-paper-scissors style matchup cycle: winner beats loser by a small margin */
 const MATCHUP_CYCLE = ["4-3-3", "4-4-2", "5-3-2", "3-5-2"]; // each beats the next
 function matchupMultiplier(mine, theirs) {
@@ -118,12 +208,22 @@ function matchupMultiplier(mine, theirs) {
   return 1.0;
 }
 
-const SQUAD_TEMPLATE = ["GK","GK","DF","DF","DF","DF","DF","DF","MF","MF","MF","MF","MF","MF","FW","FW","FW","FW"];
+/* เทมเพลตสควอดใช้ตำแหน่งละเอียด (กลุ่มหยาบยังครบ: GK2 / DF6 / MF6 / FW4) */
+const SQUAD_TEMPLATE = ["GK","GK","DL","DC","DC","DR","DC","WBR","DM","MC","MC","ML","MR","AMC","ST","ST","ST","ST"];
+const SQUAD_POSITION_TARGET = { GK: 2, DF: 6, MF: 6, FW: 4 };
+const SQUAD_TARGET_SIZE = SQUAD_TEMPLATE.length;
+const MIN_XI_SIZE = 11;
+const MIN_SELL_SQUAD = 14;
+/* กฎจริง (ลีกใหญ่ 2024/25): ตัวจริง 11 · ม้านั่งสำรอง 9 · เปลี่ยนตัวได้ 5 คน/นัด · สควอดทั้งหมดไม่จำกัด */
+const MATCH_BENCH_SIZE = 9;
+const MAX_MATCH_SUBS = 5;
 const POS_TH = { GK: "ผู้รักษาประตู", DF: "กองหลัง", MF: "กองกลาง", FW: "กองหน้า" };
-const ROLE_TH = { balanced: "สมดุล", attacking: "บุก", defensive: "รับ" };
-const ROLE_COLOR = { balanced: C.textDim, attacking: "#c1440e", defensive: "#5a9bd5" };
 const POS_COLOR = { GK: "#e0a458", DF: "#5a9bd5", MF: "#6fae5a", FW: "#c1440e" };
-const STAFF_TH = { GK: "โค้ช GK", DF: "โค้ชกองหลัง", MF: "โค้ชกองกลาง", FW: "โค้ชกองหน้า", FITNESS: "โค้ชฟิตเนส", PHYSIO: "หมอ/นักกายภาพ" };
+/* ป้ายตำแหน่งของนักเตะ — ใช้ตำแหน่งละเอียดถ้ามี ไม่งั้นถอยไปกลุ่มหยาบ (เซฟเก่า/ออบเจ็กต์พิเศษ) */
+function playerPosTH(p) { return (p?.pos && DPOS_TH[p.pos]) || POS_TH[p?.position] || "?"; }
+function playerPosCode(p) { return p?.pos || p?.position || "?"; }
+function playerPosColor(p) { return POS_COLOR[POS_GROUP[p?.pos] || p?.position] || "#a9bdb1"; }
+const STAFF_TH = { GK: "โค้ช GK", DF: "โค้ชกองหลัง", MF: "โค้ชกองกลาง", FW: "โค้ชกองหน้า", FITNESS: "โค้ชฟิตเนส", PHYSIO: "หมอ", PHYSIOTHERAPIST: "นักกายภาพ" };
 
 /* club facilities: 4 upgradeable centers, level 1-5 each */
 const FACILITY_TYPES = ["fitness", "training", "techLab", "medical"];
@@ -135,12 +235,24 @@ const FACILITY_DESC = {
   medical: "ลดจำนวนวันพักฟื้นเมื่อบาดเจ็บ",
 };
 function facilityUpgradeCost(level) { return (level + 1) * 1200000; }
-const STAFF_SPECS = ["GK", "DF", "MF", "FW", "FITNESS", "PHYSIO"];
+const TRAINING_CAMP_COOLDOWN_DAYS = 21;
+function trainingCampCost(facilities) { return 3000000 + (((facilities || {}).training || 1) - 1) * 500000; }
+const STAFF_SPECS = ["GK", "DF", "MF", "FW", "FITNESS", "PHYSIO", "PHYSIOTHERAPIST"];
+/** ทั้งสองตำแหน่งมาจากการ์ดประเภท DOCTOR — หมอลดโอกาส/ความรุนแรงบาดเจ็บ, นักกายภาพเร่งพักฟื้น */
+const MEDICAL_CARD_SPECIALTIES = ["PHYSIO", "PHYSIOTHERAPIST"];
 const MANAGER_STAT_TH = { development: "ปั้นนักเตะ", tactics: "แทคติก", manManagement: "จิตวิทยา/ห้องแต่งตัว", negotiation: "เจรจาต่อรอง", scouting: "ขุดดาวรุ่ง", reputation: "บารมี" };
 const STATUS_TH = { starter: "ตัวหลัก", rotation: "ตัวหมุนเวียน", reserve: "ตัวสำรอง" };
 const STATUS_COLOR = { starter: "#6fae5a", rotation: "#e0a458", reserve: "#a9bdb1" };
 const POTENTIAL_BAND = [[90, "S"], [80, "A"], [68, "B"], [55, "C"], [0, "D"]];
 function bandOf(potential) { for (const [min, label] of POTENTIAL_BAND) if (potential >= min) return label; return "D"; }
+
+function starColor(n) {
+  if (n >= 7) return C.gold;
+  if (n >= 5) return C.amber;
+  if (n >= 4) return C.good;
+  if (n >= 3) return C.blue;
+  return C.textDim;
+}
 
 /* FM-style attributes, 1-20 scale, grouped into 3 categories (15 total) */
 const ATTR_GROUPS = {
@@ -188,30 +300,244 @@ function bumpAttrs(p, amount) {
   recomputeDerived(p);
 }
 
+/* สุ่มตำแหน่งละเอียดจากกลุ่มหยาบ (ถ่วงน้ำหนักให้สมจริง) */
+const DPOS_WEIGHTS_BY_GROUP = {
+  GK: [["GK", 1]],
+  DF: [["DC", 45], ["DL", 19], ["DR", 19], ["WBL", 8.5], ["WBR", 8.5]],
+  MF: [["MC", 28], ["DM", 16], ["ML", 11], ["MR", 11], ["AMC", 14], ["AML", 10], ["AMR", 10]],
+  FW: [["ST", 1]],
+};
+function rollDetailedPos(group) {
+  const weights = DPOS_WEIGHTS_BY_GROUP[group] || DPOS_WEIGHTS_BY_GROUP.MF;
+  const total = weights.reduce((s, [, w]) => s + w, 0);
+  let r = Math.random() * total;
+  for (const [dpos, w] of weights) { r -= w; if (r <= 0) return dpos; }
+  return weights[0][0];
+}
+/* สเตตเด่นประจำตำแหน่งละเอียด — ใช้ bias ตอนเกิด + ใช้ derive ตำแหน่งให้นักเตะเซฟเก่า */
+const DPOS_KEY_ATTRS = {
+  GK: ["decisions", "composure", "agility"],
+  DL: ["pace", "crossing", "tackling"], DR: ["pace", "crossing", "tackling"],
+  DC: ["heading", "strength", "tackling"],
+  WBL: ["pace", "crossing", "workRate"], WBR: ["pace", "crossing", "workRate"],
+  DM: ["tackling", "decisions", "passing"],
+  MC: ["passing", "vision", "workRate"],
+  ML: ["crossing", "dribbling", "pace"], MR: ["crossing", "dribbling", "pace"],
+  AML: ["dribbling", "pace", "finishing"], AMR: ["dribbling", "pace", "finishing"],
+  AMC: ["passing", "vision", "finishing"],
+  ST: ["finishing", "composure", "heading"],
+};
+/* ตำแหน่งรอง: สุ่มจากตำแหน่งข้างเคียงที่ความคุ้นเคยสูง (ไม่รวม GK) */
+/* แจกตำแหน่งละเอียดให้นักเตะเซฟเก่า — เลือกตำแหน่งในกลุ่มที่สเตตเด่นเข้าท่าที่สุด (สุ่มเกลี่ยซ้าย/ขวา) */
+function deriveDetailedPos(p) {
+  const group = POS_GROUP[p.position] || "MF";
+  if (group === "GK") return "GK";
+  if (group === "FW") return "ST";
+  const cands = DETAIL_POSITIONS.filter((d) => d !== "GK" && POS_GROUP[d] === group);
+  let best = cands[0], bestScore = -1;
+  cands.forEach((d) => {
+    const ks = DPOS_KEY_ATTRS[d] || [];
+    const score = ks.reduce((s, k) => s + (p.attrs?.[k] || 10), 0) / (ks.length || 1) + Math.random() * 1.4;
+    if (score > bestScore) { bestScore = score; best = d; }
+  });
+  return best;
+}
+function ensureDetailedPos(p) {
+  if (!p || !p.position) return;
+  if (!p.pos || !DPOS_META[p.pos]) p.pos = deriveDetailedPos(p);
+  if (!Array.isArray(p.altPos)) p.altPos = rollAltPositions(p.pos);
+}
+
+function rollAltPositions(natPos) {
+  if (natPos === "GK") return [];
+  const candidates = DETAIL_POSITIONS.filter((d) => d !== "GK" && d !== natPos && dposFamiliarity(natPos, d) >= 0.82);
+  const alts = [];
+  const roll = Math.random();
+  const count = roll < 0.35 ? 0 : roll < 0.85 ? 1 : 2;
+  while (alts.length < count && candidates.length) {
+    const idx = Math.floor(Math.random() * candidates.length);
+    alts.push(candidates.splice(idx, 1)[0]);
+  }
+  return alts;
+}
+
 function genPlayer(position, tier, teamId, forcedAge, startDay) {
+  /* รับได้ทั้งกลุ่มหยาบ (GK/DF/MF/FW → สุ่มตำแหน่งละเอียด) และตำแหน่งละเอียดตรงๆ (DL/AMR/...) */
+  const dpos = DPOS_META[position] && position !== "GK" ? position : position === "GK" ? "GK" : rollDetailedPos(position);
+  const group = POS_GROUP[dpos];
   const age = forcedAge != null ? forcedAge : rand(17, 33);
   const peak = age <= 27 ? 1 : clamp(1 - (age - 27) * 0.025, 0.55, 1);
   const base = 10 + tier * 0.35; // baseline on the 1-20 scale
   const attrs = {};
+  const keyAttrs = DPOS_KEY_ATTRS[dpos] || [];
   ALL_ATTRS.forEach((k) => {
     let biasHigh;
-    if (position === "GK") biasHigh = DEF_ATTRS.includes(k) || k === "composure" || k === "decisions";
-    else if (position === "DF") biasHigh = DEF_ATTRS.includes(k) || ATTR_GROUPS.physical.includes(k);
-    else if (position === "MF") biasHigh = ATTR_GROUPS.mental.includes(k) || k === "passing";
+    if (group === "GK") biasHigh = DEF_ATTRS.includes(k) || k === "composure" || k === "decisions";
+    else if (group === "DF") biasHigh = DEF_ATTRS.includes(k) || ATTR_GROUPS.physical.includes(k);
+    else if (group === "MF") biasHigh = ATTR_GROUPS.mental.includes(k) || k === "passing";
     else biasHigh = ATK_ATTRS.includes(k) || ATTR_GROUPS.physical.includes(k);
     const spread = biasHigh ? rand(1, 5) : rand(-4, 2);
-    attrs[k] = clamp(Math.round((base + spread) * peak), 1, 20);
+    const keyBoost = keyAttrs.includes(k) ? rand(1, 3) : 0;
+    attrs[k] = clamp(Math.round((base + spread + keyBoost) * peak), 1, 20);
   });
-  const p = { id: uid("pl"), name: genName(), position, age, attrs, morale: rand(62, 92), teamId, stamina: 100, injuryDays: 0, appearHistory: [], careerGoals: 0, careerApps: 0, role: "balanced" };
+  const p = { id: uid("pl"), name: genName(), position: group, pos: dpos, altPos: rollAltPositions(dpos), age, attrs, morale: rand(62, 92), teamId, stamina: 100, injuryDays: 0, appearHistory: [], careerGoals: 0, seasonGoals: 0, careerApps: 0, role: "balanced" };
   recomputeDerived(p);
   const ageMult = age <= 23 ? 1.35 : age <= 28 ? 1.05 : age <= 31 ? 0.65 : 0.35;
   p.value = Math.round((p.rating * p.rating * 380 * ageMult) / 1000) * 1000;
-  p.wage = Math.round((p.rating * p.rating * 9) / 100) * 100;
+  p.wage = computePlayerWage(p.rating);
   p.potential = age <= 21 ? clamp(p.rating + rand(6, 34), p.rating, 99) : age <= 25 ? clamp(p.rating + rand(0, 10), p.rating, 99) : p.rating;
   p.contractEndsDay = (startDay || 1) + rand(150, 400);
   return p;
 }
 const genSquad = (teamId, tier) => SQUAD_TEMPLATE.map((pos) => genPlayer(pos, tier, teamId));
+
+/* ============================== LEGEND UNIVERSE ============================== */
+function forcePlayerRating(p, targetRating) {
+  const diff = targetRating - p.rating;
+  bumpAttrs(p, diff * 0.12);
+  if (Math.abs(p.rating - targetRating) > 2) {
+    const scale = targetRating / Math.max(p.rating, 1);
+    p.attack = clamp(Math.round(p.attack * scale), 5, 99);
+    p.defense = clamp(Math.round(p.defense * scale), 5, 99);
+    p.rating = targetRating;
+  }
+}
+
+function buildLegendPlayer(def, teamId, homeTeamId, startDay) {
+  const tier = clamp(Math.floor((def.rating - 50) / 3), 0, 12);
+  const p = genPlayer(def.position, tier, teamId, def.age, startDay);
+  p.id = `leg_${def.legendId}`;
+  p.legendId = def.legendId;
+  p.isLegend = true;
+  p.homeTeamId = homeTeamId;
+  p.name = def.name;
+  forcePlayerRating(p, def.rating);
+  p.potential = def.potential;
+  p.value = def.acquireCost;
+  p.wage = computePlayerWage(p.rating);
+  p.legendLeagueId = def.leagueId;
+  p.lastOwnerActivityDay = startDay || 1;
+  return p;
+}
+
+function buildLegendSquadForTeam(teamId, leagueId, teamKey, tier, startDay) {
+  const squad = genSquad(teamId, tier);
+  getLegendsForTeam(leagueId, teamKey).forEach((leg) => {
+    const legP = buildLegendPlayer(leg, teamId, teamId, startDay);
+    const idx = squad.findIndex((pl) => pl.position === leg.position && !pl.isLegend);
+    if (idx >= 0) squad[idx] = legP;
+    else squad.push(legP);
+  });
+  return squad;
+}
+
+function createLegendMasterTeams(leagueId, startDay) {
+  return (LEGEND_TEAMS[leagueId] || []).map((t, idx) => ({
+    id: `leg_${leagueId}_${t.key}`,
+    name: t.name,
+    short: t.short,
+    color: t.color,
+    secondaryColor: C.chalk,
+    logoIndex: idx % 10,
+    tier: t.tier,
+    division: 0,
+    isUser: false,
+    formation: t.formation || "4-4-2",
+    budget: rand(5000000, 15000000),
+    manager: genManager(),
+    autoMode: true,
+    chemistry: 50,
+    legendTeamKey: t.key,
+    legendLeagueId: leagueId,
+  }));
+}
+
+function initLegendOwnership(leagueId, teams, players) {
+  const ownership = {};
+  LEGEND_PLAYERS.filter((l) => l.leagueId === leagueId).forEach((l) => {
+    const homeTeam = teams.find((t) => t.legendTeamKey === l.teamKey);
+    const pl = players.find((p) => p.legendId === l.legendId);
+    ownership[l.legendId] = pl?.teamId || homeTeam?.id || null;
+  });
+  return ownership;
+}
+
+function installLegendMasterLeague(c, leagueId) {
+  const userTeam = c.teams?.find((t) => t.isUser);
+  if (!userTeam || !Array.isArray(c.teams)) return c;
+  const challengerTeams = c.teams.filter((t) => t.division === 1);
+  const keepIds = new Set([...challengerTeams.map((t) => t.id), userTeam.id]);
+  c.players = c.players.filter((p) => keepIds.has(p.teamId) && !p.isLegend);
+  const masterTeams = createLegendMasterTeams(leagueId, c.day || 1);
+  masterTeams.forEach((t) => {
+    c.players.push(...buildLegendSquadForTeam(t.id, leagueId, t.legendTeamKey, t.tier, c.day || 1));
+  });
+  c.teams = [...masterTeams, ...challengerTeams, userTeam];
+  c.legendLeagueId = leagueId;
+  c.legendOwnership = initLegendOwnership(leagueId, c.teams, c.players);
+  c.leagues = [buildLeague(0, c.teams, c.legendLeagueId), buildLeague(1, c.teams, c.legendLeagueId)];
+  c.teams.forEach((t) => {
+    c.lineups[t.id] = getBestXI(c.players.filter((p) => p.teamId === t.id), t.formation);
+  });
+  return c;
+}
+
+function reconcileInactiveLegends(c) {
+  if (!c.legendOwnership || !c.legendLeagueId) return c;
+  const logs = [];
+  LEGEND_PLAYERS.filter((l) => l.leagueId === c.legendLeagueId).forEach((def) => {
+    const ownerId = c.legendOwnership[def.legendId];
+    if (!ownerId) return;
+    const homeTeam = c.teams.find((t) => t.legendTeamKey === def.teamKey && t.division === 0);
+    if (!homeTeam || ownerId === homeTeam.id) return;
+    const player = c.players.find((p) => p.legendId === def.legendId);
+    if (!player) return;
+    const ownerTeam = c.teams.find((t) => t.id === ownerId);
+    const isUserOwner = ownerId === c.userTeamId;
+    const lastActive = player.lastOwnerActivityDay || c.day;
+    if (isUserOwner) {
+      player.lastOwnerActivityDay = c.day;
+      return;
+    }
+    if (c.day - lastActive < LEGEND_INACTIVE_DAYS) return;
+    player.teamId = homeTeam.id;
+    player.lastOwnerActivityDay = c.day;
+    c.legendOwnership[def.legendId] = homeTeam.id;
+    Object.keys(c.lineups).forEach((tid) => {
+      c.lineups[tid] = (c.lineups[tid] || []).filter((id) => id !== player.id);
+    });
+    c.lineups[homeTeam.id] = getBestXI(c.players.filter((p) => p.teamId === homeTeam.id), homeTeam.formation);
+    logs.push(`⭐ ${def.name} กลับ ${homeTeam.short} (เจ้าของ ${ownerTeam?.short || "?"} ไม่ active ${LEGEND_INACTIVE_DAYS} วัน)`);
+  });
+  if (logs.length) c.log = [...logs, ...c.log];
+  return c;
+}
+
+function tryAcquireLegendOnCareer(c, legendId) {
+  const def = getLegendById(legendId);
+  if (!def || def.leagueId !== c.legendLeagueId) return { ok: false, msg: "ไม่พบซูเปอร์สตาร์ในลีกนี้" };
+  const uT = c.teams.find((t) => t.id === c.userTeamId);
+  if (!canBidForLegend(uT.division)) return { ok: false, msg: "ต้องอยู่ Master League" };
+  const fin = computeTeamFinances(c);
+  if (fin.teamValue < LEGEND_ACQUIRE_MIN_TEAM_VALUE) return { ok: false, msg: `มูลค่าสโมสรต้อง ≥ ${formatMoney(LEGEND_ACQUIRE_MIN_TEAM_VALUE)}` };
+  const player = c.players.find((p) => p.legendId === legendId);
+  if (!player) return { ok: false, msg: "ไม่พบนักเตะ" };
+  if (player.teamId === c.userTeamId) return { ok: false, msg: "มีอยู่ในทีมแล้ว" };
+  if (c.budget < def.acquireCost) return { ok: false, msg: "งบไม่พอ" };
+  const prevOwner = player.teamId;
+  c.budget -= def.acquireCost;
+  player.teamId = c.userTeamId;
+  player.lastOwnerActivityDay = c.day;
+  c.legendOwnership[legendId] = c.userTeamId;
+  c.lineups[c.userTeamId] = (c.lineups[c.userTeamId] || []).filter((id) => id !== player.id);
+  const prevTeam = c.teams.find((t) => t.id === prevOwner);
+  c.log = [`⭐ คว้า ${def.name} จาก ${prevTeam?.short || "?"} ค่าตัว ${formatMoney(def.acquireCost)}`, ...c.log];
+  return { ok: true, msg: `คว้า ${def.name} สำเร็จ!` };
+}
+
+function legendLeagueLabel(leagueId) {
+  return LEGEND_LEAGUES.find((l) => l.id === leagueId)?.name || "Master League";
+}
 
 function genCoach(fixedSpecialty) {
   const specialty = fixedSpecialty || choice(STAFF_SPECS);
@@ -220,7 +546,7 @@ function genCoach(fixedSpecialty) {
   return {
     id: uid("co"), name: choice(COACH_FIRST) + " " + choice(LAST_NAMES), specialty, grade, boost,
     signingCost: Math.round((grade * 150000 + rand(0, 50000)) / 1000) * 1000,
-    weeklyWage: Math.round((grade * 8000 + rand(0, 3000)) / 500) * 500,
+    weeklyWage: scaleStaffDailyWage(grade * 8000 + rand(0, 3000)),
   };
 }
 
@@ -236,7 +562,7 @@ function genManager(scaleDown) {
     id: uid("mg"), name: choice(MANAGER_FIRST) + " " + choice(LAST_NAMES), stats,
     preferredFormation: choice(FORMATION_KEYS),
     signingCost: Math.round((avgStat * 4000 * scale + rand(0, 80000 * scale)) / 1000) * 1000,
-    weeklyWage: Math.round((avgStat * 350 * scale + rand(0, 3000 * scale)) / 500) * 500,
+    weeklyWage: scaleStaffDailyWage(avgStat * 350 * scale + rand(0, 3000 * scale)),
     wins: 0, draws: 0, losses: 0, xp: 0, level: 1, skillPoints: 0,
   };
 }
@@ -248,7 +574,421 @@ function genScout() {
     findChance: 0.25 + grade * 0.1, // chance per day to surface a new prospect
     qualityBoost: grade * 3, // nudges prospect tier upward
     signingCost: Math.round((grade * 120000 + rand(0, 40000)) / 1000) * 1000,
-    weeklyWage: Math.round((grade * 6000 + rand(0, 2000)) / 500) * 500,
+    weeklyWage: scaleStaffDailyWage(grade * 6000 + rand(0, 2000)),
+  };
+}
+
+/* ============================== STAFF CARD GACHA ============================== */
+const STAFF_CARD_TYPES = ["MANAGER", "COACH", "SCOUT", "DOCTOR"];
+const STAFF_CARD_TYPE_TH = { MANAGER: "ผจก.", COACH: "โค้ช", SCOUT: "สเกาต์", DOCTOR: "หมอ" };
+/* กล่องลิสต์การ์ดสตาฟในห้องต่างๆ — โชว์ราว 3 แถวแล้วเลื่อนขึ้นลงดูที่เหลือ */
+const CARD_LIST_SCROLL = { display: "flex", flexDirection: "column", gap: 8, maxHeight: 240, overflowY: "auto", paddingRight: 2 };
+const STAFF_CARD_TYPE_ICON = { MANAGER: "◆", COACH: "🧢", SCOUT: "🔭", DOCTOR: "🩺" };
+const COACH_CARD_SPECIALTIES = ["GK", "DF", "MF", "FW", "FITNESS"];
+const STARTING_STAFF_TICKETS = 20;
+const DAILY_FREE_STAFF_DRAWS = 5;
+const CARDS_PER_STAFF_PULL = 10;
+const MERGE_CARD_COUNT = 10;
+const SEASON_STAFF_TICKETS = [10, 8, 6, 4, 2];
+const STAR_PULL_WEIGHTS = [30, 25, 20, 12, 8, 4, 1];
+
+function rollStaffCardStars() {
+  const total = STAR_PULL_WEIGHTS.reduce((a, b) => a + b, 0);
+  let r = rand(1, total);
+  for (let i = 0; i < STAR_PULL_WEIGHTS.length; i++) {
+    r -= STAR_PULL_WEIGHTS[i];
+    if (r <= 0) return i + 1;
+  }
+  return 1;
+}
+
+/** โอกาสรวมการ์ดสำเร็จตามดาวเดิม — ยิ่งดาวสูงยิ่งยากมาก (โดยเฉพาะ 4★ ขึ้นไป) */
+const MERGE_SUCCESS_CHANCE = { 1: 0.70, 2: 0.55, 3: 0.40, 4: 0.10, 5: 0.05, 6: 0.02 };
+function mergeSuccessChance(stars) {
+  if (stars >= 7) return 0;
+  return MERGE_SUCCESS_CHANCE[stars] ?? 0.30;
+}
+
+function starsToStaffGrade(stars) {
+  return clamp(stars, 1, 7);
+}
+
+function starsToManagerStatRange(stars) {
+  const lo = 12 + stars * 8;
+  const hi = lo + 8 + stars * 2;
+  return { lo, hi };
+}
+
+function buildStaffCardPayload(type, stars) {
+  if (type === "MANAGER") {
+    const { lo, hi } = starsToManagerStatRange(stars);
+    const stats = {};
+    Object.keys(MANAGER_STAT_TH).forEach((k) => { stats[k] = rand(lo, hi); });
+    const keys = Object.keys(stats);
+    const strong = [...keys].sort(() => Math.random() - 0.5).slice(0, Math.min(2, Math.ceil(stars / 3)));
+    strong.forEach((k) => { stats[k] = rand(hi, Math.min(99, hi + 8)); });
+    const avgStat = Object.values(stats).reduce((a, b) => a + b, 0) / 6;
+    return {
+      stats,
+      preferredFormation: choice(FORMATION_KEYS),
+      signingCost: Math.round((avgStat * 3500 + stars * 50000) / 1000) * 1000,
+      weeklyWage: scaleStaffDailyWage(avgStat * 300 + stars * 2000),
+    };
+  }
+  if (type === "COACH") {
+    const specialty = choice(COACH_CARD_SPECIALTIES);
+    const grade = starsToStaffGrade(stars);
+    const boost = Math.round((0.1 + grade * 0.14) * 100) / 100;
+    return {
+      specialty,
+      grade,
+      boost,
+      signingCost: Math.round((grade * 120000 + stars * 25000) / 1000) * 1000,
+      weeklyWage: scaleStaffDailyWage(grade * 7000 + stars * 1500),
+    };
+  }
+  if (type === "SCOUT") {
+    const grade = starsToStaffGrade(stars);
+    return {
+      grade,
+      specialtyPos: choice(["GK", "DF", "MF", "FW"]),
+      findChance: 0.18 + grade * 0.09,
+      qualityBoost: grade * 3,
+      signingCost: Math.round((grade * 100000 + stars * 20000) / 1000) * 1000,
+      weeklyWage: scaleStaffDailyWage(grade * 5500 + stars * 1200),
+    };
+  }
+  const grade = starsToStaffGrade(stars);
+  const boost = Math.round((0.12 + grade * 0.11) * 100) / 100;
+  return {
+    specialty: choice(MEDICAL_CARD_SPECIALTIES),
+    grade,
+    boost,
+    signingCost: Math.round((grade * 100000 + stars * 20000) / 1000) * 1000,
+    weeklyWage: scaleStaffDailyWage(grade * 6500 + stars * 1300),
+  };
+}
+
+function genStaffCard(fixedType, fixedStars) {
+  const type = fixedType || choice(STAFF_CARD_TYPES);
+  const stars = fixedStars != null ? fixedStars : rollStaffCardStars();
+  const name = choice(type === "MANAGER" ? MANAGER_FIRST : COACH_FIRST) + " " + choice(LAST_NAMES);
+  return { cardId: uid("card"), type, stars, name, ...buildStaffCardPayload(type, stars) };
+}
+
+function defaultStaffCardState(day = 1) {
+  return {
+    staffDrawTickets: STARTING_STAFF_TICKETS,
+    staffFreeDrawsLeft: DAILY_FREE_STAFF_DRAWS,
+    staffFreeDrawResetDay: day,
+    staffCardBag: [],
+    lastStaffPull: null,
+    autoMergeTiers: { 1: false, 2: false, 3: false, 4: false },
+  };
+}
+
+function ensureStaffCardIds(bag) {
+  (bag || []).forEach((card) => {
+    if (!card?.cardId) card.cardId = uid("card");
+  });
+  return bag;
+}
+
+function ensureStaffCardFields(c) {
+  if (c.staffDrawTickets == null) c.staffDrawTickets = STARTING_STAFF_TICKETS;
+  if (c.staffFreeDrawsLeft == null) c.staffFreeDrawsLeft = DAILY_FREE_STAFF_DRAWS;
+  if (c.staffFreeDrawResetDay == null) c.staffFreeDrawResetDay = c.day || 1;
+  if (!c.staffCardBag) c.staffCardBag = [];
+  ensureStaffCardIds(c.staffCardBag);
+  if (Array.isArray(c.lastStaffPull)) ensureStaffCardIds(c.lastStaffPull);
+  if (c.lastStaffPull == null) c.lastStaffPull = null;
+  if (!c.autoMergeTiers) c.autoMergeTiers = { 1: false, 2: false, 3: false, 4: false };
+  return c;
+}
+
+function purgeCardsFromBag(c, removeSet) {
+  c.staffCardBag = (c.staffCardBag || []).filter((card) => !removeSet.has(card.cardId));
+  if (Array.isArray(c.lastStaffPull)) {
+    c.lastStaffPull = c.lastStaffPull.filter((card) => !removeSet.has(card.cardId));
+  }
+}
+
+/** รวมอัตโนมัติได้เฉพาะการ์ด 1★-4★ — 5★ ขึ้นไปต้องกดรวมเองเท่านั้น */
+const AUTO_MERGE_MAX_STARS = 4;
+
+/**
+ * จำลองการรวมอัตโนมัติบน bag ที่ให้มา (ไม่แก้ของเดิม) — วนรวมทุกชุดที่ครบ 10 ใบใน tier ที่เปิดไว้
+ * การ์ดใหม่ที่ได้จากการรวมจะถูกนับต่อ ถ้าสะสมครบ 10 ใบใน tier ที่เปิดไว้ก็รวมต่อให้เลย
+ * คืน { removeIds, newCards, attempts } เพื่อเอาไป apply กับ state แบบตายตัว (deterministic)
+ */
+function computeAutoMergeAttempts(bag, enabledTiers) {
+  const working = [...(bag || [])];
+  const removeIds = [];
+  const newCards = [];
+  const attempts = [];
+  let guard = 0;
+  while (guard++ < 300) {
+    const groups = groupStaffCards(working);
+    const target = groups.find((g) => g.stars <= AUTO_MERGE_MAX_STARS && enabledTiers?.[g.stars] && g.count >= MERGE_CARD_COUNT);
+    if (!target) break;
+    const consumed = target.cards.slice(0, MERGE_CARD_COUNT).map((card) => card.cardId);
+    const consumedSet = new Set(consumed);
+    for (let i = working.length - 1; i >= 0; i--) if (consumedSet.has(working[i].cardId)) working.splice(i, 1);
+    removeIds.push(...consumed);
+    const chance = mergeSuccessChance(target.stars);
+    const success = Math.random() < chance;
+    const card = success ? genStaffCard(target.type, target.stars + 1) : null;
+    if (card) { working.push(card); newCards.push(card); }
+    attempts.push({ type: target.type, stars: target.stars, success, card, chance });
+  }
+  return { removeIds, newCards, attempts };
+}
+
+function resetDailyStaffDraws(c) {
+  ensureStaffCardFields(c);
+  if (c.staffFreeDrawResetDay !== c.day) {
+    c.staffFreeDrawsLeft = DAILY_FREE_STAFF_DRAWS;
+    c.staffFreeDrawResetDay = c.day;
+  }
+  return c;
+}
+
+function awardSeasonStaffTickets(c, rank) {
+  ensureStaffCardFields(c);
+  if (rank >= 1 && rank <= 5) {
+    const tickets = SEASON_STAFF_TICKETS[rank - 1];
+    c.staffDrawTickets += tickets;
+    c.log = [`🎫 จบอันดับที่ ${rank} ได้ตั๋วสุ่มการ์ด ${tickets} ใบ`, ...c.log];
+  }
+}
+
+function groupStaffCards(bag) {
+  const map = {};
+  (bag || []).forEach((card) => {
+    const key = `${card.type}_${card.stars}`;
+    if (!map[key]) map[key] = { type: card.type, stars: card.stars, cards: [], count: 0 };
+    map[key].cards.push(card);
+    map[key].count += 1;
+  });
+  return Object.values(map).sort((a, b) => b.stars - a.stars || a.type.localeCompare(b.type));
+}
+
+function staffCardToManager(card) {
+  return {
+    id: uid("mg"), name: card.name, stats: { ...card.stats },
+    preferredFormation: card.preferredFormation,
+    signingCost: 0, weeklyWage: card.weeklyWage,
+    wins: 0, draws: 0, losses: 0, xp: 0, level: 1, skillPoints: 0,
+    cardStars: card.stars,
+  };
+}
+
+function staffCardToCoach(card) {
+  return {
+    id: uid("co"), name: card.name, specialty: card.specialty,
+    grade: card.grade, boost: card.boost,
+    signingCost: 0, weeklyWage: card.weeklyWage,
+    cardStars: card.stars,
+  };
+}
+
+function staffCardStatLine(card) {
+  if (card.type === "MANAGER") {
+    const vals = Object.values(card.stats || {});
+    if (!vals.length) return null;
+    const avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+    return `เฉลี่ยสเตต ${avg} · ถนัด ${card.preferredFormation}`;
+  }
+  if (card.type === "COACH" || card.type === "DOCTOR") {
+    return `เกรด ${card.grade}/7 · โบนัส +${card.boost}`;
+  }
+  if (card.type === "SCOUT") {
+    return `เกรด ${card.grade}/7 · โอกาสพบนักเตะ ${Math.round((card.findChance || 0) * 100)}%`;
+  }
+  return null;
+}
+
+/** Coaches/doctors/scouts hired can only be replaced after the season rolls over. Managers are exempt. */
+function isStaffRoleLocked(existing, season) {
+  return Boolean(existing && existing.hiredSeason === season);
+}
+
+/** Returns { locked, fee, afford } describing whether/how much it costs to install this card right now. */
+function staffCardLockInfo(career, card) {
+  if (!career) return { locked: false, fee: 0, afford: true };
+  const season = career.season;
+  const budget = career.budget || 0;
+  if (card.type === "COACH" || card.type === "DOCTOR") {
+    const existing = career.staff?.[career.userTeamId]?.[card.specialty];
+    const locked = isStaffRoleLocked(existing, season);
+    const fee = existing ? Math.round((existing.weeklyWage * 8) / 1000) * 1000 : 0;
+    return { locked, fee, afford: fee === 0 || budget >= fee };
+  }
+  if (card.type === "SCOUT") {
+    if (!career.marketScout) return { locked: false, fee: 0, afford: true };
+    if (!career.youthScout) return { locked: false, fee: 0, afford: true };
+    if (!isStaffRoleLocked(career.marketScout, season)) {
+      const fee = Math.round((career.marketScout.weeklyWage * 8) / 1000) * 1000;
+      return { locked: false, fee, afford: fee === 0 || budget >= fee };
+    }
+    if (!isStaffRoleLocked(career.youthScout, season)) {
+      const fee = Math.round((career.youthScout.weeklyWage * 8) / 1000) * 1000;
+      return { locked: false, fee, afford: fee === 0 || budget >= fee };
+    }
+    return { locked: true, fee: 0, afford: true };
+  }
+  if (card.type === "MANAGER") {
+    const t = career.teams?.find((tm) => tm.id === career.userTeamId);
+    const underContract = t?.manager && t.manager.contractEndsDay != null && career.day < t.manager.contractEndsDay;
+    const daysLeft = underContract ? t.manager.contractEndsDay - career.day : 0;
+    const fee = underContract ? Math.round((daysLeft * t.manager.weeklyWage * 1.4) / 1000) * 1000 : 0;
+    return { locked: false, fee, afford: fee === 0 || budget >= fee };
+  }
+  return { locked: false, fee: 0, afford: true };
+}
+
+function staffCardToScout(card) {
+  return {
+    id: uid("sc"), name: card.name, grade: card.grade,
+    specialtyPos: card.specialtyPos, findChance: card.findChance, qualityBoost: card.qualityBoost,
+    signingCost: 0, weeklyWage: card.weeklyWage,
+    cardStars: card.stars,
+  };
+}
+
+function managerStarsFromStats(stats) {
+  if (!stats) return 1;
+  const avg = Object.values(stats).reduce((a, b) => a + b, 0) / Object.keys(stats).length;
+  return clamp(Math.round(avg / 14), 1, 7);
+}
+
+function staffEntityStars(entity) {
+  if (!entity) return null;
+  if (entity.cardStars) return entity.cardStars;
+  if (entity.stats) return managerStarsFromStats(entity.stats);
+  if (entity.grade) return clamp(entity.grade, 1, 7);
+  return null;
+}
+
+function bootstrapStarterStaff(c) {
+  ensureStaffCardFields(c);
+  const pulled = Array.from({ length: CARDS_PER_STAFF_PULL }, () => genStaffCard());
+  const t = c.teams.find((tm) => tm.id === c.userTeamId);
+  const usedIds = new Set();
+  const hired = [];
+
+  const pickBest = (type) => {
+    const pool = pulled.filter((card) => card.type === type && !usedIds.has(card.cardId));
+    if (!pool.length) return null;
+    return pool.sort((a, b) => b.stars - a.stars)[0];
+  };
+
+  const mgrCard = pickBest("MANAGER");
+  if (mgrCard) {
+    const mgr = staffCardToManager(mgrCard);
+    const contractDays = rand(100, 150);
+    mgr.contractEndsDay = c.day + contractDays;
+    mgr.contractDays = contractDays;
+    t.manager = mgr;
+    usedIds.add(mgrCard.cardId);
+    hired.push(`ผจก. ${mgr.name} (${mgrCard.stars}★)`);
+  }
+
+  const docCard = pickBest("DOCTOR");
+  if (docCard) {
+    c.staff[c.userTeamId][docCard.specialty] = { ...staffCardToCoach(docCard), hiredSeason: c.season };
+    usedIds.add(docCard.cardId);
+    hired.push(`หมอ ${docCard.name} (${docCard.stars}★)`);
+  }
+
+  const scoutCard = pickBest("SCOUT");
+  if (scoutCard) {
+    c.marketScout = { ...staffCardToScout(scoutCard), hiredSeason: c.season };
+    usedIds.add(scoutCard.cardId);
+    hired.push(`สเกาต์ ${scoutCard.name} (${scoutCard.stars}★)`);
+  }
+
+  COACH_CARD_SPECIALTIES.forEach((spec) => {
+    const coachCard = pulled
+      .filter((card) => card.type === "COACH" && card.specialty === spec && !usedIds.has(card.cardId))
+      .sort((a, b) => b.stars - a.stars)[0];
+    if (coachCard && !c.staff[c.userTeamId][spec]) {
+      c.staff[c.userTeamId][spec] = { ...staffCardToCoach(coachCard), hiredSeason: c.season };
+      usedIds.add(coachCard.cardId);
+      hired.push(`โค้ช ${coachCard.name} (${coachCard.stars}★)`);
+    }
+  });
+
+  c.staffCardBag = pulled.filter((card) => !usedIds.has(card.cardId));
+  c.lastStaffPull = pulled;
+  c.starterStaffBootstrapped = true;
+  if (hired.length) {
+    c.log = [
+      `🎴 สตาฟเริ่มต้นจากการ์ดสุ่ม: ${hired.join(" · ")}`,
+      `🎒 การ์ดที่เหลือ ${c.staffCardBag.length} ใบเข้ากระเป๋า`,
+      ...c.log,
+    ];
+  }
+  return c;
+}
+
+const SCOUT_FIND_SOURCES = ["ลีกรองภูมิภาค", "ดิวิชันต่ำ", "ทีมเยาวชน", "ฟรีเอเจนต์ต่างประเทศ", "ฐานข้อมูลสโมสร"];
+
+/* ============================== SHOP / SOCKER COIN ============================== */
+const SOCKER_COIN_WELCOME = 10;
+const SHOP_DAILY_BUY_LIMIT = 5;
+const SHOP_ITEMS = [
+  {
+    id: "injury_pack",
+    name: "ชุดปฐมพยาบาล",
+    desc: "สุ่มลดอาการบาดเจ็บ 1–4 วัน (เก็บในกระเป๋า ใช้ที่แท็บทีม)",
+    icon: "🩹",
+    coinCost: 10,
+  },
+];
+function shopBuyCountToday(profile) {
+  const today = new Date().toDateString();
+  if (profile?.shopBuyDay !== today) return 0;
+  return profile?.shopBuyCount || 0;
+}
+function inventoryCount(profile, itemId) {
+  return profile?.inventory?.[itemId] || 0;
+}
+const COIN_PACKAGES = [
+  { id: "pack_50", coins: 50, priceLabel: "฿29", tag: null },
+  { id: "pack_120", coins: 120, priceLabel: "฿59", tag: "คุ้ม" },
+  { id: "pack_300", coins: 300, priceLabel: "฿129", tag: "ยอดนิยม" },
+  { id: "pack_650", coins: 650, priceLabel: "฿249", tag: "สุดคุ้ม" },
+];
+function genScoutFind(scout, userTier, day) {
+  const pos = Math.random() < 0.55 ? scout.specialtyPos : choice(["GK", "DF", "MF", "FW"]);
+  const tier = clamp(userTier + rand(-5, -2), -10, -2);
+  const p = genPlayer(pos, tier, "scout_find", rand(18, 28), day);
+  const targetRating = clamp(rand(44 + scout.grade * 2, 50 + scout.grade * 4), 42, 66);
+  forcePlayerRating(p, targetRating);
+  p.potential = clamp(p.rating + rand(3, 12 + scout.grade * 2), p.rating, 78);
+  const buyFee = Math.round((40000 + p.rating * p.rating * 550) / 5000) * 5000;
+  const buyWage = Math.max(100, Math.round(computePlayerWage(p.rating) * 0.72 / 100) * 100);
+  return {
+    findId: uid("sf"),
+    playerId: uid("pl"),
+    name: p.name,
+    position: p.position,
+    pos: p.pos,
+    altPos: p.altPos,
+    age: p.age,
+    attrs: { ...p.attrs },
+    attack: p.attack,
+    defense: p.defense,
+    rating: p.rating,
+    potential: p.potential,
+    buyFee,
+    buyWage,
+    scoutName: scout.name,
+    scoutGrade: scout.grade,
+    foundDay: day,
+    expiresDay: day + 8,
+    sourceNote: choice(SCOUT_FIND_SOURCES),
   };
 }
 function genYouthProspect(scoutQuality, scout, techLabLevel) {
@@ -262,11 +1002,60 @@ function genYouthProspect(scoutQuality, scout, techLabLevel) {
   p.signingCost = Math.round((p.value * 0.35) / 1000) * 1000 || 50000;
   return p;
 }
+function genYouthIntakeProspect(c, basic = false) {
+  const scout = c.youthScout;
+  const acaBoost = c.academyManager ? Math.floor(c.academyManager.stats.scouting / 25) : 0;
+  const quality = basic ? 0 : (scout?.qualityBoost || 0) + acaBoost;
+  const p = genYouthProspect(quality, scout, c.facilities?.techLab || 1);
+  const hypeRoll = basic ? rand(1, 50) : rand(1, 100) + (scout ? scout.grade * 4 : 0) + acaBoost * 3;
+  p.hype = hypeRoll >= 92 ? "สูงมาก" : hypeRoll >= 72 ? "สูง" : hypeRoll >= 48 ? "ปานกลาง" : "ต่ำ";
+  const { isWonderkid } = getPlayerStarProfile(p);
+  if (isWonderkid || p.potential >= 82) p.wonderkid = true;
+  return p;
+}
+function runYouthIntake(c) {
+  const hasStaff = c.youthScout || c.academyManager;
+  const count = hasStaff ? rand(4, 6) : 2;
+  const added = [];
+  for (let i = 0; i < count; i++) {
+    if (c.youthProspects.length >= 8) break;
+    added.push(genYouthIntakeProspect(c, !hasStaff));
+  }
+  if (!added.length) return c;
+  c.youthProspects = [...c.youthProspects, ...added];
+  const wonderNames = added.filter((p) => p.wonderkid).map((p) => p.name);
+  const hypeNames = added.filter((p) => p.hype === "สูงมาก" || p.hype === "สูง").map((p) => p.name);
+  let line = `🎓 Youth Intake Day! รับดาวรุ่ง ${added.length} คนเข้าสู่ระบบ`;
+  if (wonderNames.length) line += ` · 🌟 Wonderkid: ${wonderNames.join(", ")}`;
+  else if (hypeNames.length) line += ` · ฮายป์สูง: ${hypeNames.slice(0, 2).join(", ")}`;
+  if (!hasStaff) line += " (ไม่มีแมวมอง/ผจก.อคาเดมี — ได้แค่พื้นฐาน)";
+  c.log = [line, ...c.log];
+  return c;
+}
 
 /* 10-slot training calendar. Each real hour (9:00-20:00) advances one game day / one training slot. */
 const TRAINING_TYPES = ["REST", "BALANCED", "FITNESS", "SHOOTING", "DEFENDING", "TACKLING"];
 const TRAINING_TH = { REST: "พักฟื้น", BALANCED: "ฝึกทั่วไป", FITNESS: "ฟิตเนส", SHOOTING: "ซ้อมยิงประตู", DEFENDING: "ซ้อมเกมรับ", TACKLING: "ซ้อมสกัด/ปะทะ" };
 const TRAINING_COLOR = { REST: C.blue, BALANCED: C.textDim, FITNESS: C.amber, SHOOTING: "#c1440e", DEFENDING: "#5a9bd5", TACKLING: "#9d6fe0" };
+/* โฟกัสฝึกรายบุคคล — เลือกได้เฉพาะหมวดที่มีผลชัดเจน (ไม่รวมพัก/ทั่วไป) */
+const INDIVIDUAL_FOCUS_TYPES = ["FITNESS", "SHOOTING", "DEFENDING", "TACKLING"];
+/* โบนัสจากโค้ชตามตำแหน่ง ยิ่งวันฝึกตรงสายที่โค้ชถนัด ยิ่งได้ผลมากขึ้น */
+const COACH_TRAINING_SYNERGY = {
+  FITNESS: { FITNESS: 1 },
+  SHOOTING: { FW: 3, MF: 1.5 },
+  DEFENDING: { DF: 3, GK: 1.5 },
+  TACKLING: { DF: 2.5, MF: 2 },
+  BALANCED: {}, REST: {},
+};
+function coachTrainingSynergyMult(spec, trainingType) {
+  return (COACH_TRAINING_SYNERGY[trainingType] || {})[spec] ?? 1;
+}
+const TRAINING_FOCUS_ATTRS = {
+  FITNESS: ["pace", "acceleration", "strength", "agility"],
+  SHOOTING: ["finishing", "dribbling", "composure"],
+  DEFENDING: ["decisions", "heading", "vision"],
+  TACKLING: ["tackling", "strength", "determination"],
+};
 function applyTrainingToPlayer(p, type) {
   if (type === "REST") { p.stamina = clamp(p.stamina + 10, 0, 100); p.morale = clamp(p.morale + 1, 10, 99); return; }
   if (type === "FITNESS") { bumpAttrsSubset(p, ["pace", "acceleration", "strength", "agility"], 0.35); p.stamina = clamp(p.stamina - 4, 0, 100); return; }
@@ -277,12 +1066,249 @@ function applyTrainingToPlayer(p, type) {
 }
 function bumpAttrsSubset(p, keys, amount) { keys.forEach((k) => { if (p.attrs[k] != null) p.attrs[k] = clamp(p.attrs[k] + amount, 1, 20); }); recomputeDerived(p); }
 
+/* ---------- บอร์ดซ้อมรายตำแหน่ง (สไตล์ Top Eleven) ---------- */
+/* แต่ละกลุ่มตำแหน่ง (GK/DF/MF/FW) จัดคิวท่าซ้อมได้สูงสุด 6 ท่า รันวันละ 1 เซสชัน
+   (อัตโนมัติตอนจบวัน หรือกด "ซ้อมเลย!" รันเองก็ได้) — แยกจากปฏิทินฝึกทีม 10 วัน */
+const DRILL_GROUPS = ["GK", "DF", "MF", "FW"];
+const MAX_DRILLS_PER_GROUP = 6;
+const DRILL_BUMP = 0.07; // พัฒนาการต่อสเตตต่อท่า (ก่อนคูณโบนัสโค้ช/ศูนย์ฝึก)
+const DRILLS = {
+  warmup: { icon: "🤸", name: "วอร์มอัพ", attrs: ["agility"], cond: 1, groups: ["GK", "DF", "MF", "FW"] },
+  gk_training: { icon: "🧤", name: "ซ้อมเซฟ", attrs: ["decisions", "agility"], cond: 3, groups: ["GK"] },
+  one_on_one: { icon: "⚔️", name: "1-ต่อ-1", attrs: ["composure", "finishing"], cond: 3, groups: ["GK", "FW"] },
+  shooting_tech: { icon: "🎯", name: "ซ้อมยิงประตู", attrs: ["finishing", "composure"], cond: 3, groups: ["GK", "MF", "FW"] },
+  long_run: { icon: "🏃", name: "วิ่งระยะไกล", attrs: ["determination", "workRate"], cond: 4, groups: ["GK", "DF", "MF", "FW"] },
+  sprint: { icon: "⚡", name: "สปรินต์", attrs: ["pace", "acceleration"], cond: 4, groups: ["GK", "DF", "MF", "FW"] },
+  slalom: { icon: "🎿", name: "สลาลมเลี้ยงบอล", attrs: ["dribbling", "agility"], cond: 3, groups: ["DF", "MF", "FW"] },
+  pass_go_shoot: { icon: "🔄", name: "จ่าย-ไป-ยิง", attrs: ["passing", "finishing"], cond: 3, groups: ["MF", "FW"] },
+  press_play: { icon: "🔥", name: "เพรสซิ่งไล่บอล", attrs: ["workRate", "tackling"], cond: 4, groups: ["DF", "MF", "FW"] },
+  hold_line: { icon: "📏", name: "ยืนไลน์รับ", attrs: ["decisions", "vision"], cond: 2, groups: ["GK", "DF"] },
+  def_cross: { icon: "🛡️", name: "ป้องกันบอลครอส", attrs: ["heading", "tackling"], cond: 3, groups: ["GK", "DF"] },
+  use_head: { icon: "🎈", name: "โหม่งบอล", attrs: ["heading", "strength"], cond: 3, groups: ["DF", "MF", "FW"] },
+  gym: { icon: "🏋️", name: "เข้ายิม", attrs: ["strength"], cond: 4, groups: ["GK", "DF", "MF", "FW"] },
+  piggy: { icon: "🐒", name: "ลิงชิงบอล", attrs: ["passing", "vision"], cond: 2, groups: ["GK", "DF", "MF", "FW"] },
+  video: { icon: "🎬", name: "วิดีโอวิเคราะห์", attrs: ["decisions", "vision"], cond: 1, groups: ["GK", "DF", "MF", "FW"] },
+  counter: { icon: "🚀", name: "สวนกลับเร็ว", attrs: ["pace", "decisions"], cond: 3, groups: ["MF", "FW"] },
+  crossing: { icon: "🎪", name: "เปิดบอลริมเส้น", attrs: ["crossing", "vision"], cond: 3, groups: ["DF", "MF"] },
+};
+function defaultDrillPlans() {
+  return {
+    GK: ["warmup", "gk_training", "one_on_one", "hold_line", "def_cross", "video"],
+    DF: ["warmup", "press_play", "def_cross", "hold_line", "use_head", "gym"],
+    MF: ["warmup", "piggy", "slalom", "pass_go_shoot", "counter", "video"],
+    FW: ["warmup", "shooting_tech", "one_on_one", "pass_go_shoot", "sprint", "use_head"],
+  };
+}
+function drillPlanCost(plan) { return (plan || []).reduce((s, id) => s + (DRILLS[id]?.cond || 0), 0); }
+/* รันเซสชันซ้อมของกลุ่มตำแหน่งหนึ่ง — คืน null ถ้าไม่มีท่าซ้อม/ไม่มีนักเตะให้ซ้อม */
+function applyDrillSession(c, group) {
+  const plan = ((c.drillPlans || {})[group] || []).filter((id) => DRILLS[id]);
+  if (!plan.length) return null;
+  const uSquad = c.players.filter((p) => p.teamId === c.userTeamId && p.position === group && p.injuryDays <= 0);
+  if (!uSquad.length) return null;
+  const facMult = 1 + (((c.facilities || {}).training || 1) - 1) * 0.15;
+  const coach = (c.staff[c.userTeamId] || {})[group];
+  const coachMult = coach ? 1 + coach.boost * 0.4 : 1;
+  const totalCost = drillPlanCost(plan);
+  uSquad.forEach((p) => {
+    plan.forEach((id) => {
+      DRILLS[id].attrs.forEach((k) => { if (p.attrs[k] != null) p.attrs[k] = clamp(p.attrs[k] + DRILL_BUMP * facMult * coachMult, 1, 20); });
+    });
+    p.stamina = clamp(p.stamina - totalCost, 0, 100);
+    recomputeDerived(p);
+  });
+  return { count: uSquad.length, cost: totalCost };
+}
+
+/** เหตุการณ์สุ่มเบาๆ ระหว่างฝึกซ้อม — เพิ่มสีสันให้ตารางฝึกโดยไม่กระทบสมดุลมาก */
+function rollTrainingEvent(c, uSquad, trainingType) {
+  if (!uSquad.length || Math.random() > 0.16) return;
+  const p = choice(uSquad);
+  const roll = Math.random();
+  if (roll < 0.35) {
+    bumpAttrs(p, 0.3);
+    c.log = [`✨ ${p.name} ซ้อมได้ไฟแรงเป็นพิเศษวันนี้ — พัฒนาการพุ่ง!`, ...c.log];
+  } else if (roll < 0.6) {
+    p.morale = clamp(p.morale + 5, 10, 99);
+    c.log = [`🙂 โค้ชชมเชย ${p.name} หลังซ้อมหนัก — มูดดีขึ้น`, ...c.log];
+  } else if (roll < 0.8) {
+    uSquad.forEach((pl) => { pl.morale = clamp(pl.morale + 1, 10, 99); });
+    c.log = [`🤝 บรรยากาศห้องแต่งตัวดี — มูดทั้งทีมดีขึ้นเล็กน้อย`, ...c.log];
+  } else if (trainingType !== "REST") {
+    p.stamina = clamp(p.stamina - 6, 0, 100);
+    if (Math.random() < 0.2) {
+      p.injuryDays = Math.max(p.injuryDays, 1);
+      c.log = [`⚠️ ${p.name} ฝึกหนักเกินไป บาดเจ็บเล็กน้อย ต้องพัก 1 วัน`, ...c.log];
+    } else {
+      c.log = [`😮‍💨 ${p.name} ฝึกหนักจนเหนื่อยล้ากว่าปกติวันนี้`, ...c.log];
+    }
+  }
+}
+
 function formatMoney(n) {
   const sign = n < 0 ? "-" : "";
   n = Math.abs(n);
   if (n >= 1000000) return sign + (n / 1000000).toFixed(2) + "M฿";
   if (n >= 1000) return sign + (n / 1000).toFixed(0) + "K฿";
   return sign + n + "฿";
+}
+
+/* เศรษฐกิจระดับกลาง — แพ้บ้างยังไปต่อได้ */
+const FAN_CAP = [250000, 80000]; // Master / Challenger
+const SPONSOR_TIERS = [
+  { tier: 0, name: "สปอนเซอร์ท้องถิ่น", minFans: 0, baseDaily: 4000 },
+  { tier: 1, name: "สปอนเซอร์ภูมิภาค", minFans: 8000, baseDaily: 9000 },
+  { tier: 2, name: "สปอนเซอร์ระดับชาติ", minFans: 25000, baseDaily: 18000 },
+  { tier: 3, name: "สปอนเซอร์แบรนด์ใหญ่", minFans: 60000, baseDaily: 35000 },
+  { tier: 4, name: "สปอนเซอร์พันธมิตรหลัก", minFans: 150000, baseDaily: 70000 },
+];
+const LEAGUE_PRIZE_CHALLENGER = [6e6, 3.5e6, 2.5e6, 2e6, ...Array(4).fill(1.2e6), ...Array(4).fill(600e3), ...Array(4).fill(300e3)];
+const LEAGUE_PRIZE_MASTER = [12e6, 7e6, 5e6, 4e6, ...Array(4).fill(2.5e6), ...Array(4).fill(1.2e6), ...Array(4).fill(500e3)];
+const PROMOTION_BONUS = 4e6;
+const RELEGATION_PARACHUTE = 2e6;
+
+function fanIncomeMultiplier(fanBase) {
+  return 1 + Math.log10(Math.max(fanBase, 500) / 1000) * 0.55;
+}
+function divisionIncomeMult(division) {
+  return division === 0 ? 1.35 : 1;
+}
+function getFanCap(division) {
+  return FAN_CAP[division] ?? FAN_CAP[1];
+}
+function qualifySponsorTier(fanBase) {
+  let tier = 0;
+  while (tier + 1 < SPONSOR_TIERS.length && fanBase >= SPONSOR_TIERS[tier + 1].minFans) tier += 1;
+  return tier;
+}
+function autoUpgradeSponsor(c, logUpgrade = false) {
+  const qualified = qualifySponsorTier(c.fanBase || 0);
+  if (qualified > (c.sponsorTier ?? 0)) {
+    c.sponsorTier = qualified;
+    if (logUpgrade) c.log = [`📈 สปอนเซอร์อัปเกรดเป็น ${SPONSOR_TIERS[c.sponsorTier].name}`, ...c.log];
+  }
+}
+function computeSponsorDaily(c, uTeam) {
+  const tier = SPONSOR_TIERS[c.sponsorTier ?? 0] || SPONSOR_TIERS[0];
+  return Math.round(tier.baseDaily * fanIncomeMultiplier(c.fanBase || 0) * divisionIncomeMult(uTeam.division));
+}
+function computeMerchDaily(c, uTeam) {
+  const squad = c.players.filter((p) => p.teamId === c.userTeamId);
+  const starBonus = squad.some((p) => p.rating >= 85) ? 1.5 : squad.some((p) => p.rating >= 75) ? 1.2 : 1;
+  const divMult = uTeam.division === 0 ? 1.2 : 1;
+  return Math.round(((c.fanBase || 0) / 40) * starBonus * divMult);
+}
+function getLeaguePrize(division, position) {
+  const table = division === 0 ? LEAGUE_PRIZE_MASTER : LEAGUE_PRIZE_CHALLENGER;
+  return table[Math.max(0, Math.min(position - 1, table.length - 1))];
+}
+function getLast5LeaguePts(c, includeCurrentDay = true) {
+  const uT = c.teams.find((t) => t.id === c.userTeamId);
+  const league = c.leagues[uT.division];
+  let pts = 0;
+  let count = 0;
+  for (let day = includeCurrentDay ? c.day : c.day - 1; day >= 1 && count < 5; day -= 1) {
+    const round = league.fixtures.find((r) => r.day === day);
+    if (!round) continue;
+    const m = round.matches.find((mm) => mm.played && (mm.home === c.userTeamId || mm.away === c.userTeamId));
+    if (!m) continue;
+    const isHome = m.home === c.userTeamId;
+    const gf = isHome ? m.homeGoals : m.awayGoals;
+    const ga = isHome ? m.awayGoals : m.homeGoals;
+    pts += gf > ga ? 3 : gf === ga ? 1 : 0;
+    count += 1;
+  }
+  return pts;
+}
+function applyFanChangeAfterMatch(c, m, homeGoals, awayGoals) {
+  if (m.home !== c.userTeamId && m.away !== c.userTeamId) return;
+  const uT = c.teams.find((t) => t.id === c.userTeamId);
+  const uIsHome = m.home === c.userTeamId;
+  const myGoals = uIsHome ? homeGoals : awayGoals;
+  const oppGoals = uIsHome ? awayGoals : homeGoals;
+  const result = myGoals > oppGoals ? "win" : myGoals === oppGoals ? "draw" : "loss";
+  let delta = result === "win" ? rand(80, 150) : result === "draw" ? rand(20, 50) : -rand(60, 120);
+  delta += myGoals * rand(15, 25);
+  if (oppGoals === 0) delta += rand(40, 80);
+  delta = Math.round(delta * (uIsHome ? 1.15 : 0.85));
+  if (getLast5LeaguePts(c, true) <= 4) delta -= rand(30, 60);
+  const before = c.fanBase || 0;
+  c.fanBase = clamp(before + delta, 500, getFanCap(uT.division));
+  c.fanDeltaToday = c.fanBase - before;
+  autoUpgradeSponsor(c, true);
+  if (c.fanDeltaToday !== 0) {
+    const sign = c.fanDeltaToday > 0 ? "+" : "";
+    c.log = [`${c.fanDeltaToday > 0 ? "📈" : "📉"} แฟนบอล ${sign}${c.fanDeltaToday.toLocaleString()} (รวม ${c.fanBase.toLocaleString()})`, ...c.log];
+  }
+}
+function processSeasonEndFans(c, prevPos, prevRow, prevDivision, wasPromoted, wasRelegated) {
+  const uT = c.teams.find((t) => t.id === c.userTeamId);
+  const prize = getLeaguePrize(prevDivision, prevPos);
+  c.budget += prize;
+  c.log = [`🏆 รางวัลลีกอันดับ ${prevPos}: +${formatMoney(prize)}`, ...c.log];
+  if (wasPromoted) {
+    c.budget += PROMOTION_BONUS;
+    c.fanBase = clamp(Math.round((c.fanBase || 0) * 1.08) + rand(500, 1500), 500, getFanCap(uT.division));
+    c.log = [`🎉 โบนัสเลื่อนชั้น +${formatMoney(PROMOTION_BONUS)} · แฟนบอลเพิ่ม`, ...c.log];
+  }
+  if (wasRelegated) {
+    c.budget += RELEGATION_PARACHUTE;
+    c.fanBase = clamp(Math.round((c.fanBase || 0) * 0.92), 500, getFanCap(uT.division));
+    c.log = [`🪂 เงินช่วยเหลือตกชั้น +${formatMoney(RELEGATION_PARACHUTE)}`, ...c.log];
+  }
+  const snap = c.lastSeasonSnapshot;
+  const curScore = prevRow.pts * 10 - prevPos;
+  const lastScore = snap ? snap.pts * 10 - snap.pos : curScore;
+  if (curScore < lastScore - 5) {
+    const loss = rand(3000, 8000);
+    c.fanBase = clamp((c.fanBase || 0) - loss, 500, getFanCap(uT.division));
+    c.badSeasonStreak = (c.badSeasonStreak || 0) + 1;
+    c.log = [`😞 ฤดูกาลแย่กว่าปีก่อน แฟนบอล -${loss.toLocaleString()}`, ...c.log];
+  } else if (curScore > lastScore + 5) {
+    const gain = rand(2000, 6000);
+    c.fanBase = clamp((c.fanBase || 0) + gain, 500, getFanCap(uT.division));
+    c.badSeasonStreak = 0;
+    c.log = [`🙌 ฤดูกาลดีกว่าปีก่อน แฟนบอล +${gain.toLocaleString()}`, ...c.log];
+  } else {
+    c.badSeasonStreak = 0;
+  }
+  if ((c.badSeasonStreak || 0) >= 2) {
+    const pct = c.badSeasonStreak >= 3 ? 0.25 : 0.15;
+    const drop = Math.round((c.fanBase || 0) * pct);
+    c.fanBase = clamp((c.fanBase || 0) - drop, 500, getFanCap(uT.division));
+    c.log = [`📉 แฟนหนี ${c.badSeasonStreak} ฤดูกาลติดต่อกัน -${Math.round(pct * 100)}% (${drop.toLocaleString()})`, ...c.log];
+    if (c.badSeasonStreak >= 3 && (c.sponsorTier ?? 0) > 0) {
+      c.sponsorTier -= 1;
+      c.log = [`📉 สปอนเซอร์ลดระดับเป็น ${SPONSOR_TIERS[c.sponsorTier].name}`, ...c.log];
+    }
+  }
+  c.lastSeasonSnapshot = { pos: prevPos, pts: prevRow.pts, w: prevRow.w, d: prevRow.d, l: prevRow.l, division: prevDivision };
+  c.fanBase = clamp(c.fanBase || 0, 500, getFanCap(uT.division));
+  autoUpgradeSponsor(c, true);
+}
+function computePlayerWage(rating) {
+  return Math.max(100, Math.round((rating * rating * 5.5) / 100) * 100);
+}
+function scaleStaffDailyWage(amount) {
+  return Math.max(500, Math.round(amount * 0.55 / 500) * 500);
+}
+function applyUserMatchRevenue(c, m, homeGoals, awayGoals) {
+  if (m.home !== c.userTeamId && m.away !== c.userTeamId) return;
+  const uIsHome = m.home === c.userTeamId;
+  const myGoals = uIsHome ? homeGoals : awayGoals;
+  const oppGoals = uIsHome ? awayGoals : homeGoals;
+  const venue = uIsHome ? "home" : "away";
+  const result = myGoals > oppGoals ? "win" : myGoals === oppGoals ? "draw" : "loss";
+  const ranges = {
+    win: { home: [220000, 280000], away: [120000, 160000] },
+    draw: { home: [140000, 180000], away: [80000, 110000] },
+    loss: { home: [90000, 130000], away: [50000, 75000] },
+  };
+  const [lo, hi] = ranges[result][venue];
+  const amount = rand(lo, hi);
+  c.budget += amount;
+  const resultTh = result === "win" ? "ชนะ" : result === "draw" ? "เสมอ" : "แพ้";
+  c.log = [`💰 รายได้แมตช์ (${uIsHome ? "เหย้า" : "เยือน"}, ${resultTh}): +${formatMoney(amount)}`, ...c.log];
 }
 
 /* โลกจำลอง → ปลดล็อกออนไลน์เมื่อมูลค่าสโมสรรวมทุกอย่างถึงเกณฑ์และไม่ติดลบ */
@@ -320,7 +1346,7 @@ function computeTeamFinances(career) {
   const facilitiesValue = facilitiesAssetValue(career.facilities);
   const coachesValue = staffAssetValue(career.staff?.[career.userTeamId]);
   const managerValue = contractAssetValue(uTeam?.manager, 40);
-  const scoutValue = contractAssetValue(career.scout, 30);
+  const scoutValue = contractAssetValue(career.marketScout, 30) + contractAssetValue(career.youthScout, 30);
   const academyMgrValue = contractAssetValue(career.academyManager, 30);
   const budget = career.budget || 0;
 
@@ -351,11 +1377,175 @@ function checkOnlineUnlock(c) {
   return c;
 }
 
-function migrateCareerSave(c) {
+/** Infer saveVersion from legacy one-off flags (pre-0.4.0 careers) */
+function resolveSaveVersion(c) {
+  if (c.saveVersion != null && c.saveVersion >= 0) return c.saveVersion;
+  const hadScoutSplit = Boolean(c.marketScoutOffer || c.youthScout || c.marketScout || c.scoutFinds?.length);
+  if (c.squadBalanceV1 && c.economyBalanceV2 && hadScoutSplit) return 3;
+  if (c.squadBalanceV1 && c.economyBalanceV2) return 2;
+  if (c.squadBalanceV1) return 1;
+  if (c.economyBalanceV2) return 2;
+  return 0;
+}
+
+/** v1 — squad template balance */
+function migrateSaveV0ToV1(c) {
+  if (!c.squadBalanceV1) {
+    c.teams.forEach((t) => topUpTeamSquad(c.players, t.id, t.tier, c.day || 1));
+    c.teams.forEach((t) => { c.lineups[t.id] = getBestXI(c.players.filter((p) => p.teamId === t.id), t.formation); });
+    c.squadBalanceV1 = true;
+  }
+  return c;
+}
+
+/** v2 — economy / fans / sponsor */
+function migrateSaveV1ToV2(c) {
+  if (!c.economyBalanceV2) {
+    c.players.forEach((p) => { if (p.rating) p.wage = computePlayerWage(p.rating); });
+    const scaleStaff = (person) => {
+      if (person?.weeklyWage) person.weeklyWage = scaleStaffDailyWage(person.weeklyWage / 0.55);
+    };
+    c.teams.forEach((t) => scaleStaff(t.manager));
+    Object.values(c.staff || {}).forEach((teamStaff) => Object.values(teamStaff).forEach(scaleStaff));
+    scaleStaff(c.scout);
+    scaleStaff(c.marketScout);
+    scaleStaff(c.youthScout);
+    scaleStaff(c.academyManager);
+    c.economyBalanceV2 = true;
+  }
+  if (c.fanBase == null) c.fanBase = 2500;
+  if (c.sponsorTier == null) c.sponsorTier = qualifySponsorTier(c.fanBase);
+  if (c.badSeasonStreak == null) c.badSeasonStreak = 0;
+  if (c.lastSeasonSnapshot === undefined) c.lastSeasonSnapshot = null;
+  if (c.fanDeltaToday == null) c.fanDeltaToday = 0;
+  if (!c.monthlyGoals) c.monthlyGoals = {};
+  if (!c.monthlyApps) c.monthlyApps = {};
+  c.players?.forEach((p) => { if (p.seasonGoals == null) p.seasonGoals = 0; });
+  autoUpgradeSponsor(c);
+  return c;
+}
+
+/** v3 — market vs youth scout split */
+function migrateSaveV2ToV3(c) {
+  if (c.scout && !c.youthScout && !c.marketScout) {
+    c.youthScout = c.scout;
+    delete c.scout;
+  }
+  if (c.scoutOffer && !c.youthScoutOffer && !c.marketScoutOffer) {
+    c.youthScoutOffer = c.scoutOffer;
+    c.marketScoutOffer = genScout();
+    delete c.scoutOffer;
+  }
+  if (!c.marketScoutOffer) c.marketScoutOffer = genScout();
+  if (!c.youthScoutOffer) c.youthScoutOffer = genScout();
+  if (c.scoutRerollCount != null && c.youthScoutRerollCount == null) {
+    c.youthScoutRerollCount = c.scoutRerollCount;
+    delete c.scoutRerollCount;
+  }
+  if (c.marketScoutRerollCount == null) c.marketScoutRerollCount = 0;
+  if (c.youthScoutRerollCount == null) c.youthScoutRerollCount = 0;
+  if (!c.scoutFinds) c.scoutFinds = [];
+  if (c.scoutSearchDay == null) c.scoutSearchDay = 0;
+  return c;
+}
+
+/** v4 — squad own tab, legend rules, UI prefs; drop legacy flags */
+function migrateSaveV3ToV4(c) {
+  if (!c.uiPrefs) c.uiPrefs = {};
+  if (c.uiPrefs.marketSub === "squad") c.uiPrefs.marketSub = "trade";
+  if (!c.uiPrefs.marketSub) c.uiPrefs.marketSub = "trade";
+  c.squadOwnTab = true;
+  delete c.economyBalanceV2;
+  delete c.squadBalanceV1;
+  return c;
+}
+
+/** v5 — staff card gacha: tickets, bag, daily free draws */
+function migrateSaveV4ToV5(c) {
+  const init = defaultStaffCardState(c.day || 1);
+  if (c.staffDrawTickets == null) c.staffDrawTickets = init.staffDrawTickets;
+  if (c.staffFreeDrawsLeft == null) c.staffFreeDrawsLeft = init.staffFreeDrawsLeft;
+  if (c.staffFreeDrawResetDay == null) c.staffFreeDrawResetDay = init.staffFreeDrawResetDay;
+  if (!c.staffCardBag) c.staffCardBag = init.staffCardBag;
+  if (c.lastStaffPull == null) c.lastStaffPull = null;
+  return c;
+}
+
+const SAVE_MIGRATIONS = [
+  migrateSaveV0ToV1,
+  migrateSaveV1ToV2,
+  migrateSaveV2ToV3,
+  migrateSaveV3ToV4,
+  migrateSaveV4ToV5,
+];
+
+function normalizeCareerSave(c) {
   if (c.playMode == null) c.playMode = c.onlineUnlocked ? "online" : "sandbox";
   if (c.onlineUnlocked == null) c.onlineUnlocked = false;
+  const hasOldMaster = c.teams?.some((t) => t.division === 0 && /^m\d+$/.test(t.id));
+  if (!c.legendLeagueId || hasOldMaster) c = installLegendMasterLeague(c, c.legendLeagueId || "england");
+  if (!c.legendOwnership) c.legendOwnership = initLegendOwnership(c.legendLeagueId, c.teams, c.players);
+  if (c.pendingLeaguePick == null) c.pendingLeaguePick = false;
+  c.matchPrep = { ...defaultMatchPrep(), ...(c.matchPrep || {}) };
+  // เซฟเก่าอาจมีคำสั่ง higher_line/deeper ค้างอยู่ — ย้ายไประบบแนวรับ (defLine) แล้วลบทิ้ง
+  const validIns = MATCH_INSTRUCTIONS.map((i) => i.id);
+  if ((c.matchPrep.instructions || []).some((i) => !validIns.includes(i))) {
+    if (c.matchPrep.instructions.includes("higher_line")) c.matchPrep.defLine = "high";
+    if (c.matchPrep.instructions.includes("deeper")) c.matchPrep.defLine = "deep";
+    c.matchPrep.instructions = c.matchPrep.instructions.filter((i) => validIns.includes(i));
+  }
+  if (!c.tacticFamiliarity) {
+    const uT = c.teams?.find((t) => t.id === c.userTeamId);
+    c.tacticFamiliarity = { formation: uT?.formation || DEFAULT_FORMATION, matches: 0 };
+  }
+  if (!c.individualFocus) c.individualFocus = {};
+  if (c.trainingCampCooldownDay == null) c.trainingCampCooldownDay = 0;
+  if (!c.drillPlans) c.drillPlans = defaultDrillPlans();
+  if (!c.drillDoneDay) c.drillDoneDay = {};
+  // ตำแหน่งละเอียดแบบ FM — แจกให้นักเตะทุกคนในเซฟเก่าที่ยังไม่มี (จากสเตตเด่น)
+  (c.players || []).forEach(ensureDetailedPos);
+  (c.academyPlayers || []).forEach(ensureDetailedPos);
+  (c.youthProspects || []).forEach(ensureDetailedPos);
+  (c.transferList || []).forEach(ensureDetailedPos);
+  (c.scoutFinds || []).forEach(ensureDetailedPos);
+  if (!c.trophyCabinet) c.trophyCabinet = [];
+  if (!c.seasonHistory) c.seasonHistory = [];
+  if (!c.lineupSlots) c.lineupSlots = {};
+  if (!c.benchLineups) c.benchLineups = {};
+  const uT = c.teams?.find((t) => t.id === c.userTeamId);
+  if (uT) {
+    const sq = (c.players || []).filter((p) => p.teamId === c.userTeamId);
+    const xi = c.lineups?.[c.userTeamId] || [];
+    if (!c.benchLineups[c.userTeamId]?.length && sq.length > xi.length) {
+      initBenchFromSquad(c, sq, xi);
+    } else {
+      resolveBenchLineup(c, sq, xi);
+    }
+  }
+  if (c.leagues?.[0]) c.leagues[0].name = `Master · ${legendLeagueLabel(c.legendLeagueId)}`;
+  (c.teams || []).forEach((t) => {
+    if (t.primaryColor && !t.color) t.color = t.primaryColor;
+    if (t.logoIndex == null || t.logoIndex === "") {
+      const seed = t.legendTeamKey || t.id || t.short || "team";
+      t.logoIndex = [...String(seed)].reduce((h, ch) => ((h << 5) - h + ch.charCodeAt(0)) | 0, 0) % 10;
+    }
+  });
+  return c;
+}
+
+function migrateCareerSave(c) {
+  let v = resolveSaveVersion(c);
+  while (v < SAVE_VERSION && v < SAVE_MIGRATIONS.length) {
+    c = SAVE_MIGRATIONS[v](c);
+    v += 1;
+    c.saveVersion = v;
+  }
+  c.saveVersion = SAVE_VERSION;
+  c.gameVersion = GAME_VERSION;
+  c = normalizeCareerSave(c);
   return checkOnlineUnlock(c);
 }
+
 function poisson(lambda) {
   const L = Math.exp(-lambda);
   let k = 0, p = 1;
@@ -394,14 +1584,51 @@ function buildSeasonFixtures(teamIds) {
   }));
 }
 
+/* เลือก 11 ตัวที่ดีที่สุดแบบรู้ตำแหน่งละเอียด — จับคู่ทีละช่องด้วย rating×ฟอร์ม×ความคุ้นเคยตำแหน่ง */
 function getBestXI(squad, formationKey, { excludeInjured = true } = {}) {
-  const counts = FORMATIONS[formationKey].counts;
-  const byPos = { GK: [], DF: [], MF: [], FW: [] };
-  squad.forEach((p) => { if (byPos[p.position] && (!excludeInjured || p.injuryDays <= 0)) byPos[p.position].push(p); });
-  Object.keys(byPos).forEach((k) => byPos[k].sort((a, b) => (b.rating * (b.stamina / 100 * 0.3 + 0.7)) - (a.rating * (a.stamina / 100 * 0.3 + 0.7))));
+  const slotDefs = FORMATIONS[resolveFormation(formationKey)].slots;
+  const pool = squad.filter((p) => !excludeInjured || p.injuryDays <= 0);
+  const assigned = new Set();
   const xi = [];
-  Object.keys(counts).forEach((pos) => { for (let i = 0; i < counts[pos]; i++) if (byPos[pos][i]) xi.push(byPos[pos][i].id); });
+  slotDefs.forEach((slot) => {
+    let best = null, bestScore = -1;
+    pool.forEach((p) => {
+      if (assigned.has(p.id)) return;
+      const fam = p.pos ? playerSlotFamiliarity(p, slot.dpos) : (p.position === slot.pos ? 1 : 0.55);
+      const score = p.rating * (p.stamina / 100 * 0.3 + 0.7) * fam;
+      if (score > bestScore) { bestScore = score; best = p; }
+    });
+    if (best) { assigned.add(best.id); xi.push(best.id); }
+  });
   return xi;
+}
+
+function topUpTeamSquad(players, teamId, tier, day) {
+  const squad = players.filter((p) => p.teamId === teamId);
+  const have = { GK: 0, DF: 0, MF: 0, FW: 0 };
+  squad.forEach((p) => { if (have[p.position] != null) have[p.position] += 1; });
+  const added = [];
+  Object.keys(SQUAD_POSITION_TARGET).forEach((pos) => {
+    while (have[pos] < SQUAD_POSITION_TARGET[pos]) {
+      const p = genPlayer(pos, tier, teamId, rand(16, 22), day);
+      players.push(p);
+      added.push(p);
+      have[pos] += 1;
+    }
+  });
+  return added;
+}
+
+function resolveTeamXI(team, squad, savedLineup) {
+  const avail = squad.filter((p) => p.injuryDays <= 0);
+  let xi;
+  if (team.isUser && !team.autoMode && savedLineup?.length) {
+    xi = fillLineupGaps(avail, savedLineup.filter((id) => avail.some((p) => p.id === id)), team.formation);
+  } else {
+    if (team.isUser && team.autoMode) team.formation = recommendFormation(team, avail);
+    xi = getBestXI(avail, team.formation);
+  }
+  return { xi, canPlay: xi.length >= MIN_XI_SIZE, available: avail.length };
 }
 
 function recommendFormation(team, squad) {
@@ -419,7 +1646,7 @@ function recommendFormation(team, squad) {
 
 function fillLineupGaps(squad, xi, formation) {
   const avail = squad.filter((p) => p.injuryDays <= 0);
-  const counts = FORMATIONS[formation].counts;
+  const counts = FORMATIONS[resolveFormation(formation)].counts;
   const kept = xi.filter((id) => avail.some((p) => p.id === id));
   const posHave = { GK: 0, DF: 0, MF: 0, FW: 0 };
   kept.forEach((id) => {
@@ -447,6 +1674,118 @@ function fillLineupGaps(squad, xi, formation) {
   return result.slice(0, 11);
 }
 
+/* ---------- slot-ordered lineup (กระดานจัดทีมแบบลากวาง) ---------- */
+/* แปลง xi (array id) → slots array ยาวเท่ากับ slots ของแผน (id หรือ null ต่อช่อง) โดยจับตาม natural position */
+function xiToSlots(squad, xiIds, formationKey) {
+  const slotDefs = FORMATIONS[resolveFormation(formationKey)].slots;
+  const remaining = (xiIds || []).map((id) => squad.find((x) => x.id === id)).filter(Boolean);
+  const res = slotDefs.map(() => null);
+  // รอบแรก: จับช่องที่ตรงตำแหน่งละเอียดเป๊ะก่อน
+  slotDefs.forEach((slot, i) => {
+    const idx = remaining.findIndex((p) => (p.pos || p.position) === slot.dpos);
+    if (idx >= 0) res[i] = remaining.splice(idx, 1)[0].id;
+  });
+  // รอบสอง: ที่เหลือลงช่องว่างที่คุ้นเคยที่สุด
+  slotDefs.forEach((slot, i) => {
+    if (res[i] || !remaining.length) return;
+    let bi = 0, bs = -1;
+    remaining.forEach((p, j) => {
+      const s = playerSlotFamiliarity(p, slot.dpos) * p.rating;
+      if (s > bs) { bs = s; bi = j; }
+    });
+    res[i] = remaining.splice(bi, 1)[0].id;
+  });
+  return res;
+}
+
+/* อ่าน lineupSlots ของทีมผู้เล่น — ถ้าไม่มี/ไม่ตรงกับ lineups ปัจจุบัน (เช่นเพิ่งเปลี่ยนแผน,
+   ออโต้จัดใหม่, ขายนักเตะ) จะสร้างใหม่จาก xi โดยอัตโนมัติ */
+function resolveLineupSlots(c, squad, formationKey) {
+  const slotDefs = FORMATIONS[resolveFormation(formationKey)].slots;
+  const xi = c.lineups?.[c.userTeamId] || [];
+  const saved = c.lineupSlots?.[c.userTeamId];
+  if (Array.isArray(saved) && saved.length === slotDefs.length) {
+    const savedIds = saved.filter(Boolean);
+    const sameSet = savedIds.length === xi.length && savedIds.every((id) => xi.includes(id));
+    if (sameSet) return [...saved];
+  }
+  return xiToSlots(squad, xi, formationKey);
+}
+
+function normalizeBenchSlots(c, squad, xiIds) {
+  const teamId = c.userTeamId;
+  const xiSet = new Set(xiIds);
+  const raw = c.benchLineups?.[teamId];
+  const list = Array.isArray(raw) ? raw : [];
+  return Array.from({ length: MATCH_BENCH_SIZE }, (_, i) => {
+    const id = list[i] || null;
+    if (!id || xiSet.has(id) || !squad.some((p) => p.id === id)) return null;
+    return id;
+  });
+}
+
+function getBenchLineup(c, squad, xiIds) {
+  return normalizeBenchSlots(c, squad, xiIds).filter(Boolean);
+}
+
+function resolveBenchLineup(c, squad, xiIds) {
+  if (!c.benchLineups) c.benchLineups = {};
+  c.benchLineups[c.userTeamId] = normalizeBenchSlots(c, squad, xiIds);
+  return c.benchLineups[c.userTeamId].filter(Boolean);
+}
+
+function registerNewSquadPlayer(c, playerId) {
+  if (!playerId) return;
+  if (!c.benchLineups) c.benchLineups = {};
+  const squad = c.players.filter((p) => p.teamId === c.userTeamId);
+  const p = squad.find((x) => x.id === playerId);
+  if (!p) return;
+  ensureDetailedPos(p);
+  const xi = c.lineups?.[c.userTeamId] || [];
+  if (xi.includes(playerId)) return;
+  const slots = normalizeBenchSlots(c, squad, xi);
+  if (slots.includes(playerId)) return;
+  const emptyIdx = slots.findIndex((id) => !id);
+  if (emptyIdx >= 0) slots[emptyIdx] = playerId;
+  else slots[MATCH_BENCH_SIZE - 1] = playerId;
+  c.benchLineups[c.userTeamId] = slots;
+  c.newSquadPlayerId = playerId;
+}
+
+function removePlayerFromLineups(c, playerId) {
+  const tid = c.userTeamId;
+  if (c.lineups?.[tid]) c.lineups[tid] = c.lineups[tid].filter((id) => id !== playerId);
+  if (c.lineupSlots?.[tid]) {
+    c.lineupSlots[tid] = c.lineupSlots[tid].map((id) => (id === playerId ? null : id));
+    c.lineups[tid] = c.lineupSlots[tid].filter(Boolean);
+  }
+  if (c.benchLineups?.[tid]) c.benchLineups[tid] = c.benchLineups[tid].filter((id) => id !== playerId);
+}
+
+function initBenchFromSquad(c, squad, xiIds) {
+  if (!c.benchLineups) c.benchLineups = {};
+  const xiSet = new Set(xiIds);
+  const posOrder = { GK: 0, DF: 1, MF: 2, FW: 3 };
+  const picks = squad.filter((p) => !xiSet.has(p.id))
+    .sort((a, b) => (posOrder[a.position] - posOrder[b.position]) || b.rating - a.rating)
+    .slice(0, MATCH_BENCH_SIZE)
+    .map((p) => p.id);
+  c.benchLineups[c.userTeamId] = Array.from({ length: MATCH_BENCH_SIZE }, (_, i) => picks[i] || null);
+  return picks;
+}
+
+/* map playerId → ตำแหน่งช่องละเอียดบนสนามจริง (สำหรับคำนวณโทษ out-of-position) — null ถ้าไม่มีข้อมูล */
+function userSlotAssignMap(c) {
+  const uT = c.teams?.find((t) => t.id === c.userTeamId);
+  if (!uT) return null;
+  const slotDefs = FORMATIONS[resolveFormation(uT.formation)].slots;
+  const saved = c.lineupSlots?.[c.userTeamId];
+  if (!Array.isArray(saved) || saved.length !== slotDefs.length) return null;
+  const map = {};
+  saved.forEach((id, i) => { if (id) map[id] = slotDefs[i].dpos; });
+  return map;
+}
+
 function getManagerMatchAdvice(team, squad, xi, opponentTeam, oppSquad, isHome) {
   const avail = squad.filter((p) => p.injuryDays <= 0);
   const recommendedFormation = recommendFormation(team, avail);
@@ -456,7 +1795,9 @@ function getManagerMatchAdvice(team, squad, xi, opponentTeam, oppSquad, isHome) 
     tips.push(`ตรงกับสไตล์ผจก. (${team.manager.preferredFormation})`);
   }
   const injured = squad.filter((p) => p.injuryDays > 0);
-  if (injured.length) tips.push(`บาดเจ็บ: ${injured.slice(0, 3).map((p) => p.name).join(", ")}`);
+  if (injured.length) tips.push(`บาดเจ็บ: ${injured.slice(0, 3).map((p) => p.name).join(", ")}${injured.length > 3 ? ` +${injured.length - 3}` : ""}`);
+  const fieldable = fillLineupGaps(avail, xi.filter((id) => avail.some((p) => p.id === id)), team.formation);
+  if (fieldable.length < MIN_XI_SIZE) tips.push(`⚠️ ลงแข่งไม่ได้ — มีผู้เล่นพร้อมเพียง ${fieldable.length}/11 คน`);
   const inXi = xi.filter((id) => avail.some((p) => p.id === id));
   const tired = inXi.map((id) => avail.find((p) => p.id === id)).filter((p) => p && p.stamina < 50);
   if (tired.length) tips.push(`${tired[0].name} สตามินา ${Math.round(tired[0].stamina)}% — พิจารณาพัก`);
@@ -475,19 +1816,363 @@ function getManagerMatchAdvice(team, squad, xi, opponentTeam, oppSquad, isHome) 
   return { recommendedFormation, tips };
 }
 
-const ROLE_ATK_MULT = { balanced: 1, attacking: 1.15, defensive: 0.85 };
-const ROLE_DEF_MULT = { balanced: 1, attacking: 0.85, defensive: 1.15 };
-function teamAttackDefense(squad, xiIds) {
+/* ---------- pre-match scout & plan (FM-style) ---------- */
+const MATCH_MENTALITIES = [
+  { id: "very_defensive", label: "รับมาก", atk: 0.82, def: 1.12 },
+  { id: "defensive", label: "รับ", atk: 0.9, def: 1.06 },
+  { id: "balanced", label: "สมดุล", atk: 1, def: 1 },
+  { id: "attacking", label: "บุก", atk: 1.08, def: 0.94 },
+  { id: "very_attacking", label: "บุกมาก", atk: 1.16, def: 0.86 },
+];
+const MATCH_INSTRUCTIONS = [
+  { id: "wider", label: "กางเกม", desc: "เปิดช่องข้าง" },
+  { id: "narrower", label: "บีบกลาง", desc: "แน่นกลางสนาม" },
+  { id: "more_direct", label: "บอลยาว", desc: "ส่งตรงเร็ว" },
+  { id: "shorter", label: "บอลสั้น", desc: "ผ่านบอลต่อเนื่อง" },
+];
+
+function buildSuggestedPrep(weaknesses) {
+  const w = (weaknesses || []).join(" ");
+  let mentality = "balanced";
+  let defLine = "normal";
+  let pressing = "medium";
+  const instructions = [];
+  if (w.includes("แนวรับคู่แข่งไม่แข็ง") || w.includes("บุก")) {
+    mentality = "attacking";
+    instructions.push("wider", "more_direct");
+  }
+  if (w.includes("เกมรุกคู่แข่งอันตราย")) {
+    mentality = "defensive";
+    defLine = "deep";
+  }
+  if (w.includes("สตามินาต่ำ")) {
+    mentality = "attacking";
+    defLine = "high";
+    pressing = "high";
+  }
+  if (w.includes("เร็ว")) {
+    instructions.push("wider", "more_direct");
+  }
+  return { mentality, instructions: [...new Set(instructions)].slice(0, 3), defLine, pressing };
+}
+
+function defaultMatchPrep() {
+  return {
+    mentality: "balanced", instructions: [], teamTalk: null,
+    tempo: "normal", pressing: "medium", defLine: "normal", offsideTrap: false, markPlayerId: null,
+  };
+}
+
+const TEAM_TALK_OPTIONS = [
+  { id: "motivate", label: "กระตุ้นใจ", morale: [3, 6], atk: 1.02 },
+  { id: "calm", label: "ใจเย็น", morale: [1, 3], atk: 1 },
+  { id: "aggressive", label: "ดุดัน", morale: [-1, 2], atk: 1.06 },
+  { id: "focus", label: "มีสมาธิ", morale: [2, 4], atk: 1.03, def: 1.02 },
+];
+
+/**
+ * meta (ทั้งหมด optional):
+ *  - team, squad, xiIds: ทีมตัวเอง — ใช้คำนวณโบนัสลูกตั้งเตะ + ความเสี่ยงกับดักล้ำหน้า (ต้องมี pace แนวรับพอ)
+ *  - familiarityMult: ตัวคูณความคุ้นเคยแทคติก (ยิ่งใช้แผนเดิมต่อเนื่องยิ่งได้เปรียบ)
+ */
+function applyMatchPrepToContext(ctx, prep, meta) {
+  if (!prep) return ctx;
+  const ment = MATCH_MENTALITIES.find((m) => m.id === prep.mentality) || MATCH_MENTALITIES[2];
+  let atk = ctx.effAttack * ment.atk;
+  let def = ctx.effDefense * ment.def;
+  const ins = prep.instructions || [];
+  if (ins.includes("more_direct")) atk *= 1.04;
+  if (ins.includes("shorter")) atk *= 1.02;
+  if (ins.includes("wider")) atk *= 1.02;
+  if (ins.includes("narrower")) def *= 1.02;
+
+  const tempo = TEMPO_OPTIONS.find((t) => t.id === prep.tempo) || TEMPO_OPTIONS[1];
+  atk *= tempo.atk; def *= tempo.def;
+  const pressing = PRESSING_OPTIONS.find((t) => t.id === prep.pressing) || PRESSING_OPTIONS[1];
+  atk *= pressing.atk; def *= pressing.def;
+  const defLine = DEF_LINE_OPTIONS.find((t) => t.id === prep.defLine) || DEF_LINE_OPTIONS[1];
+  atk *= defLine.atk; def *= defLine.def;
+
+  if (meta?.squad && meta?.xiIds) {
+    const ownDefenders = meta.squad.filter((p) => meta.xiIds.includes(p.id) && (p.position === "DF" || p.position === "GK"));
+    const avgDefPace = ownDefenders.length ? ownDefenders.reduce((s, p) => s + (p.attrs?.pace || 10), 0) / ownDefenders.length : 10;
+    def *= offsideTrapMult(prep.defLine, prep.offsideTrap, avgDefPace);
+  }
+  if (meta?.team && meta?.squad) atk *= setPieceBonusMult(meta.team, meta.squad);
+  if (prep.markPlayerId) def *= 0.985; // ค่าใช้จ่ายเล็กน้อยจากการดึงคนไปประกบ
+
+  if (prep.teamTalk) {
+    const tt = TEAM_TALK_OPTIONS.find((t) => t.id === prep.teamTalk);
+    if (tt) {
+      if (tt.atk) atk *= tt.atk;
+      if (tt.def) def *= tt.def;
+    }
+  }
+  if (meta?.familiarityMult) { atk *= meta.familiarityMult; def *= meta.familiarityMult; }
+  return { ...ctx, effAttack: atk, effDefense: def };
+}
+
+function getTeamRecentMatchResults(c, division, teamId, max = 5) {
+  const league = c.leagues[division];
+  const results = [];
+  for (let day = c.day - 1; day >= 1 && results.length < max; day -= 1) {
+    const round = league.fixtures.find((r) => r.day === day);
+    if (!round) continue;
+    const m = round.matches.find((mm) => mm.played && (mm.home === teamId || mm.away === teamId));
+    if (!m) continue;
+    const home = c.teams.find((t) => t.id === m.home);
+    const away = c.teams.find((t) => t.id === m.away);
+    if (!home || !away) continue;
+    results.push({
+      day, home, away, homeGoals: m.homeGoals, awayGoals: m.awayGoals,
+      isUser: m.home === teamId || m.away === teamId,
+    });
+  }
+  return results;
+}
+
+function getTeamFormStrip(c, teamId, division, max = 5) {
+  return getTeamRecentMatchResults(c, division, teamId, max)
+    .map((r) => {
+      const isHome = r.home.id === teamId;
+      const gf = isHome ? r.homeGoals : r.awayGoals;
+      const ga = isHome ? r.awayGoals : r.homeGoals;
+      return gf > ga ? "W" : gf < ga ? "L" : "D";
+    })
+    .reverse();
+}
+
+function buildMatchScoutReport(career, uTeam, opponent, uSquad, oppSquad, xi, isHome) {
+  const uAvail = uSquad.filter((p) => p.injuryDays <= 0);
+  const oppAvail = oppSquad.filter((p) => p.injuryDays <= 0);
+  const userXI = (xi || []).filter((id) => uAvail.some((p) => p.id === id));
+  const filledXI = userXI.length ? fillLineupGaps(uAvail, userXI, uTeam.formation) : getBestXI(uAvail, uTeam.formation);
+  const oppXI = getBestXI(oppAvail, opponent.formation);
+  const prep = career.matchPrep || defaultMatchPrep();
+  const familiarityMult = familiarityMultiplier(
+    career.tacticFamiliarity && career.tacticFamiliarity.formation === uTeam.formation ? career.tacticFamiliarity.matches : 0
+  );
+
+  let userCtx = buildMatchContext(uTeam, uAvail, filledXI, opponent.formation, isHome, uTeam.chemistry, userSlotAssignMap(career));
+  let oppCtx = buildMatchContext(opponent, oppAvail, oppXI, uTeam.formation, !isHome, opponent.chemistry);
+  userCtx = applyMatchPrepToContext(userCtx, prep, { team: uTeam, squad: uAvail, xiIds: filledXI, familiarityMult });
+  oppCtx = applyOppositionMarkToContext(oppCtx, prep.markPlayerId, oppAvail, oppXI);
+
+  const { xgHome, xgAway } = expectedGoalsFull(isHome ? userCtx : oppCtx, isHome ? oppCtx : userCtx);
+  const xgUs = isHome ? xgHome : xgAway;
+  const xgThem = isHome ? xgAway : xgHome;
+  const mm = matchupMultiplier(uTeam.formation, opponent.formation);
+  const matchupLabel = mm > 1.03 ? "แผนได้เปรียบ" : mm < 0.97 ? "แผนเสียเปรียบ" : "แผนสูสี";
+
+  const usRaw = teamAttackDefense(uAvail, filledXI);
+  const oppRaw = teamAttackDefense(oppAvail, oppXI);
+  const keyThreats = oppAvail.filter((p) => oppXI.includes(p.id)).sort((a, b) => b.rating - a.rating).slice(0, 3);
+  const oppStandings = standingsForDivision(career, opponent.division);
+  const oppPos = oppStandings.findIndex((s) => s.team.id === opponent.id) + 1;
+
+  const weaknesses = [];
+  if (oppRaw.defense < 70) weaknesses.push("แนวรับคู่แข่งไม่แข็ง — ลองเล่นบุกหรือกางเกม");
+  if (oppRaw.attack > usRaw.attack + 5) weaknesses.push("เกมรุกคู่แข่งอันตราย — พิจารณารับหรือแนวรับลึก");
+  if (oppAvail.some((p) => oppXI.includes(p.id) && p.stamina < 50)) weaknesses.push("คู่แข่งมีตัวหลักสตามินาต่ำ — กดตั้งแต่ต้นเกม");
+  const fast = uAvail.find((p) => filledXI.includes(p.id) && (p.attrs?.pace || 0) >= 14);
+  if (oppRaw.defense < 72 && fast) weaknesses.push(`${fast.name} เร็ว — ออกช่องข้างได้ผล`);
+
+  const advice = getManagerMatchAdvice(uTeam, uAvail, filledXI, opponent, oppSquad, isHome);
+  const winChance = clamp(50 + (xgUs - xgThem) * 14 + (isHome ? 4 : -4) + (mm - 1) * 40, 12, 88);
+
+  return {
+    userAtk: Math.round(userCtx.effAttack),
+    userDef: Math.round(userCtx.effDefense),
+    oppAtk: Math.round(oppCtx.effAttack),
+    oppDef: Math.round(oppCtx.effDefense),
+    avgStamina: Math.round(usRaw.avgStamina),
+    oppAvgStamina: Math.round(oppRaw.avgStamina),
+    xgUs, xgThem, matchupLabel, winChance,
+    keyThreats, weaknesses: weaknesses.slice(0, 2),
+    userForm: getTeamFormStrip(career, uTeam.id, uTeam.division),
+    oppForm: getTeamFormStrip(career, opponent.id, opponent.division),
+    oppPos, oppFormation: opponent.formation, userFormation: uTeam.formation,
+    tips: advice.tips, recommendedFormation: advice.recommendedFormation,
+    xiCount: filledXI.length,
+    suggestedPrep: buildSuggestedPrep(weaknesses.slice(0, 2)),
+    oppXIList: oppAvail.filter((p) => oppXI.includes(p.id)),
+    familiarityMatches: career.tacticFamiliarity && career.tacticFamiliarity.formation === uTeam.formation ? career.tacticFamiliarity.matches : 0,
+    familiarityMult,
+  };
+}
+
+function FormStrip({ form, label }) {
+  const colors = { W: C.good, D: C.amber, L: C.crimson };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      {label && <span style={{ fontSize: 9, color: C.textDim, minWidth: 52 }}>{label}</span>}
+      <div style={{ display: "flex", gap: 3 }}>
+        {form.length === 0
+          ? <span style={{ fontSize: 9, color: C.textDim }}>ยังไม่มีผล</span>
+          : form.map((f, i) => (
+            <span key={i} style={{ width: 18, height: 18, borderRadius: 4, background: colors[f], color: "#0a1210", fontSize: 9, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{f}</span>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============================== FM-STYLE PLAYER ROLES ============================== */
+/* บทบาททั้งหมด (แบน) — ประกอบเป็นลิสต์ต่อตำแหน่งละเอียดด้านล่าง */
+const ROLE_DEFS = {
+  gk_standard: { id: "gk_standard", label: "โกลมาตรฐาน", desc: "เกมรับล้วน มั่นคง ไม่เสี่ยง", atkMult: 1.00, defMult: 1.00, bonusAttrs: ["composure", "decisions"] },
+  gk_sweeper: { id: "gk_sweeper", label: "สวีปเปอร์คีปเปอร์", desc: "ออกมาเคลียร์/ริเริ่มเกมไกลขึ้น เสี่ยงมากขึ้น", atkMult: 1.08, defMult: 0.94, bonusAttrs: ["passing", "decisions"] },
+  df_stopper: { id: "df_stopper", label: "หลังตัวหยุดเกม", desc: "ปะทะหนักแน่น เกมรับล้วน", atkMult: 0.90, defMult: 1.10, bonusAttrs: ["tackling", "heading"] },
+  df_ballplaying: { id: "df_ballplaying", label: "หลังเล่นบอล", desc: "เริ่มเกมรุกจากแนวหลัง", atkMult: 1.08, defMult: 0.96, bonusAttrs: ["passing", "vision"] },
+  df_fullback: { id: "df_fullback", label: "แบ็คยืนโซน", desc: "รับเป็นหลัก เติมเกมพองาม", atkMult: 1.02, defMult: 1.02, bonusAttrs: ["tackling", "pace"] },
+  df_wingback: { id: "df_wingback", label: "แบ็คบุก (Wing-Back)", desc: "ทะลุขึ้นช่วยเกมรุกทางริม", atkMult: 1.18, defMult: 0.84, bonusAttrs: ["crossing", "pace"] },
+  mf_anchor: { id: "mf_anchor", label: "แองเคอร์ (คุมเกมรับ)", desc: "ยืนคุมหน้ากองหลัง ตัดเกมล้วน", atkMult: 0.85, defMult: 1.18, bonusAttrs: ["tackling", "determination"] },
+  mf_dlp: { id: "mf_dlp", label: "เพลย์เมคตัวลึก (DLP)", desc: "จ่ายสร้างเกมจากแดนลึก", atkMult: 1.10, defMult: 0.96, bonusAttrs: ["passing", "vision"] },
+  mf_b2b: { id: "mf_b2b", label: "บ็อกซ์ทูบ็อกซ์", desc: "วิ่งครบสนาม สมดุลรุก-รับ", atkMult: 1.00, defMult: 1.00, bonusAttrs: ["workRate", "determination"] },
+  mf_playmaker: { id: "mf_playmaker", label: "เพลย์เมคเกอร์", desc: "คุมจังหวะ จ่ายทะลุแนว", atkMult: 1.18, defMult: 0.85, bonusAttrs: ["passing", "vision"] },
+  mf_wide: { id: "mf_wide", label: "มิดฟิลด์ริมเส้น", desc: "คุมริมเส้น เปิดบอล ช่วยรับ", atkMult: 1.06, defMult: 0.96, bonusAttrs: ["crossing", "workRate"] },
+  mf_winger: { id: "mf_winger", label: "วิงเกอร์", desc: "เลาะริมเข้าเปิดบอล/เลี้ยงเดี่ยว", atkMult: 1.14, defMult: 0.88, bonusAttrs: ["crossing", "dribbling"] },
+  fw_inside: { id: "fw_inside", label: "ตัดเข้าในยิง (Inside Fwd)", desc: "หุบจากริมเข้ากลางเพื่อจบสกอร์", atkMult: 1.20, defMult: 0.82, bonusAttrs: ["dribbling", "finishing"] },
+  am_shadow: { id: "am_shadow", label: "กองหน้าตัวต่ำ (Shadow)", desc: "สอดจากแดนสองเข้าไปจบ", atkMult: 1.16, defMult: 0.84, bonusAttrs: ["finishing", "vision"] },
+  fw_poacher: { id: "fw_poacher", label: "โพชเชอร์", desc: "รอจบสกอร์ในกรอบเขตโทษ", atkMult: 1.16, defMult: 0.80, bonusAttrs: ["finishing", "composure"] },
+  fw_target: { id: "fw_target", label: "ตัวเป้า (Target Man)", desc: "รับบอลโล่งหลังหัน เป็นจุดวาง", atkMult: 1.06, defMult: 0.90, bonusAttrs: ["heading", "strength"] },
+  fw_false9: { id: "fw_false9", label: "ฟอลส์ไนน์", desc: "ถอยรับเกม ดึงแนวรับแตก", atkMult: 1.10, defMult: 0.86, bonusAttrs: ["vision", "dribbling"] },
+};
+const RD = ROLE_DEFS;
+/* บทบาทที่เลือกได้ต่อตำแหน่งละเอียดแบบ FM */
+const PLAYER_ROLES_BY_DPOS = {
+  GK: [RD.gk_standard, RD.gk_sweeper],
+  DC: [RD.df_stopper, RD.df_ballplaying],
+  DL: [RD.df_fullback, RD.df_wingback], DR: [RD.df_fullback, RD.df_wingback],
+  WBL: [RD.df_wingback, RD.df_fullback], WBR: [RD.df_wingback, RD.df_fullback],
+  DM: [RD.mf_anchor, RD.mf_dlp, RD.mf_b2b],
+  MC: [RD.mf_b2b, RD.mf_playmaker, RD.mf_anchor],
+  ML: [RD.mf_wide, RD.mf_winger], MR: [RD.mf_wide, RD.mf_winger],
+  AML: [RD.mf_winger, RD.fw_inside], AMR: [RD.mf_winger, RD.fw_inside],
+  AMC: [RD.mf_playmaker, RD.am_shadow],
+  ST: [RD.fw_poacher, RD.fw_target, RD.fw_false9],
+};
+const GROUP_FALLBACK_DPOS = { GK: "GK", DF: "DC", MF: "MC", FW: "ST" };
+function rolesForPlayer(p) {
+  return PLAYER_ROLES_BY_DPOS[p.pos] || PLAYER_ROLES_BY_DPOS[GROUP_FALLBACK_DPOS[p.position]] || PLAYER_ROLES_BY_DPOS.MC;
+}
+/** legacy role ids (attacking/balanced/defensive) หรือ id ที่ไม่อยู่ในลิสต์ตำแหน่งใหม่ จะ fallback มาที่นี่ — ไม่ต้อง migrate เซฟเก่า */
+function resolvePlayerRole(p) {
+  const roles = rolesForPlayer(p);
+  const found = roles.find((r) => r.id === p.role);
+  if (found) return found;
+  if (p.role === "attacking") return [...roles].sort((a, b) => b.atkMult - a.atkMult)[0];
+  if (p.role === "defensive") return [...roles].sort((a, b) => b.defMult - a.defMult)[0];
+  return roles[Math.floor((roles.length - 1) / 2)];
+}
+/** โบนัส/บทลงโทษของบทบาทถูกขยาย/หดตามว่าผู้เล่นมีสเตตที่เหมาะกับบทบาทนั้นแค่ไหน (เล่นผิดบทบาทได้ผลน้อยลง) */
+function roleAttackDefenseMult(p) {
+  const role = resolvePlayerRole(p);
+  const bonusAvg = role.bonusAttrs?.length ? role.bonusAttrs.reduce((s, k) => s + (p.attrs?.[k] || 10), 0) / role.bonusAttrs.length : 10;
+  const fit = clamp(1 + (bonusAvg - 10) * 0.012, 0.85, 1.15);
+  return {
+    atk: role.atkMult >= 1 ? role.atkMult * fit : role.atkMult,
+    def: role.defMult >= 1 ? role.defMult * fit : role.defMult,
+  };
+}
+
+/* ============================== TEMPO / PRESSING / DEFENSIVE LINE ============================== */
+const TEMPO_OPTIONS = [
+  { id: "slow", label: "ช้า", desc: "ครองบอลนาน ประหยัดแรง", atk: 0.97, def: 1.03, staminaDrainMult: 0.85 },
+  { id: "normal", label: "ปกติ", desc: "จังหวะมาตรฐาน", atk: 1, def: 1, staminaDrainMult: 1 },
+  { id: "fast", label: "เร็ว", desc: "เล่นไวใส่ทุกจังหวะ เปลืองแรงมาก", atk: 1.06, def: 0.97, staminaDrainMult: 1.3 },
+];
+const PRESSING_OPTIONS = [
+  { id: "low", label: "กดต่ำ", desc: "ยืนบล็อก ประหยัดแรง", atk: 0.98, def: 1.03, staminaDrainMult: 0.85, injuryRiskMult: 0.85 },
+  { id: "medium", label: "กดปานกลาง", desc: "สมดุล", atk: 1, def: 1, staminaDrainMult: 1, injuryRiskMult: 1 },
+  { id: "high", label: "กดสูงทั้งสนาม", desc: "บีบแย่งบอลไว เปลืองแรง+เสี่ยงบาดเจ็บ", atk: 1.06, def: 0.95, staminaDrainMult: 1.35, injuryRiskMult: 1.3 },
+];
+const DEF_LINE_OPTIONS = [
+  { id: "deep", label: "แนวรับลึก", desc: "ถอยรอสวนกลับ", atk: 0.96, def: 1.05 },
+  { id: "normal", label: "แนวรับปกติ", desc: "มาตรฐาน", atk: 1, def: 1 },
+  { id: "high", label: "แนวรับสูง", desc: "ดันขึ้นบีบพื้นที่ — ต้องมีแบ็คเร็วคุ้มกับดักล้ำหน้า", atk: 1.04, def: 0.96 },
+];
+/** กับดักล้ำหน้าได้ผลจริงก็ต่อเมื่อดันแนวสูง + แบ็คตัวเร็วพอ ไม่งั้นเสี่ยงโดนบอลทะลุ */
+function offsideTrapMult(defLine, offsideTrap, avgDefPace) {
+  if (!offsideTrap) return 1;
+  if (defLine !== "high") return 0.98;
+  return avgDefPace >= 13 ? 1.06 : 0.88;
+}
+
+/* ============================== SET-PIECE TAKERS ============================== */
+const SET_PIECE_ATTRS = { corner: ["crossing", "dribbling"], freekick: ["finishing", "passing"], penalty: ["composure", "finishing"] };
+function setPieceTakerScore(team, squad, kind) {
+  const takerId = kind === "corner" ? team.cornerTakerId : kind === "freekick" ? team.freekickTakerId : team.penaltyTakerId;
+  const taker = takerId ? squad.find((p) => p.id === takerId) : null;
+  if (!taker) return 8; // baseline สเตตเฉลี่ยทีม ถ้ายังไม่เลือกมือดาวเตะ
+  const attrs = SET_PIECE_ATTRS[kind];
+  return attrs.reduce((s, k) => s + (taker.attrs?.[k] || 8), 0) / attrs.length;
+}
+/** โบนัสประสิทธิภาพลูกตั้งเตะรวม — ไม่ได้จำลองทีละลูก แต่สะท้อนคุณภาพมือดาวเตะเข้าไปในพลังรุกโดยรวม */
+function setPieceBonusMult(team, squad) {
+  if (!team) return 1;
+  const avgScore = (setPieceTakerScore(team, squad, "corner") + setPieceTakerScore(team, squad, "freekick") + setPieceTakerScore(team, squad, "penalty")) / 3;
+  return clamp(1 + (avgScore - 8) * 0.006, 0.97, 1.06);
+}
+
+/* ============================== TACTICAL FAMILIARITY ============================== */
+function familiarityMultiplier(matches) {
+  if (matches >= 15) return 1.05;
+  if (matches >= 10) return 1.02;
+  if (matches >= 6) return 1.0;
+  if (matches >= 3) return 0.97;
+  if (matches >= 1) return 0.94;
+  return 0.90;
+}
+function updateTacticFamiliarity(c, formation) {
+  const fam = c.tacticFamiliarity || { formation, matches: 0 };
+  if (fam.formation === formation) fam.matches = Math.min(20, fam.matches + 1);
+  else { fam.formation = formation; fam.matches = 0; }
+  c.tacticFamiliarity = fam;
+}
+
+/* ============================== OPPOSITION INSTRUCTIONS (mark player) ============================== */
+/** ลดพลังรุกของคู่แข่งลงเมื่อล็อกประกบตัวอันตรายของเขา ยิ่งเป็นตัวหลักยิ่งลดเยอะ */
+function applyOppositionMarkToContext(ctx, markPlayerId, squad, xiIds) {
+  if (!markPlayerId || !xiIds || !xiIds.includes(markPlayerId)) return ctx;
+  const xi = squad.filter((p) => xiIds.includes(p.id));
+  const marked = xi.find((p) => p.id === markPlayerId);
+  if (!marked) return ctx;
+  const avgAtk = xi.length ? xi.reduce((s, p) => s + p.attack, 0) / xi.length : marked.attack;
+  const importance = clamp((marked.attack - avgAtk) / 40, 0, 0.15);
+  const reduction = clamp(0.05 + importance, 0.05, 0.14);
+  return { ...ctx, effAttack: ctx.effAttack * (1 - reduction) };
+}
+
+/* ---------- out-of-position (วางนักเตะข้ามตำแหน่ง) ---------- */
+/* natural position → slot position: ตัวคูณประสิทธิภาพ (1 = ตรงตำแหน่ง) */
+const POS_FAMILIARITY = {
+  GK: { GK: 1, DF: 0.6, MF: 0.55, FW: 0.5 },
+  DF: { GK: 0.45, DF: 1, MF: 0.85, FW: 0.72 },
+  MF: { GK: 0.45, DF: 0.85, MF: 1, FW: 0.85 },
+  FW: { GK: 0.45, DF: 0.72, MF: 0.85, FW: 1 },
+};
+function outOfPositionMult(naturalPos, slotPos) {
+  if (!slotPos || naturalPos === slotPos) return 1;
+  return POS_FAMILIARITY[naturalPos]?.[slotPos] ?? 0.8;
+}
+
+/* slotAssign (optional): { playerId: slotPos } — ถ้ามี ใช้ตำแหน่งบนสนามจริงแทน natural position
+   พร้อมโทษ out-of-position; ถ้าไม่มี (บอท/ออโต้) พฤติกรรมเดิมทุกอย่าง */
+function teamAttackDefense(squad, xiIds, slotAssign) {
   const xi = squad.filter((p) => xiIds.includes(p.id));
   if (xi.length === 0) return { attack: 40, defense: 40, avgStamina: 100, avgMorale: 75 };
-  const attackers = xi.filter((p) => p.position === "FW" || p.position === "MF");
-  const defenders = xi.filter((p) => p.position === "DF" || p.position === "GK");
+  /* slotAssign อาจเป็นตำแหน่งละเอียด (DL/AMR/...) หรือกลุ่มหยาบ (เซฟเก่า) — แปลงเป็นกลุ่มก่อนแบ่งสายรุก/รับ */
+  const slotGroupOf = (p) => POS_GROUP[slotAssign?.[p.id]] || p.position;
+  const oopOf = (p) => playerOopMult(p, slotAssign?.[p.id]);
+  const attackers = xi.filter((p) => slotGroupOf(p) === "FW" || slotGroupOf(p) === "MF");
+  const defenders = xi.filter((p) => slotGroupOf(p) === "DF" || slotGroupOf(p) === "GK");
   const avg = (arr, key) => (arr.length ? arr.reduce((s, p) => s + p[key], 0) / arr.length : 45);
   const attack = attackers.length
-    ? attackers.reduce((s, p) => s + p.attack * (ROLE_ATK_MULT[p.role] || 1), 0) / attackers.length
+    ? attackers.reduce((s, p) => s + p.attack * roleAttackDefenseMult(p).atk * oopOf(p), 0) / attackers.length
     : avg(xi, "attack");
   const defense = defenders.length
-    ? defenders.reduce((s, p) => s + p.defense * (ROLE_DEF_MULT[p.role] || 1), 0) / defenders.length
+    ? defenders.reduce((s, p) => s + p.defense * roleAttackDefenseMult(p).def * oopOf(p), 0) / defenders.length
     : avg(xi, "defense");
   const avgStamina = avg(xi, "stamina");
   const avgMorale = avg(xi, "morale");
@@ -512,15 +2197,15 @@ function expectedGoalsFull(homeCtx, awayCtx) {
   return { xgHome, xgAway };
 }
 
-function buildMatchContext(team, squad, xiIds, opponentFormation, isHome, chemistry) {
-  const { attack, defense, avgStamina, avgMorale } = teamAttackDefense(squad, xiIds);
+function buildMatchContext(team, squad, xiIds, opponentFormation, isHome, chemistry, slotAssign) {
+  const { attack, defense, avgStamina, avgMorale } = teamAttackDefense(squad, xiIds, slotAssign);
   const mult = teamPerformanceMult({ formation: team.formation, manager: team.manager, avgStamina, avgMorale, chemistry, isHome, opponentFormation });
   return { effAttack: attack * mult, effDefense: defense * mult, mult, avgStamina, avgMorale };
 }
 
-function simulateInstant(homeTeam, homeSquad, homeXI, awayTeam, awaySquad, awayXI, homeChem, awayChem) {
-  const hc = buildMatchContext(homeTeam, homeSquad, homeXI, awayTeam.formation, true, homeChem);
-  const ac = buildMatchContext(awayTeam, awaySquad, awayXI, homeTeam.formation, false, awayChem);
+function simulateInstant(homeTeam, homeSquad, homeXI, awayTeam, awaySquad, awayXI, homeChem, awayChem, homeSlotAssign, awaySlotAssign) {
+  const hc = buildMatchContext(homeTeam, homeSquad, homeXI, awayTeam.formation, true, homeChem, homeSlotAssign);
+  const ac = buildMatchContext(awayTeam, awaySquad, awayXI, homeTeam.formation, false, awayChem, awaySlotAssign);
   const { xgHome, xgAway } = expectedGoalsFull(hc, ac);
   return { homeGoals: poisson(xgHome), awayGoals: poisson(xgAway) };
 }
@@ -530,6 +2215,10 @@ function isMarketOpen(date = new Date()) {
   const h = date.getHours() + date.getMinutes() / 60;
   return (h >= 12 && h < 14) || (h >= 18 && h < 22);
 }
+function resolveMarketOpen(career, date = new Date()) {
+  if (career?.playMode === "sandbox") return true;
+  return isMarketOpen(date);
+}
 function nextMarketOpenLabel(date = new Date()) {
   const h = date.getHours() + date.getMinutes() / 60;
   if (h < 12) return "เปิด 12:00 น.";
@@ -538,13 +2227,14 @@ function nextMarketOpenLabel(date = new Date()) {
 }
 /* pick who scored, biased toward attacking positions, and log a milestone news line for the player's club (kept
    to the user's own club so the news feed stays about players you actually care about, not all 32 clubs) */
-function pickScorer(squad, xiIds) {
+function pickScorer(squad, xiIds, markedPlayerId) {
   const xi = squad.filter((p) => xiIds.includes(p.id));
   if (!xi.length) return null;
   const weighted = [];
   xi.forEach((p) => {
-    const w = p.position === "FW" ? 5 : p.position === "MF" ? 3 : p.position === "DF" ? 1 : 0.3;
-    for (let i = 0; i < Math.round(w); i++) weighted.push(p);
+    let w = p.position === "FW" ? 5 : p.position === "MF" ? 3 : p.position === "DF" ? 1 : 0.3;
+    if (markedPlayerId && p.id === markedPlayerId) w *= 0.5; // ถูกประกบตัว — โอกาสเป็นผู้ทำประตูลดลง
+    for (let i = 0; i < Math.round(Math.max(w, 0.3)); i++) weighted.push(p);
   });
   return weighted.length ? choice(weighted) : xi[0];
 }
@@ -561,8 +2251,49 @@ function attributeGoals(c, squad, xiIds, count) {
     const scorer = pickScorer(squad, xiIds);
     if (!scorer) continue;
     scorer.careerGoals = (scorer.careerGoals || 0) + 1;
+    scorer.seasonGoals = (scorer.seasonGoals || 0) + 1;
+    if (scorer.teamId === c.userTeamId) {
+      c.monthlyGoals = c.monthlyGoals || {};
+      c.monthlyGoals[scorer.id] = (c.monthlyGoals[scorer.id] || 0) + 1;
+      c.monthlyApps = c.monthlyApps || {};
+      c.monthlyApps[scorer.id] = (c.monthlyApps[scorer.id] || 0) + 1;
+    }
     checkMilestone(c, scorer, "goals");
   }
+}
+function checkBenchUnhappiness(c, squad, xiIds) {
+  if (!squad.some((p) => p.teamId === c.userTeamId)) return;
+  squad.filter((p) => p.teamId === c.userTeamId && p.rating > 60).forEach((p) => {
+    const hist = p.appearHistory || [];
+    let benchStreak = 0;
+    for (const v of hist) { if (v) break; benchStreak += 1; }
+    if (benchStreak < 3) return;
+    if (benchStreak === 3) {
+      p.morale = clamp(p.morale - 3, 10, 99);
+      c.log = [`😤 ${p.name} ไม่พอใจ — นั่งสำรองติดต่อกัน ${benchStreak} นัด (OVR ${p.rating})`, ...c.log];
+    }
+  });
+}
+function runMonthlyAwards(c) {
+  const squad = c.players.filter((p) => p.teamId === c.userTeamId);
+  const goals = c.monthlyGoals || {};
+  const apps = c.monthlyApps || {};
+  const withApps = squad.filter((p) => (apps[p.id] || 0) > 0);
+  if (!withApps.length) return c;
+  const topScorer = [...withApps].sort((a, b) => (goals[b.id] || 0) - (goals[a.id] || 0))[0];
+  const potm = [...withApps].sort((a, b) => {
+    const sa = (goals[a.id] || 0) * 3 + (apps[a.id] || 0) + a.rating * 0.05;
+    const sb = (goals[b.id] || 0) * 3 + (apps[b.id] || 0) + b.rating * 0.05;
+    return sb - sa;
+  })[0];
+  const monthNum = Math.floor(c.day / 28);
+  const lines = [`📅 รางวัลประจำเดือน (ช่วงที่ ${monthNum})`];
+  if (topScorer && (goals[topScorer.id] || 0) > 0) lines.push(`⚽ ดาวยิง: ${topScorer.name} (${goals[topScorer.id]} ประตู)`);
+  if (potm) lines.push(`⭐ นักเตะยอดเยี่ยม: ${potm.name}`);
+  c.log = [...lines, ...c.log];
+  c.monthlyGoals = {};
+  c.monthlyApps = {};
+  return c;
 }
 
 function genTransferListing(teams, excludeTeamId) {
@@ -582,16 +2313,43 @@ function genTransferListing(teams, excludeTeamId) {
 
 /* ============================== CAREER BOOTSTRAP ============================== */
 const LEAGUE_NAMES = ["Master League", "Challenger League"];
-function buildLeague(division, teams) {
+function buildLeague(division, teams, legendLeagueId) {
   const teamIds = teams.filter((t) => t.division === division).map((t) => t.id);
   const table = {};
   teamIds.forEach((id) => { table[id] = { played: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 }; });
-  return { division, name: LEAGUE_NAMES[division], fixtures: buildSeasonFixtures(teamIds), table };
+  const name = division === 0 && legendLeagueId
+    ? `Master · ${legendLeagueLabel(legendLeagueId)}`
+    : LEAGUE_NAMES[division];
+  return { division, name, fixtures: buildSeasonFixtures(teamIds), table };
 }
 function standingsForDivision(c, division) {
   return c.teams.filter((t) => t.division === division)
     .map((t) => ({ team: t, ...c.leagues[division].table[t.id], gd: c.leagues[division].table[t.id].gf - c.leagues[division].table[t.id].ga }))
     .sort((a, b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf);
+}
+
+function getRecentMatchResults(c, division, userTeamId, max = 14) {
+  const league = c.leagues[division];
+  const results = [];
+  for (let day = c.day; day >= 1 && results.length < max; day -= 1) {
+    const round = league.fixtures.find((r) => r.day === day);
+    if (!round) continue;
+    round.matches.filter((m) => m.played).forEach((m) => {
+      const home = c.teams.find((t) => t.id === m.home);
+      const away = c.teams.find((t) => t.id === m.away);
+      if (home && away) {
+        results.push({
+          day, home, away, homeGoals: m.homeGoals, awayGoals: m.awayGoals,
+          isUser: m.home === userTeamId || m.away === userTeamId,
+        });
+      }
+    });
+  }
+  return results;
+}
+
+function isMatchLogLine(line) {
+  return /^[A-Z0-9]{2,4} \d+ - \d+/.test(line) || line.includes("⚽") || line.includes("ลงสนาม") || line.includes("นัด");
 }
 
 /* ============================== CHAMP MASTER (knockout cup) ==============================
@@ -644,8 +2402,8 @@ function runChampMaster(c, masterStandings) {
       roundMatches.push({ a: A.short, b: B.short, gA, gB, extraTime, winnerShort: winner.short });
       if (size === 2) { // this was the final
         c.log = [`🏆 Champ Master: ${winner.name} คว้าแชมป์! ชนะ ${loser.name} ${gA >= gB ? gA : gB}-${gA >= gB ? gB : gA}${extraTime ? " (ต่อเวลา/จุดโทษ)" : ""}`, ...c.log];
-        if (winner.id === c.userTeamId) { c.budget += payouts.champion; userNote = `🏆 ทีมคุณคว้าแชมป์ Champ Master! รับเงินรางวัล ${formatMoney(payouts.champion)}`; }
-        if (loser.id === c.userTeamId) { c.budget += payouts.runnerUp; userNote = `🥈 ทีมคุณเป็นรองแชมป์ Champ Master รับเงินรางวัล ${formatMoney(payouts.runnerUp)}`; }
+        if (winner.id === c.userTeamId) { c.budget += payouts.champion; userNote = `🏆 ทีมคุณคว้าแชมป์ Champ Master! รับเงินรางวัล ${formatMoney(payouts.champion)}`; awardTrophy(c, "champ_master"); }
+        if (loser.id === c.userTeamId) { c.budget += payouts.runnerUp; userNote = `🥈 ทีมคุณเป็นรองแชมป์ Champ Master รับเงินรางวัล ${formatMoney(payouts.runnerUp)}`; awardTrophy(c, "champ_master_runnerup"); }
       } else {
         const payout = payouts[size];
         if (loser.id === c.userTeamId) { c.budget += payout; userNote = `Champ Master: ทีมคุณตกรอบที่ ${roundNames[size]} รับเงินรางวัล ${formatMoney(payout)}`; }
@@ -657,6 +2415,65 @@ function runChampMaster(c, masterStandings) {
   c.log = [`⚽ Champ Master ${roundNames[16]} เริ่มแล้ว — 8 สโมสรจาก Master League ของคุณ พบกับ 8 แชมป์จำลองจากเซิร์ฟเวอร์อื่น`, ...c.log];
   if (userNote) c.log = [userNote, ...c.log];
   c.lastChampMaster = { season: c.season, rounds };
+  return c;
+}
+
+/* ---------- trophy cabinet ---------- */
+const TROPHY_DEFS = {
+  master_champion: { icon: "🏆", label: "แชมป์ Master League", color: "#d4af37" },
+  challenger_champion: { icon: "🥇", label: "แชมป์ Challenger League", color: "#e0a458" },
+  promotion: { icon: "⬆️", label: "เลื่อนชั้นสู่ Master League", color: "#6fae5a" },
+  socker_cup: { icon: "🍺", label: "แชมป์ Socker Cup", color: "#e0a458" },
+  champ_master: { icon: "🌟", label: "แชมป์ Champ Master", color: "#d4af37" },
+  champ_master_runnerup: { icon: "🥈", label: "รองแชมป์ Champ Master", color: "#a9bdb1" },
+};
+function awardTrophy(c, trophyId, season) {
+  if (!c.trophyCabinet) c.trophyCabinet = [];
+  c.trophyCabinet.push({ id: trophyId, season: season ?? c.season, wonAt: Date.now() });
+}
+
+/* Socker Cup — domestic knockout mid-season (day 15), top 8 of user's division */
+const SOCKER_CUP_PRIZES = { 8: 500000, 4: 800000, 2: 1200000, 1: 2000000 };
+function runSockerCup(c) {
+  if (c.sockerCupSeason === c.season) return c;
+  const uT = c.teams.find((t) => t.id === c.userTeamId);
+  const standings = standingsForDivision(c, uT.division);
+  let field = standings.slice(0, 8).map((s) => ({
+    id: s.team.id, name: s.team.name, short: s.team.short,
+    strength: teamStrength(c, s.team.id),
+  }));
+  field = field.sort(() => Math.random() - 0.5);
+  const roundLog = [];
+  while (field.length > 1) {
+    const size = field.length;
+    const winners = [];
+    for (let i = 0; i < field.length; i += 2) {
+      const A = field[i], B = field[i + 1];
+      if (!B) { winners.push(A); continue; }
+      const { gA, gB } = simulateChampMatch(A.strength, B.strength);
+      const winner = gA >= gB ? A : B;
+      const loser = gA >= gB ? B : A;
+      winners.push(winner);
+      roundLog.push(`${A.short} ${gA}-${gB} ${B.short} → ${winner.short}`);
+      const prize = size === 2
+        ? (winner.id === c.userTeamId ? SOCKER_CUP_PRIZES[1] : SOCKER_CUP_PRIZES[2])
+        : (SOCKER_CUP_PRIZES[size] || 500000);
+      if (loser.id === c.userTeamId) {
+        c.budget += prize;
+        c.log = [`🍺 Socker Cup: ตกรอบรอบ ${size} ทีม รับ ${formatMoney(prize)}`, ...c.log];
+      }
+      if (winner.id === c.userTeamId) {
+        c.budget += prize;
+        const label = size === 2 ? "คว้าแชมป์ Socker Cup" : `ผ่านรอบ ${size} ทีม`;
+        c.log = [`🏆 Socker Cup: ${label}! +${formatMoney(prize)}`, ...c.log];
+        if (size === 2) awardTrophy(c, "socker_cup");
+      }
+    }
+    field = winners;
+  }
+  c.sockerCupSeason = c.season;
+  c.lastSockerCup = { season: c.season, rounds: roundLog };
+  c.log = [`🍺 Socker Cup วันนี้ — knockout 8 ทีมจาก ${uT.division === 0 ? "Master" : "Challenger"} League`, ...c.log];
   return c;
 }
 
@@ -693,6 +2510,34 @@ function rolloverSeason(c) {
 
   c = runChampMaster(c, masterStandings);
 
+  const relegatedTeams = masterStandings.slice(-4).map((s) => s.team);
+  const promotedTeams = challengerStandings.slice(0, 4).map((s) => s.team);
+  processSeasonEndFans(c, prevPos, prevRow, prevDivision,
+    !!promotedTeams.find((t) => t.id === c.userTeamId),
+    !!relegatedTeams.find((t) => t.id === c.userTeamId));
+  awardSeasonStaffTickets(c, prevPos);
+
+  // --- trophy cabinet: league titles + promotion ---
+  if (prevPos === 1) awardTrophy(c, prevDivision === 0 ? "master_champion" : "challenger_champion");
+  if (promotedTeams.find((t) => t.id === c.userTeamId)) awardTrophy(c, "promotion");
+
+  // --- season history: snapshot ก่อนล้างตาราง ---
+  const uSquadHist = c.players.filter((p) => p.teamId === c.userTeamId);
+  const topScorer = [...uSquadHist].sort((a, b) => (b.seasonGoals || 0) - (a.seasonGoals || 0))[0];
+  if (!c.seasonHistory) c.seasonHistory = [];
+  c.seasonHistory.push({
+    season: c.season,
+    division: prevDivision,
+    pos: prevPos,
+    pts: prevRow?.pts ?? 0,
+    w: prevRow?.w ?? 0, d: prevRow?.d ?? 0, l: prevRow?.l ?? 0,
+    gf: prevRow?.gf ?? 0, ga: prevRow?.ga ?? 0,
+    topScorerName: topScorer && (topScorer.seasonGoals || 0) > 0 ? topScorer.name : null,
+    topScorerGoals: topScorer?.seasonGoals || 0,
+    trophies: (c.trophyCabinet || []).filter((t) => t.season === c.season).map((t) => t.id),
+    budgetEnd: c.budget,
+  });
+
   // evaluate last season's chosen goal before wiping the tables
   if (c.seasonGoal) {
     const def = SEASON_GOAL_TEMPLATES.find((g) => g.id === c.seasonGoal);
@@ -706,8 +2551,8 @@ function rolloverSeason(c) {
   c.seasonGoal = null;
 
   c.season += 1; c.day = 1;
-  const relegated = masterStandings.slice(-4).map((s) => s.team);
-  const promoted = challengerStandings.slice(0, 4).map((s) => s.team);
+  const relegated = relegatedTeams;
+  const promoted = promotedTeams;
   relegated.forEach((t) => { t.division = 1; });
   promoted.forEach((t) => { t.division = 0; });
   const moveLines = [];
@@ -717,7 +2562,7 @@ function rolloverSeason(c) {
   if (promoted.find((t) => t.id === c.userTeamId)) moveLines.push(`🎉 ทีมของคุณเลื่อนชั้นสู่ Master League!`);
   c.log = [...moveLines, ...c.log];
 
-  c.leagues = [buildLeague(0, c.teams), buildLeague(1, c.teams)];
+  c.leagues = [buildLeague(0, c.teams, c.legendLeagueId), buildLeague(1, c.teams, c.legendLeagueId)];
 
   // age progression, growth curve, retirement, youth replacement (whole league, keeps bots fair too)
   const retiredNames = [];
@@ -729,27 +2574,27 @@ function rolloverSeason(c) {
     else bumpAttrs(p, -(p.age - 29) * (rand(20, 40) / 100));
     const ageMult = p.age <= 23 ? 1.35 : p.age <= 28 ? 1.05 : p.age <= 31 ? 0.65 : 0.3;
     p.value = Math.round((p.rating * p.rating * 380 * ageMult) / 1000) * 1000;
-    p.wage = Math.round((p.rating * p.rating * 9) / 100) * 100;
+    p.wage = computePlayerWage(p.rating);
     return true;
   });
   c.teams.forEach((t) => {
-    const squadCount = c.players.filter((p) => p.teamId === t.id).length;
-    let toAdd = Math.max(0, 14 - squadCount);
-    retiredNames.forEach(() => { if (Math.random() < 0.6 && toAdd < 3) toAdd++; });
-    for (let i = 0; i < toAdd; i++) c.players.push(genPlayer(choice(["GK", "DF", "MF", "FW"]), t.tier, t.id, rand(16, 18), c.day));
+    const added = topUpTeamSquad(c.players, t.id, t.tier, c.day);
+    if (added.length) c.log = [`🆕 ${t.short} เซ็นดาวรุ่ง ${added.length} คนเติมสควอด`, ...c.log];
   });
   c.teams.forEach((t) => { c.lineups[t.id] = getBestXI(c.players.filter((p) => p.teamId === t.id), t.formation); });
-  if (retiredNames.length) c.log = [`👋 ฤดูกาลนี้มีนักเตะรีไทร์ ${retiredNames.length} คน มีดาวรุ่งเสิร์ฟเข้าทีมบางส่วนแล้ว`, ...c.log];
+  if (retiredNames.length) c.log = [`👋 ฤดูกาลนี้มีนักเตะรีไทร์ ${retiredNames.length} คน`, ...c.log];
+  c.players.forEach((p) => { p.seasonGoals = 0; });
+  c.monthlyGoals = {};
+  c.monthlyApps = {};
+  c.sockerCupSeason = null;
+  c = runYouthIntake(c);
   c.log = [`เริ่มฤดูกาลที่ ${c.season} แล้ว!`, ...c.log];
   return c;
 }
 
 function createNewCareer(customClub) {
-  const masterBots = MASTER_TEAM_DEFS.map((t, idx) => ({
-    id: "m" + idx, name: t.name, short: t.short, color: t.color, secondaryColor: C.chalk, logoIndex: idx % 10, tier: t.tier,
-    division: 0, isUser: false, formation: "4-4-2", budget: rand(4000000, 9000000),
-    manager: genManager(), autoMode: true, chemistry: 50,
-  }));
+  const legendLeagueId = "england";
+  const masterBots = createLegendMasterTeams(legendLeagueId, 1);
   const challengerBots = CHALLENGER_TEAM_DEFS.map((t, idx) => ({
     id: "c" + idx, name: t.name, short: t.short, color: t.color, secondaryColor: C.chalk, logoIndex: idx % 10, tier: t.tier,
     division: 1, isUser: false, formation: "4-4-2", budget: rand(1500000, 4000000),
@@ -758,32 +2603,51 @@ function createNewCareer(customClub) {
   const userTeam = {
     id: "t_user", name: customClub.name, short: customClub.short, color: customClub.primaryColor,
     secondaryColor: customClub.secondaryColor, shirtColor: customClub.shirtColor, shortsColor: customClub.shortsColor,
-    logoIndex: customClub.logoIndex, tier: -3, division: 1, isUser: true, formation: "4-4-2", budget: 3000000,
-    manager: genManager(), autoMode: false, chemistry: 50,
+    logoIndex: customClub.logoIndex, tier: -3, division: 1, isUser: true, formation: "4-4-2", budget: STARTING_BUDGET,
+    manager: null, autoMode: false, chemistry: 50,
   };
   const teams = [...masterBots, ...challengerBots, userTeam];
   let players = [];
-  teams.forEach((t) => { players = players.concat(genSquad(t.id, t.tier)); });
-  const leagues = [buildLeague(0, teams), buildLeague(1, teams)];
+  teams.forEach((t) => {
+    if (t.division === 0) players = players.concat(buildLegendSquadForTeam(t.id, legendLeagueId, t.legendTeamKey, t.tier, 1));
+    else players = players.concat(genSquad(t.id, t.tier));
+  });
+  const leagues = [buildLeague(0, teams, legendLeagueId), buildLeague(1, teams, legendLeagueId)];
   const lineups = {};
-  teams.forEach((t) => { lineups[t.id] = getBestXI(players.filter((p) => p.teamId === t.id), t.formation); });
+  const benchLineups = {};
+  teams.forEach((t) => {
+    const sq = players.filter((p) => p.teamId === t.id);
+    lineups[t.id] = getBestXI(sq, t.formation);
+    if (t.id === userTeam.id) {
+      benchLineups[t.id] = Array.from({ length: MATCH_BENCH_SIZE }, (_, i) => {
+        const pick = sq.filter((p) => !lineups[t.id].includes(p.id)).sort((a, b) => b.rating - a.rating)[i];
+        return pick ? pick.id : null;
+      });
+    }
+  });
   const staff = {};
   teams.forEach((t) => { staff[t.id] = {}; });
   const coachOffers = {};
   STAFF_SPECS.forEach((spec) => { coachOffers[spec] = genCoach(spec); });
-  return {
+  const career = {
     season: 1, day: 1, userTeamId: userTeam.id,
-    teams, players, leagues, lineups, staff,
-    budget: 3000000, transferList: [], coachOffers, coachRerollCounts: {}, managerOffer: genManager(),
-    managerRerollCount: 0, scoutRerollCount: 0, academyManagerRerollCount: 0,
+    teams, players, leagues, lineups, benchLineups, staff,
+    budget: STARTING_BUDGET, transferList: [], coachOffers, coachRerollCounts: {}, managerOffer: genManager(),
+    managerRerollCount: 0, marketScoutRerollCount: 0, youthScoutRerollCount: 0, academyManagerRerollCount: 0,
     facilities: { fitness: 1, training: 1, techLab: 1, medical: 1 },
     weeklyQuests: pickWeeklyQuests(), weeklyProgress: { wins: 0, goals: 0, cleanSheets: 0 }, weeklyRewarded: [],
     liveMatch: null,
     // training program: 10-slot calendar, one slot consumed per game day (≈1 real hour, 9:00-20:00)
     trainingPlan: Array.from({ length: 10 }, (_, i) => (i % 4 === 3 ? "REST" : "BALANCED")),
     autoTraining: true,
-    // youth academy
-    scout: null, scoutOffer: genScout(),
+    individualFocus: {}, trainingCampCooldownDay: 0,
+    // บอร์ดซ้อมรายตำแหน่ง — คิวท่าซ้อมต่อกลุ่มตำแหน่ง + วันล่าสุดที่กดซ้อมเอง
+    drillPlans: defaultDrillPlans(), drillDoneDay: {},
+    // youth academy + market scout (separate)
+    marketScout: null, marketScoutOffer: genScout(),
+    youthScout: null, youthScoutOffer: genScout(),
+    scoutFinds: [],
+    scoutSearchDay: 0,
     academyManager: null, academyManagerOffer: genManager(true),
     academyPlayers: [], youthProspects: [], loans: [], seasonAcademySales: 0,
     // season goal (pick one each season for a budget bonus)
@@ -793,36 +2657,279 @@ function createNewCareer(customClub) {
     playMode: "sandbox",
     onlineUnlocked: false,
     onlineUnlockedAt: null,
-    log: [`ยินดีต้อนรับสู่ตำแหน่งไดเรคเตอร์ฟุตบอลของ ${userTeam.name}! เริ่มในโลกจำลอง (เล่นคนเดียวกับบอท) — สร้างมูลค่าสโมสรรวมทุกอย่างถึง ${formatMoney(ONLINE_UNLOCK_TEAM_VALUE)} เพื่อปลดล็อกออนไลน์`, `เริ่มต้นที่ Challenger League (ลีกรอง) ไต่อันดับเพื่อเลื่อนชั้นสู่ Master League`],
+    legendLeagueId,
+    legendOwnership: initLegendOwnership(legendLeagueId, teams, players),
+    pendingLeaguePick: false,
+    matchPrep: defaultMatchPrep(),
+    fanBase: 2500, sponsorTier: 0, badSeasonStreak: 0, lastSeasonSnapshot: null, fanDeltaToday: 0,
+    monthlyGoals: {}, monthlyApps: {}, sockerCupSeason: null,
+    saveVersion: SAVE_VERSION,
+    gameVersion: GAME_VERSION,
+    uiPrefs: { marketSub: "trade" },
+    squadOwnTab: true,
+    ...defaultStaffCardState(1),
+    log: [`ยินดีต้อนรับสู่ตำแหน่งไดเรคเตอร์ฟุตบอลของ ${userTeam.name}! เริ่มในโลกจำลอง — Master League คือ ${legendLeagueLabel(legendLeagueId)} (ทีม/ซูเปอร์สตาร์ล้อโลกจริง)`, `งบเริ่มต้น ${formatMoney(STARTING_BUDGET)}`, `สร้างมูลค่าสโมสรรวมถึง ${formatMoney(ONLINE_UNLOCK_TEAM_VALUE)} เพื่อปลดล็อกออนไลน์`, `เริ่มต้นที่ Challenger League ไต่อันดับเพื่อเลื่อนชั้นสู่ Master League`, `👥 ฐานแฟนบอลเริ่มต้น 2,500 คน`, `🎫 ได้ตั๋วสุ่มการ์ดสตาฟ ${STARTING_STAFF_TICKETS} ใบ · เปิดฟรีวันละ ${DAILY_FREE_STAFF_DRAWS} ครั้ง`],
   };
+  return bootstrapStarterStaff(career);
 }
 
-/* ============================== UI PRIMITIVES ============================== */
-function Panel({ children, style }) {
-  return <div style={{ background: `linear-gradient(165deg, ${C.panel}, ${C.panel2})`, border: `1px solid ${C.steel}`, borderRadius: 14, padding: 15, boxShadow: "0 3px 10px rgba(0,0,0,.22)", ...style }}>{children}</div>;
+/* ============================== UI PRIMITIVES (FM Mobile) ============================== */
+function Panel({ children, style, accent, onClick }) {
+  return (
+    <div onClick={onClick} style={{
+      background: C.panel, border: `1px solid ${C.fmBorder}`, borderRadius: 8,
+      borderLeft: accent ? `3px solid ${accent}` : `1px solid ${C.fmBorder}`,
+      padding: 12, ...style,
+    }}>{children}</div>
+  );
 }
-function SectionLabel({ children, style }) { return <div style={{ fontFamily: DISPLAY_FONT, color: C.amber, fontSize: 13, letterSpacing: 1.5, textTransform: "uppercase", marginBottom: 10, ...style }}>{children}</div>; }
+function SectionLabel({ children, style, sub }) {
+  return (
+    <div style={{ marginBottom: sub ? 6 : 10, ...style }}>
+      <div style={{ fontFamily: FM_FONT, color: C.textDim, fontSize: 10, fontWeight: 600, letterSpacing: 1.2, textTransform: "uppercase" }}>{children}</div>
+      {sub && <div style={{ fontSize: 10, color: C.steelLight, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+function fmBtnPrimary(extra = {}) {
+  return { width: "100%", background: C.amber, color: "#0a1210", border: "none", borderRadius: 6, padding: "12px 0", fontFamily: FM_FONT, fontSize: 13, fontWeight: 700, cursor: "pointer", letterSpacing: 0.3, ...extra };
+}
+function fmBtnGhost(extra = {}) {
+  return { flex: 1, background: "transparent", color: C.chalk, border: `1px solid ${C.steel}`, borderRadius: 6, padding: "10px 0", fontFamily: FM_FONT, fontSize: 12, fontWeight: 600, cursor: "pointer", ...extra };
+}
+function btnStyle(bg, fg) { return fmBtnPrimary({ background: bg, color: fg }); }
+
+function StarGlyphs({ count, max = STAR_MAX, hollow = false, size = 10 }) {
+  const c = hollow ? C.textDim : starColor(count);
+  return (
+    <span style={{ display: "inline-flex", gap: 1, lineHeight: 1 }} aria-label={`${count} ดาว`}>
+      {Array.from({ length: max }, (_, i) => (
+        <span key={i} style={{ fontSize: size, color: i < count ? c : C.steel, opacity: i < count ? 1 : 0.35 }}>
+          {hollow ? "☆" : "★"}
+        </span>
+      ))}
+    </span>
+  );
+}
+function PlayerStarsRow({ p, compact }) {
+  const { current, potential, isWonderkid } = getPlayerStarProfile(p);
+  if (compact) {
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        <StarGlyphs count={current} size={9} />
+        {potential > current && <span style={{ fontSize: 9, color: C.textDim }}>→<StarGlyphs count={potential} hollow size={9} /></span>}
+      </span>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 9, color: C.textDim, minWidth: 36 }}>ตอนนี้</span>
+        <StarGlyphs count={current} size={11} />
+        <span style={{ fontSize: 9, color: starColor(current), fontWeight: 600 }}>{STAR_LABEL_TH[current]}</span>
+        <span style={{ fontSize: 9, color: C.textDim, fontFamily: MONO_FONT }}>({p.rating})</span>
+      </div>
+      {potential > current && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 9, color: C.textDim, minWidth: 36 }}>ศักยภาพ</span>
+          <StarGlyphs count={potential} hollow size={11} />
+          <span style={{ fontSize: 9, color: C.textDim, fontFamily: MONO_FONT }}>({p.potential})</span>
+        </div>
+      )}
+      {isWonderkid && <span style={{ fontSize: 9, color: C.purple, fontWeight: 600 }}>🌟 Wonderkid</span>}
+    </div>
+  );
+}
+
+function FMHeader({ uTeam, career, userLeague, budget, wageBill, sockerCoins = 0, onOpenShop }) {
+  const day = Math.min(career.day, userLeague.fixtures.length);
+  const total = userLeague.fixtures.length;
+  return (
+    <div style={{ background: C.pitch, borderBottom: `1px solid ${C.fmBorder}`, position: "sticky", top: 0, zIndex: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px 8px" }}>
+        <ClubBadge team={uTeam} size={32} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: FM_FONT, fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{uTeam.name}</div>
+          <div style={{ fontSize: 10, color: C.textDim }}>{userLeague.name} · ฤดูกาล {career.season}</div>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenShop}
+          style={{
+            background: "rgba(212,175,55,.12)", border: `1px solid ${C.gold}`, borderRadius: 8,
+            padding: "4px 8px", cursor: "pointer", marginRight: 4,
+          }}
+        >
+          <div style={{ fontSize: 10, color: C.gold, fontWeight: 700, fontFamily: MONO_FONT }}>🪙 {sockerCoins}</div>
+        </button>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontFamily: MONO_FONT, color: C.amber, fontSize: 14, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{formatMoney(budget)}</div>
+          <div style={{ fontSize: 9, color: C.textDim }}>ค่าเหนื่อย {formatMoney(wageBill)}/วัน</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", padding: "0 14px 8px", gap: 8, fontSize: 10, color: C.textDim, fontFamily: MONO_FONT }}>
+        <span>วัน {day}/{total}</span>
+        <span>·</span>
+        <span>{career.playMode === "online" ? "ออนไลน์" : "โลกจำลอง"}</span>
+        <span style={{ marginLeft: "auto", color: C.amber }}>{uTeam.short}</span>
+      </div>
+    </div>
+  );
+}
+
+function FMStandingsTable({ standings, uTeamId, compact }) {
+  const rows = compact ? standings : standings;
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: MONO_FONT, fontVariantNumeric: "tabular-nums" }}>
+      <thead>
+        <tr style={{ color: C.textDim, fontSize: 9, textTransform: "uppercase", borderBottom: `1px solid ${C.steel}` }}>
+          <th style={{ padding: "5px 6px", textAlign: "left", fontWeight: 600 }}>#</th>
+          <th style={{ padding: "5px 4px", textAlign: "left", fontWeight: 600 }}>ทีม</th>
+          <th style={{ padding: "5px 2px", textAlign: "center" }}>น</th>
+          <th style={{ padding: "5px 2px", textAlign: "center" }}>ช</th>
+          <th style={{ padding: "5px 2px", textAlign: "center" }}>+/-</th>
+          <th style={{ padding: "5px 6px", textAlign: "center" }}>คะแนน</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((s, i) => {
+          const isUser = s.team.id === uTeamId;
+          return (
+            <tr key={s.team.id} style={{ background: isUser ? C.fmRowHi : "transparent", borderTop: `1px solid ${C.steel}` }}>
+              <td style={{ padding: "4px 6px", color: C.textDim }}>{i + 1}</td>
+              <td style={{ padding: "4px 4px", fontFamily: FM_FONT, fontWeight: isUser ? 700 : 400, color: isUser ? C.amber : C.chalk, fontSize: 11 }}>{s.team.short}</td>
+              <td style={{ textAlign: "center", color: C.textDim }}>{s.played}</td>
+              <td style={{ textAlign: "center", color: C.textDim }}>{s.w}</td>
+              <td style={{ textAlign: "center", color: s.gd > 0 ? C.good : s.gd < 0 ? C.crimson : C.textDim }}>{s.gd > 0 ? `+${s.gd}` : s.gd}</td>
+              <td style={{ textAlign: "center", color: C.amber, fontWeight: 700 }}>{s.pts}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 function RatingBadge({ value }) {
   const bg = value >= 78 ? C.good : value >= 60 ? C.amber : C.crimson;
   return <div style={{ fontFamily: MONO_FONT, fontWeight: 700, fontSize: 13, color: "#08150e", background: bg, borderRadius: 7, width: 30, height: 22, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, boxShadow: "0 1px 3px rgba(0,0,0,.3)" }}>{value}</div>;
 }
-function btnStyle(bg, fg) { return { width: "100%", background: bg, color: fg, border: "none", borderRadius: 12, padding: "13px 0", fontFamily: DISPLAY_FONT, fontSize: 14, letterSpacing: 1, cursor: "pointer", textTransform: "uppercase", boxShadow: "0 3px 10px rgba(0,0,0,.25)", transition: "transform .12s ease, filter .12s ease" }; }
 /* renders any team's crest: a rounded badge with a gradient fill + one of the 10 selectable icons */
-function ClubBadge({ team, size = 40 }) {
-  const logo = LOGO_ICONS[(team.logoIndex || 0) % LOGO_ICONS.length];
-  const secondary = team.secondaryColor || C.chalk;
+function TeamChip({ team }) {
   return (
-    <div style={{
-      width: size, height: size, borderRadius: size * 0.28, flexShrink: 0,
-      background: `linear-gradient(155deg, ${team.color}, ${shadeColor(team.color, -22)})`,
-      display: "flex", alignItems: "center", justifyContent: "center",
-      boxShadow: "0 3px 8px rgba(0,0,0,.35)", border: `2px solid ${secondary}55`,
-    }}>
-      <svg viewBox="0 0 24 24" width={size * 0.52} height={size * 0.52}>
-        {logo.circle ? <circle cx="12" cy="12" r="9" fill={secondary} /> :
-          logo.ring ? <circle cx="12" cy="12" r="7.5" fill="none" stroke={secondary} strokeWidth="3" /> :
-          <path d={logo.path} fill={secondary} />}
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, minWidth: 64 }}>
+      <ClubBadge team={team} size={36} />
+      <div style={{ fontFamily: DISPLAY_FONT, fontSize: 11, fontWeight: 700, color: team.color || C.chalk, textAlign: "center", lineHeight: 1.2 }}>{team.short}</div>
+    </div>
+  );
+}
+
+/* ---------- Live scoreboard — โทนเขียวธีมเกม (FM pitch palette) ---------- */
+const SCOREBOARD = {
+  bar: C.panel,
+  barDeep: C.panel2,
+  border: C.steel,
+  accent: C.good,
+  accentDim: "#2d6b42",
+  scoreBg: C.chalk,
+  scoreText: C.pitchDark,
+  scoreSep: C.good,
+  scoreFlash: C.amber,
+  label: C.chalk,
+  labelDim: C.textDim,
+};
+
+function LiveScoreHexBadge({ team, size = 74 }) {
+  const h = Math.round(size * 1.14);
+  return (
+    <div style={{ width: size, height: h, position: "relative", flexShrink: 0, filter: "drop-shadow(0 5px 8px rgba(0,0,0,.45))" }}>
+      <svg viewBox="0 0 100 114" width={size} height={h} style={{ display: "block" }}>
+        <polygon points="50,1 99,29 99,85 50,113 1,85 1,29" fill={C.panel2} stroke={C.steelLight} strokeWidth="1.8" />
       </svg>
+      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "20% 24% 22%" }}>
+        <ClubBadge team={team} size={Math.round(size * 0.52)} />
+      </div>
+    </div>
+  );
+}
+
+function LiveScoreboard({ homeTeam, awayTeam, homeGoals, awayGoals, minute, half, isHalftime, goalFlash }) {
+  const homeFlash = goalFlash?.team === "home";
+  const awayFlash = goalFlash?.team === "away";
+  const statusLabel = isHalftime ? "พักครึ่ง" : `สด · ${half === 1 ? "ครึ่งแรก" : "ครึ่งหลัง"} · ${minute}'`;
+
+  return (
+    <div style={{ width: "100%", marginBottom: 12, display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 0, filter: "drop-shadow(0 6px 14px rgba(0,0,0,.35))" }}>
+      <LiveScoreHexBadge team={homeTeam} />
+
+      <div style={{ flex: 1, minWidth: 0, maxWidth: 520, display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <div style={{
+          background: `linear-gradient(180deg, ${C.steelLight}, ${SCOREBOARD.bar})`,
+          color: SCOREBOARD.label, fontSize: 9, fontWeight: 800, letterSpacing: 1.4,
+          padding: "3px 16px 2px", borderRadius: "4px 4px 0 0", textTransform: "uppercase", fontFamily: FM_FONT,
+          border: `1px solid ${SCOREBOARD.border}`, borderBottom: "none", marginBottom: -1, zIndex: 2,
+        }}>
+          {!isHalftime && <span style={{ color: SCOREBOARD.accent, marginRight: 6 }}>●</span>}
+          {statusLabel}
+        </div>
+
+        <div style={{ display: "flex", width: "100%", alignItems: "stretch", minHeight: 52 }}>
+          <div style={{
+            flex: 1, position: "relative",
+            background: `linear-gradient(180deg, ${SCOREBOARD.bar}, ${SCOREBOARD.barDeep})`,
+            display: "flex", alignItems: "center", justifyContent: "flex-end",
+            padding: "8px 10px 10px 8px", overflow: "hidden",
+            borderTop: `1px solid ${SCOREBOARD.border}`,
+          }}>
+            <div style={{
+              position: "absolute", left: 0, right: 0, bottom: 0, height: 6,
+              background: `linear-gradient(90deg, ${SCOREBOARD.accentDim}, ${SCOREBOARD.accent})`,
+              borderRadius: "0 0 0 4px",
+            }} />
+            <span style={{
+              fontFamily: DISPLAY_FONT, fontSize: 13, fontWeight: 800, color: SCOREBOARD.label, letterSpacing: 0.6,
+              textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%",
+            }}>{homeTeam.short || homeTeam.name}</span>
+          </div>
+
+          <div style={{
+            flexShrink: 0, background: SCOREBOARD.scoreBg, display: "flex", alignItems: "center", justifyContent: "center",
+            padding: "6px 14px 8px", minWidth: 108, borderTop: `3px solid ${SCOREBOARD.accent}`,
+            boxShadow: `inset 0 0 0 1px ${SCOREBOARD.border}`,
+          }}>
+            <span style={{
+              fontFamily: DISPLAY_FONT, fontSize: 30, fontWeight: 900, color: SCOREBOARD.scoreText, letterSpacing: 2,
+              lineHeight: 1, transform: homeFlash || awayFlash ? "scale(1.08)" : "scale(1)",
+              transition: "transform .2s ease",
+              textShadow: homeFlash || awayFlash ? `0 0 14px ${SCOREBOARD.scoreFlash}` : "none",
+            }}>
+              {String(homeGoals).padStart(2, "0")}
+              <span style={{ color: SCOREBOARD.scoreSep, fontWeight: 700, margin: "0 4px", fontSize: 22 }}>—</span>
+              {String(awayGoals).padStart(2, "0")}
+            </span>
+          </div>
+
+          <div style={{
+            flex: 1, position: "relative",
+            background: `linear-gradient(180deg, ${SCOREBOARD.bar}, ${SCOREBOARD.barDeep})`,
+            display: "flex", alignItems: "center", justifyContent: "flex-start",
+            padding: "8px 8px 10px 10px", overflow: "hidden",
+            borderTop: `1px solid ${SCOREBOARD.border}`,
+          }}>
+            <div style={{
+              position: "absolute", left: 0, right: 0, bottom: 0, height: 6,
+              background: `linear-gradient(90deg, ${SCOREBOARD.accent}, ${SCOREBOARD.accentDim})`,
+              borderRadius: "0 0 4px 0",
+            }} />
+            <span style={{
+              fontFamily: DISPLAY_FONT, fontSize: 13, fontWeight: 800, color: SCOREBOARD.label, letterSpacing: 0.6,
+              textTransform: "uppercase", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%",
+            }}>{awayTeam.short || awayTeam.name}</span>
+          </div>
+        </div>
+      </div>
+
+      <LiveScoreHexBadge team={awayTeam} />
     </div>
   );
 }
@@ -860,42 +2967,136 @@ export default function App({ onMigrateToServer } = {}) {
   const [loading, setLoading] = useState(true);
   const [gameEntered, setGameEntered] = useState(false);
   const [tab, setTab] = useState("dashboard");
+  const [marketSub, setMarketSub] = useState("trade");
   const [toast, setToast] = useState(null);
   const [now, setNow] = useState(Date.now());
+  const [leaguePickOpen, setLeaguePickOpen] = useState(false);
+  const [managerHireConfirm, setManagerHireConfirm] = useState(null);
+  const [mergeReport, setMergeReport] = useState(null); // { attempts: [{type, stars, success, card, chance}], auto: bool }
+  const [booting, setBooting] = useState(false);
+  const [loadMsg, setLoadMsg] = useState("กำลังโหลด...");
+  const [splashDone, setSplashDone] = useState(false);
   const toastTimer = useRef(null);
 
   useEffect(() => { const iv = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(iv); }, []);
   useEffect(() => {
+    if (loading) return;
+    const t = setTimeout(() => setSplashDone(true), 2000);
+    return () => clearTimeout(t);
+  }, [loading]);
+  useEffect(() => {
     (async () => {
-      try { const pr = await window.storage.get("profile_v1"); if (pr && pr.value) setProfile(JSON.parse(pr.value)); } catch (e) {}
+      try { const pr = await window.storage.get("profile_v1"); if (pr && pr.value) {
+        const p = JSON.parse(pr.value);
+        if (p.sockerCoins == null) p.sockerCoins = 0;
+        if (p.inventory == null) p.inventory = {};
+        if (p.shopBuyDay == null) p.shopBuyDay = "";
+        if (p.shopBuyCount == null) p.shopBuyCount = 0;
+        setProfile(p);
+      } } catch (e) {}
       try {
         const res = await window.storage.get("career_v3");
         if (res && res.value) {
           let c = JSON.parse(res.value);
           const elapsedHours = (Date.now() - (c.lastSeenAt || Date.now())) / 3600000;
-          const daysToSim = Math.min(Math.floor(elapsedHours), 60); // 1 real hour ≈ 1 game day, capped so catch-up never freezes the UI
+          const daysToSim = Math.min(Math.floor(elapsedHours), 7);
           if (daysToSim >= 1) {
+            setLoadMsg(`สรุปผล ${daysToSim} วันที่ไม่อยู่...`);
             const startDay = c.day, startSeason = c.season;
-            const logBefore = c.log; // full log before catch-up (oldest-first is bottom, newest at index 0)
+            const logBefore = c.log;
             for (let i = 0; i < daysToSim; i++) c = simulateOneDayFast(c);
-            const addedCount = c.log.length - logBefore.length; // new entries were unshifted to the front
+            const addedCount = c.log.length - logBefore.length;
             const newEntries = addedCount > 0 ? c.log.slice(0, addedCount) : [];
             const importantMarks = ["🎉", "⬇️", "⬆️", "😔", "🎯", "❌", "📄", "🏆", "🥈"];
             const highlights = newEntries.filter((l) => importantMarks.some((m) => l.startsWith(m))).slice(0, 8);
             const headline = `⏱ ระหว่างที่คุณไม่อยู่ ผ่านไป ${daysToSim} วันเกม (ฤดูกาล ${startSeason} วัน ${startDay} → ฤดูกาล ${c.season} วัน ${c.day})`;
             c.log = [headline, ...highlights, ...logBefore].slice(0, 60);
           }
+          setLoadMsg("เตรียมข้อมูลลีก...");
           c.lastSeenAt = Date.now();
-          c = migrateCareerSave(c);
+          try {
+            c = migrateCareerSave(c);
+          } catch (migrateErr) {
+            console.error("migrateCareerSave failed", migrateErr);
+            await window.storage.delete("career_v3");
+            throw migrateErr;
+          }
           setCareer(c);
+          setMarketSub(c.uiPrefs?.marketSub === "squad" ? "trade" : (c.uiPrefs?.marketSub || "trade"));
           window.storage.set("career_v3", JSON.stringify(c)).catch(() => {});
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error("career load failed", e);
+        window.storage.delete("career_v3").catch(() => {});
+      }
       setLoading(false);
     })();
   }, []);
 
   function saveProfile(p) { window.storage.set("profile_v1", JSON.stringify(p)).catch(() => {}); setProfile(p); }
+
+  function addSockerCoins(amount) {
+    const next = { ...profile, sockerCoins: (profile?.sockerCoins || 0) + amount };
+    saveProfile(next);
+    return next.sockerCoins;
+  }
+
+  function purchaseCoinPack(packId) {
+    const pack = COIN_PACKAGES.find((p) => p.id === packId);
+    if (!pack) return;
+    const total = addSockerCoins(pack.coins);
+    showToast(`ได้รับ ${pack.coins} Socker Coin! (รวม ${total} เหรียญ)`);
+  }
+
+  function buyShopItemToBag(itemId) {
+    const item = SHOP_ITEMS.find((i) => i.id === itemId);
+    if (!item) return;
+    const today = new Date().toDateString();
+    const boughtToday = shopBuyCountToday(profile);
+    if (boughtToday >= SHOP_DAILY_BUY_LIMIT) {
+      showToast(`ซื้อได้วันละ ${SHOP_DAILY_BUY_LIMIT} ครั้ง (ครบแล้ววันนี้)`);
+      return;
+    }
+    const coins = profile?.sockerCoins || 0;
+    if (coins < item.coinCost) {
+      showToast(`Socker Coin ไม่พอ (ต้องการ ${item.coinCost} เหรียญ)`);
+      return;
+    }
+    const next = {
+      ...profile,
+      inventory: { ...(profile?.inventory || {}) },
+      sockerCoins: coins - item.coinCost,
+      shopBuyDay: today,
+      shopBuyCount: (profile?.shopBuyDay === today ? (profile?.shopBuyCount || 0) : 0) + 1,
+    };
+    next.inventory[itemId] = (next.inventory[itemId] || 0) + 1;
+    saveProfile(next);
+    const left = SHOP_DAILY_BUY_LIMIT - next.shopBuyCount;
+    showToast(`${item.name} เข้ากระเป๋าแล้ว! (ซื้อได้อีก ${left} ครั้งวันนี้)`);
+  }
+
+  function useItemFromBag(itemId, playerId) {
+    if (itemId !== "injury_pack") return;
+    const count = inventoryCount(profile, itemId);
+    if (count <= 0) { showToast("ไม่มีไอเทมในกระเป๋า"); return; }
+    const target = career.players.find((p) => p.id === playerId && p.teamId === career.userTeamId);
+    if (!target || target.injuryDays <= 0) { showToast("นักเตะคนนี้ไม่ได้บาดเจ็บ"); return; }
+    const reduced = rand(1, 4);
+    const before = target.injuryDays;
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const p = c.players.find((pl) => pl.id === playerId);
+      if (!p || p.injuryDays <= 0) return c;
+      p.injuryDays = Math.max(0, p.injuryDays - reduced);
+      c.log = [`🩹 ใช้ชุดปฐมพยาบาลกับ ${p.name} — ลดอาการบาดเจ็บ ${reduced} วัน (เหลือ ${p.injuryDays} วัน)`, ...c.log];
+      return c;
+    });
+    const inv = { ...(profile?.inventory || {}) };
+    inv[itemId] = count - 1;
+    saveProfile({ ...profile, inventory: inv });
+    const after = Math.max(0, before - reduced);
+    showToast(after === 0 ? `${target.name} หายบาดเจ็บแล้ว!` : `ลดอาการบาดเจ็บ ${reduced} วัน — เหลือ ${after} วัน`);
+  }
 
   const persist = useCallback((next) => {
     const saved = checkOnlineUnlock(typeof next === "object" && next !== null ? { ...next } : next);
@@ -927,18 +3128,53 @@ export default function App({ onMigrateToServer } = {}) {
         return;
       }
     }
+    setLeaguePickOpen(true);
+  }
+
+  function confirmLeaguePick(leagueId) {
     updateCareer((prev) => {
-      const c = JSON.parse(JSON.stringify(prev));
+      let c = JSON.parse(JSON.stringify(prev));
       if (!c.onlineUnlocked || !canUnlockOnline(computeTeamFinances(c))) return c;
+      if (c.legendLeagueId !== leagueId) c = installLegendMasterLeague(c, leagueId);
+      c.legendLeagueId = leagueId;
+      c.pendingLeaguePick = false;
       c.playMode = "online";
       c.onlineEnteredAt = Date.now();
-      c.log = [`🌐 เข้าสู่โลกออนไลน์แล้ว! จากนี้จะแข่งกับผู้เล่นจริงเมื่อเซิร์ฟเวอร์พร้อม`, ...c.log];
+      c.log = [`🌐 เข้าสู่โลกออนไลน์ — ลีก ${legendLeagueLabel(leagueId)} (ซูเปอร์สตาร์ตัวเดียวต่อเซิร์ฟเวอร์)`, ...c.log];
       return c;
     });
+    setLeaguePickOpen(false);
     showToast("เข้าสู่โลกออนไลน์แล้ว!");
   }
 
-  function startCareer(clubConfig) { updateCareer(createNewCareer(clubConfig)); setTab("dashboard"); }
+  function acquireLegend(legendId) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const res = tryAcquireLegendOnCareer(c, legendId);
+      if (!res.ok) { showToast(res.msg); return prev; }
+      showToast(res.msg);
+      return c;
+    });
+  }
+
+  function startCareer(clubConfig) {
+    if (booting) return;
+    setBooting(true);
+    setTimeout(() => {
+      try {
+        const fresh = createNewCareer(clubConfig);
+        setCareer(checkOnlineUnlock(fresh));
+        persist(fresh);
+        setTab("dashboard");
+        showToast("เริ่มอาชีพแล้ว!");
+      } catch (e) {
+        console.error("startCareer failed", e);
+        showToast("สร้างเกมไม่สำเร็จ — ลองใหม่หรือรีเซ็ตเซฟ");
+      } finally {
+        setBooting(false);
+      }
+    }, 30);
+  }
   function resetCareer() { window.storage.delete("career_v3").catch(() => {}); setCareer(null); setTab("dashboard"); }
 
   function squadOf(teamId, c = career) { return c.players.filter((p) => p.teamId === teamId); }
@@ -955,23 +3191,38 @@ export default function App({ onMigrateToServer } = {}) {
   }
 
   function applyMatchWearAndInjury(c, squad, xiIds) {
+    // จังหวะเกมเร็ว/กดสูงของทีมผู้เล่น: เปลืองสตามินามากขึ้น + เสี่ยงบาดเจ็บมากขึ้น (บอทไม่ใช้ matchPrep)
+    const prep = c.matchPrep || {};
+    const tempoOpt = TEMPO_OPTIONS.find((t) => t.id === prep.tempo);
+    const pressOpt = PRESSING_OPTIONS.find((t) => t.id === prep.pressing);
+    const userDrainMult = (tempoOpt?.staminaDrainMult || 1) * (pressOpt?.staminaDrainMult || 1);
+    const userInjuryMult = pressOpt?.injuryRiskMult || 1;
     squad.forEach((p) => {
       if (xiIds.includes(p.id)) {
-        p.stamina = clamp(p.stamina - rand(16, 28), 5, 100);
+        const isUserPlayer = p.teamId === c.userTeamId;
+        p.stamina = clamp(p.stamina - Math.round(rand(10, 18) * (isUserPlayer ? userDrainMult : 1)), 5, 100);
         p.appearHistory = [true, ...(p.appearHistory || [])].slice(0, 5);
         p.careerApps = (p.careerApps || 0) + 1;
+        if (p.teamId === c.userTeamId) {
+          c.monthlyApps = c.monthlyApps || {};
+          c.monthlyApps[p.id] = (c.monthlyApps[p.id] || 0) + 1;
+        }
         checkMilestone(c, p, "apps");
-        const physio = (c.staff[p.teamId] || {}).PHYSIO;
+        const doctor = (c.staff[p.teamId] || {}).PHYSIO;
         const medicalLevel = p.teamId === c.userTeamId && c.facilities ? c.facilities.medical : 1;
-        const injuryChance = clamp((100 - p.stamina) / 100 * 0.14 + 0.015, 0.01, 0.18) * (physio ? 1 - physio.boost * 0.25 : 1) * (1 - (medicalLevel - 1) * 0.06);
+        const injuryChance = clamp((100 - p.stamina) / 100 * 0.06 + 0.004, 0.003, 0.07)
+          * (doctor ? 1 - doctor.boost * 0.3 : 1)
+          * (1 - (medicalLevel - 1) * 0.1)
+          * (isUserPlayer ? userInjuryMult : 1);
         if (Math.random() < injuryChance) {
-          const physioBoost = physio ? physio.boost : 0;
-          p.injuryDays = Math.max(1, Math.round(rand(3, 16) * (1 - physioBoost * 0.2) * (1 - (medicalLevel - 1) * 0.08)));
+          const doctorBoost = doctor ? doctor.boost : 0;
+          p.injuryDays = Math.max(1, Math.round(rand(1, 7) * (1 - doctorBoost * 0.25) * (1 - (medicalLevel - 1) * 0.12)));
         }
       } else {
         p.appearHistory = [false, ...(p.appearHistory || [])].slice(0, 5);
       }
     });
+    checkBenchUnhappiness(c, squad, xiIds);
   }
 
   function computeStatuses(squad) {
@@ -997,16 +3248,27 @@ export default function App({ onMigrateToServer } = {}) {
       c.log = [`📄 หมดสัญญา: ${departed.join(", ")} ออกจากทีมแบบไม่มีค่าตัว (ไม่ได้ต่อสัญญาทัน)`, ...c.log];
       const remainingIds = c.players.filter((p) => p.teamId === c.userTeamId).map((p) => p.id);
       c.lineups[c.userTeamId] = (c.lineups[c.userTeamId] || []).filter((id) => remainingIds.includes(id));
+      const uT = c.teams.find((t) => t.id === c.userTeamId);
+      const added = topUpTeamSquad(c.players, c.userTeamId, uT.tier, c.day);
+      if (added.length) c.log = [`🆕 สโมสรเซ็นฟรีเอเจนต์ ${added.length} คนเพื่อเติมสควอด`, ...c.log];
     }
 
+    const uT = userTeam(c);
     const uSquad = squadOf(c.userTeamId, c);
     const wageBill = uSquad.reduce((s, p) => s + p.wage, 0);
     const staffWages = Object.values(c.staff[c.userTeamId] || {}).reduce((s, co) => s + co.weeklyWage, 0);
-    const mgrWage = userTeam(c).manager ? userTeam(c).manager.weeklyWage : 0;
-    const scoutWage = c.scout ? c.scout.weeklyWage : 0;
+    const mgrWage = uT.manager ? uT.manager.weeklyWage : 0;
+    const scoutWage = (c.marketScout ? c.marketScout.weeklyWage : 0) + (c.youthScout ? c.youthScout.weeklyWage : 0);
     const acaMgrWage = c.academyManager ? c.academyManager.weeklyWage : 0;
-    c.budget -= (wageBill + staffWages + mgrWage + scoutWage + acaMgrWage);
-    c.log = [`หักค่าเหนื่อยนักเตะ+สตาฟ+ผจก.+อคาเดมี: -${formatMoney(wageBill + staffWages + mgrWage + scoutWage + acaMgrWage)}`, ...c.log];
+    const totalWages = wageBill + staffWages + mgrWage + scoutWage + acaMgrWage;
+    c.fanDeltaToday = 0;
+    const sponsorIncome = computeSponsorDaily(c, uT);
+    const merchIncome = computeMerchDaily(c, uT);
+    const dailyIncome = sponsorIncome + merchIncome;
+    c.budget += dailyIncome - totalWages;
+    const net = dailyIncome - totalWages;
+    const sponsorName = (SPONSOR_TIERS[c.sponsorTier ?? 0] || SPONSOR_TIERS[0]).name;
+    c.log = [`💼 ${sponsorName} +${formatMoney(sponsorIncome)} · เสื้อ +${formatMoney(merchIncome)} · ค่าเหนื่อย -${formatMoney(totalWages)} · สุทธิ ${net >= 0 ? "+" : ""}${formatMoney(net)}`, ...c.log];
 
     // --- today's training-calendar slot applies to the whole first-team squad ---
     const slotIdx = (c.day - 1) % 10;
@@ -1014,26 +3276,53 @@ export default function App({ onMigrateToServer } = {}) {
     uSquad.forEach((p) => applyTrainingToPlayer(p, trainingType));
     c.log = [`🏋️ วันฝึกที่ ${slotIdx + 1}/10: ${TRAINING_TH[trainingType]}`, ...c.log];
 
+    // --- per-position drill sessions (บอร์ดซ้อมรายตำแหน่ง) — auto-run เว้นแต่กด "ซ้อมเลย!" ไปแล้ววันนี้ ---
+    if (!c.drillDoneDay) c.drillDoneDay = {};
+    const drillSummary = [];
+    DRILL_GROUPS.forEach((g) => {
+      if (c.drillDoneDay[g] === c.day) return;
+      const res = applyDrillSession(c, g);
+      if (res) drillSummary.push(`${POS_TH[g]} -${res.cost}%`);
+    });
+    if (drillSummary.length) c.log = [`🏟️ ซ้อมรายตำแหน่งวันนี้: ${drillSummary.join(" · ")}`, ...c.log];
+
     // daily stamina recovery for everyone (all clubs, so bots stay fair too)
     const myFacilities = c.facilities || { fitness: 1, training: 1, techLab: 1, medical: 1 };
     c.players.forEach((p) => {
       const teamFitness = (c.staff[p.teamId] || {}).FITNESS;
       const facilityBonus = p.teamId === c.userTeamId ? (myFacilities.fitness - 1) * 2 : 0;
-      const recover = 12 + (teamFitness ? teamFitness.boost * 10 : 0) + facilityBonus;
+      const fitnessSynergy = p.teamId === c.userTeamId && trainingType === "FITNESS" ? 1.5 : 1;
+      const recover = 12 + (teamFitness ? teamFitness.boost * 10 * fitnessSynergy : 0) + facilityBonus;
       p.stamina = clamp(p.stamina + recover, 0, 100);
-      if (p.injuryDays > 0) p.injuryDays -= 1;
+      if (p.injuryDays > 0) {
+        const physiotherapist = (c.staff[p.teamId] || {}).PHYSIOTHERAPIST;
+        let recoverDays = 1;
+        if (physiotherapist && Math.random() < physiotherapist.boost * 0.5) recoverDays += 1;
+        p.injuryDays = Math.max(0, p.injuryDays - recoverDays);
+      }
     });
-    // training boosts from position coaches (main squad, all clubs)
+    // training boosts from position coaches (main squad, all clubs) — ยิ่งวันฝึกตรงสายโค้ช ยิ่งได้ผลมาก
     Object.keys(c.staff).forEach((teamId) => {
       Object.keys(c.staff[teamId]).forEach((spec) => {
         if (!["GK", "DF", "MF", "FW"].includes(spec)) return;
         const co = c.staff[teamId][spec];
-        const trainingMult = teamId === c.userTeamId ? 1 + (myFacilities.training - 1) * 0.15 : 1;
+        const facilityMult = teamId === c.userTeamId ? 1 + (myFacilities.training - 1) * 0.15 : 1;
+        const synergyMult = teamId === c.userTeamId ? coachTrainingSynergyMult(spec, trainingType) : 1;
         c.players.forEach((p) => {
-          if (p.teamId === teamId && p.position === spec) bumpAttrs(p, co.boost * 0.06 * trainingMult);
+          if (p.teamId === teamId && p.position === spec) bumpAttrs(p, co.boost * 0.05 * facilityMult * synergyMult);
         });
       });
     });
+    // individual training focus — โฟกัสรายคนนอกเหนือจากแผนทีม (จำนวนช่องตามเลเวลเทคโนโลยีฝึกซ้อม)
+    const uSquadIds = new Set(uSquad.map((p) => p.id));
+    c.individualFocus = Object.fromEntries(Object.entries(c.individualFocus || {}).filter(([pid]) => uSquadIds.has(pid)));
+    const focusSlots = myFacilities.techLab || 1;
+    const focusEntries = Object.entries(c.individualFocus || {}).slice(0, focusSlots);
+    focusEntries.forEach(([playerId, focusType]) => {
+      const p = uSquad.find((pl) => pl.id === playerId);
+      if (p && INDIVIDUAL_FOCUS_TYPES.includes(focusType)) bumpAttrsSubset(p, TRAINING_FOCUS_ATTRS[focusType], 0.14);
+    });
+    rollTrainingEvent(c, uSquad, trainingType);
 
     // --- youth academy: passive development, loans, scouting ---
     const devBoost = c.academyManager ? c.academyManager.stats.development / 100 : 0.15;
@@ -1056,15 +3345,24 @@ export default function App({ onMigrateToServer } = {}) {
       else if (p) c.log = [`↩️ ${p.name} ครบกำหนดยืมตัวจาก ${loan.toTeamName} กลับสู่อคาเดมีแล้ว`, ...c.log];
     });
     c.loans = stillOnLoan;
-    // scout surfaces new prospects
-    if (c.scout && Math.random() < c.scout.findChance && c.youthProspects.length < 6) {
-      c.youthProspects = [...c.youthProspects, genYouthProspect(c.scout.qualityBoost, c.scout, c.facilities ? c.facilities.techLab : 1)];
-      c.log = [`🔎 แมวมองพบดาวรุ่งใหม่: ${c.youthProspects[c.youthProspects.length - 1].name}`, ...c.log];
+    if (c.youthScout && Math.random() < c.youthScout.findChance && c.youthProspects.length < 6) {
+      c.youthProspects = [...c.youthProspects, genYouthProspect(c.youthScout.qualityBoost, c.youthScout, c.facilities ? c.facilities.techLab : 1)];
+      c.log = [`🔎 แมวมองเยาวชนพบดาวรุ่งใหม่: ${c.youthProspects[c.youthProspects.length - 1].name}`, ...c.log];
     }
 
-    // daily reroll allowance resets for coaches, manager, scout, and academy manager offers
-    c.coachRerollCounts = {};
-    c.managerRerollCount = 0; c.scoutRerollCount = 0; c.academyManagerRerollCount = 0;
+    // market scout — cheap first-team finds
+    if (!c.scoutFinds) c.scoutFinds = [];
+    c.scoutFinds = c.scoutFinds.filter((f) => f.expiresDay > c.day);
+    if (c.marketScout) {
+      const uTScout = c.teams.find((t) => t.id === c.userTeamId);
+      const maxFinds = 3 + c.marketScout.grade;
+      if (c.scoutFinds.length < maxFinds && Math.random() < c.marketScout.findChance * 0.85) {
+        const find = genScoutFind(c.marketScout, uTScout.tier, c.day);
+        c.scoutFinds.push(find);
+        c.log = [`🔭 ${c.marketScout.name} พบ ${find.name} (${playerPosTH(find)}, OVR ${find.rating}) ราคา ${formatMoney(find.buyFee)} — ดูที่ตลาด`, ...c.log];
+      }
+    }
+
     STAFF_SPECS.forEach((spec) => { if (!c.staff[c.userTeamId][spec] && !c.coachOffers[spec]) c.coachOffers[spec] = genCoach(spec); });
 
     // weekly quest completion check (can complete any day during the week, not just at the boundary)
@@ -1081,51 +3379,32 @@ export default function App({ onMigrateToServer } = {}) {
 
     if (c.day % 7 === 0) {
       c.managerOffer = genManager();
-      c.scoutOffer = genScout();
+      c.marketScoutOffer = genScout();
+      c.youthScoutOffer = genScout();
       c.academyManagerOffer = genManager(true);
       c.weeklyQuests = pickWeeklyQuests();
       c.weeklyProgress = { wins: 0, goals: 0, cleanSheets: 0 };
       c.weeklyRewarded = [];
       c.log = [`มีผู้สมัครผจก./แมวมองใหม่ประจำสัปดาห์! เควสใหม่มาแล้ว`, ...c.log];
     }
+    if (c.day === 15 && c.sockerCupSeason !== c.season) c = runSockerCup(c);
+    if (c.day > 0 && c.day % 28 === 0) c = runMonthlyAwards(c);
     while (c.transferList.length < 8) c.transferList.push(genTransferListing(c.teams, c.userTeamId));
+    reconcileInactiveLegends(c);
+    c.players.filter((p) => p.isLegend && p.teamId === c.userTeamId).forEach((p) => { p.lastOwnerActivityDay = c.day; });
     c.day += 1;
+    resetDailyStaffDraws(c);
     return c;
   }
 
   /* ---------- fast (idle) day resolution: no live match, used for interactive bye-days and offline catch-up ---------- */
   function simulateOneDayFast(c) {
-    const userXIFor = (teamId, team, squad) => {
-      const avail = squad.filter((p) => p.injuryDays <= 0);
-      if (teamId === c.userTeamId) {
-        const uT = c.teams.find((t) => t.id === teamId);
-        if (uT.autoMode) {
-          uT.formation = recommendFormation(uT, avail);
-          return getBestXI(avail, uT.formation);
-        }
-        const picked = (c.lineups[teamId] || []).filter((id) => avail.some((p) => p.id === id));
-        return fillLineupGaps(avail, picked, uT.formation);
-      }
-      return getBestXI(avail, team.formation);
-    };
     [0, 1].forEach((div) => {
       const round = c.leagues[div].fixtures.find((r) => r.day === c.day);
       if (!round) return;
       round.matches.forEach((m) => {
-        const homeTeam = c.teams.find((t) => t.id === m.home);
-        const awayTeam = c.teams.find((t) => t.id === m.away);
-        const homeSquad = c.players.filter((p) => p.teamId === m.home);
-        const awaySquad = c.players.filter((p) => p.teamId === m.away);
-        const homeXI = userXIFor(m.home, homeTeam, homeSquad);
-        const awayXI = userXIFor(m.away, awayTeam, awaySquad);
-        const { homeGoals, awayGoals } = simulateInstant(homeTeam, homeSquad, homeXI, awayTeam, awaySquad, awayXI, homeTeam.chemistry, awayTeam.chemistry);
-        m.played = true; m.homeGoals = homeGoals; m.awayGoals = awayGoals;
-        applyResultToTable(c, m, homeGoals, awayGoals);
-        applyChemistry(c, m.home, homeXI); applyChemistry(c, m.away, awayXI);
-        applyMatchWearAndInjury(c, homeSquad, homeXI); applyMatchWearAndInjury(c, awaySquad, awayXI);
-        attributeGoals(c, homeSquad, homeXI, homeGoals); attributeGoals(c, awaySquad, awayXI, awayGoals);
-        c.lineups[m.home] = homeXI; c.lineups[m.away] = awayXI;
-        if (m.home === c.userTeamId || m.away === c.userTeamId) c.log = [`${homeTeam.short} ${homeGoals} - ${awayGoals} ${awayTeam.short}`, ...c.log];
+        const line = simOneFixture(c, m);
+        if (line && (m.home === c.userTeamId || m.away === c.userTeamId)) c.log = [line, ...c.log];
       });
     });
     if (c.leagues[0].fixtures.find((r) => r.day === c.day) || c.leagues[1].fixtures.find((r) => r.day === c.day)) finalizeDayExtras(c);
@@ -1157,15 +3436,49 @@ export default function App({ onMigrateToServer } = {}) {
     const awayTeam = c.teams.find((t) => t.id === m.away);
     const homeSquad = squadOf(m.home, c);
     const awaySquad = squadOf(m.away, c);
-    const homeXI = autoLineupFor(homeTeam, homeSquad);
-    const awayXI = autoLineupFor(awayTeam, awaySquad);
+    const homeRes = resolveTeamXI(homeTeam, homeSquad, c.lineups[m.home]);
+    const awayRes = resolveTeamXI(awayTeam, awaySquad, c.lineups[m.away]);
+    const homeXI = homeRes.xi;
+    const awayXI = awayRes.xi;
+
+    if (!homeRes.canPlay || !awayRes.canPlay) {
+      m.played = true;
+      let homeGoals = 0;
+      let awayGoals = 0;
+      let note = "";
+      if (!homeRes.canPlay && !awayRes.canPlay) {
+        note = " (เลื่อน — ทั้งสองทีมขาดนักเตะ)";
+      } else if (!homeRes.canPlay) {
+        homeGoals = 0;
+        awayGoals = 3;
+        note = ` (เจ้าบ้านแพ้ฟอร์เฟต — มีผู้เล่นพร้อม ${homeRes.xi.length}/11)`;
+      } else {
+        homeGoals = 3;
+        awayGoals = 0;
+        note = ` (ทีมเยือนแพ้ฟอร์เฟต — มีผู้เล่นพร้อม ${awayRes.xi.length}/11)`;
+      }
+      m.homeGoals = homeGoals;
+      m.awayGoals = awayGoals;
+      applyResultToTable(c, m, homeGoals, awayGoals);
+      c.lineups[m.home] = homeXI;
+      c.lineups[m.away] = awayXI;
+      return `${homeTeam.short} ${homeGoals} - ${awayGoals} ${awayTeam.short}${note}`;
+    }
+
+    const uSlotAssignSim = m.home === c.userTeamId || m.away === c.userTeamId ? userSlotAssignMap(c) : null;
     const { homeGoals, awayGoals } = simulateInstant(
       homeTeam, homeSquad, homeXI, awayTeam, awaySquad, awayXI,
       homeTeam.chemistry, awayTeam.chemistry,
+      m.home === c.userTeamId ? uSlotAssignSim : null,
+      m.away === c.userTeamId ? uSlotAssignSim : null,
     );
     m.played = true;
     m.homeGoals = homeGoals;
     m.awayGoals = awayGoals;
+    if (m.home === c.userTeamId || m.away === c.userTeamId) {
+      const uTFam = c.teams.find((t) => t.id === c.userTeamId);
+      updateTacticFamiliarity(c, uTFam.formation);
+    }
     applyResultToTable(c, m, homeGoals, awayGoals);
     applyChemistry(c, m.home, homeXI);
     applyChemistry(c, m.away, awayXI);
@@ -1214,6 +3527,17 @@ export default function App({ onMigrateToServer } = {}) {
   }
 
   function kickoffUserMatch() {
+    const uT = career.teams.find((t) => t.id === career.userTeamId);
+    const uSquadAvail = squadOf(career.userTeamId, career).filter((p) => p.injuryDays <= 0);
+    const xi = career.lineups[career.userTeamId] || [];
+    const filled = uT.autoMode
+      ? getBestXI(uSquadAvail, recommendFormation(uT, uSquadAvail))
+      : fillLineupGaps(uSquadAvail, xi.filter((id) => uSquadAvail.some((p) => p.id === id)), uT.formation);
+    if (filled.length < MIN_XI_SIZE) {
+      const injured = squadOf(career.userTeamId, career).filter((p) => p.injuryDays > 0).length;
+      showToast(`ลงสนามไม่ได้ — พร้อมเล่น ${filled.length}/11 คน (บาดเจ็บ ${injured} คน)`);
+      return;
+    }
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       if (c.liveMatch) return c;
@@ -1248,14 +3572,38 @@ export default function App({ onMigrateToServer } = {}) {
       c.lineups[c.userTeamId] = uXI;
 
       const oppXI = autoLineupFor(oppTeam, oppSquad);
-      const hc = buildMatchContext(
+      const prep = c.matchPrep || defaultMatchPrep();
+      if (prep.teamTalk) {
+        const tt = TEAM_TALK_OPTIONS.find((t) => t.id === prep.teamTalk);
+        if (tt) {
+          c.players.filter((p) => p.teamId === c.userTeamId).forEach((p) => {
+            p.morale = clamp(p.morale + rand(tt.morale[0], tt.morale[1]), 10, 99);
+          });
+          c.log = [`🗣️ คุยนักเตะก่อนเกม: ${tt.label}`, ...c.log];
+        }
+      }
+      const familiarityMult = familiarityMultiplier(
+        c.tacticFamiliarity && c.tacticFamiliarity.formation === uT.formation ? c.tacticFamiliarity.matches : 0
+      );
+      const uSlotAssign = uT.autoMode ? null : userSlotAssignMap(c);
+      let hc = buildMatchContext(
         isHome ? uT : oppTeam, isHome ? uSquad : oppSquad, isHome ? uXI : oppXI,
         isHome ? oppTeam.formation : uT.formation, true, isHome ? uT.chemistry : oppTeam.chemistry,
+        isHome ? uSlotAssign : null,
       );
-      const ac = buildMatchContext(
+      let ac = buildMatchContext(
         isHome ? oppTeam : uT, isHome ? oppSquad : uSquad, isHome ? oppXI : uXI,
         isHome ? uT.formation : oppTeam.formation, false, isHome ? oppTeam.chemistry : uT.chemistry,
+        isHome ? null : uSlotAssign,
       );
+      const userMeta = { team: uT, squad: uSquad, xiIds: uXI, familiarityMult };
+      if (isHome) {
+        hc = applyMatchPrepToContext(hc, prep, userMeta);
+        ac = applyOppositionMarkToContext(ac, prep.markPlayerId, oppSquad, oppXI);
+      } else {
+        ac = applyMatchPrepToContext(ac, prep, userMeta);
+        hc = applyOppositionMarkToContext(hc, prep.markPlayerId, oppSquad, oppXI);
+      }
       const { xgHome, xgAway } = expectedGoalsFull(hc, ac);
       c.liveMatch = {
         matchId: userMatch.id, day: c.day, home: userMatch.home, away: userMatch.away,
@@ -1280,6 +3628,62 @@ export default function App({ onMigrateToServer } = {}) {
       return c;
     });
     showToast("ผจก.จัดทีมให้แล้ว");
+  }
+
+  function setMatchPrepMentality(mentality) {
+    updateCareer((prev) => ({
+      ...prev,
+      matchPrep: { ...(prev.matchPrep || defaultMatchPrep()), mentality },
+    }));
+  }
+  function toggleMatchPrepInstruction(id) {
+    updateCareer((prev) => {
+      const base = prev.matchPrep || defaultMatchPrep();
+      const ins = base.instructions || [];
+      if (ins.includes(id)) {
+        return { ...prev, matchPrep: { ...base, instructions: ins.filter((x) => x !== id) } };
+      }
+      if (ins.length >= 3) return prev;
+      return { ...prev, matchPrep: { ...base, instructions: [...ins, id] } };
+    });
+  }
+  function setMatchPrepTeamTalk(teamTalk) {
+    updateCareer((prev) => ({
+      ...prev,
+      matchPrep: { ...(prev.matchPrep || defaultMatchPrep()), teamTalk },
+    }));
+  }
+  /** field: "tempo" | "pressing" | "defLine" | "offsideTrap" | "markPlayerId" */
+  function setMatchPrepField(field, value) {
+    updateCareer((prev) => ({
+      ...prev,
+      matchPrep: { ...(prev.matchPrep || defaultMatchPrep()), [field]: value },
+    }));
+  }
+  function applySuggestedPrep(suggested) {
+    if (!suggested) return;
+    updateCareer((prev) => ({
+      ...prev,
+      matchPrep: {
+        ...(prev.matchPrep || defaultMatchPrep()),
+        mentality: suggested.mentality || "balanced",
+        instructions: [...(suggested.instructions || [])].slice(0, 3),
+        defLine: suggested.defLine || "normal",
+        pressing: suggested.pressing || "medium",
+      },
+    }));
+    showToast("ใช้คำแนะนำจากแมวมองแล้ว");
+  }
+  function upgradeSponsor() {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const next = (c.sponsorTier ?? 0) + 1;
+      if (next >= SPONSOR_TIERS.length || (c.fanBase || 0) < SPONSOR_TIERS[next].minFans) return c;
+      c.sponsorTier = next;
+      c.log = [`📈 อัปเกรดสปอนเซอร์เป็น ${SPONSOR_TIERS[next].name}`, ...c.log];
+      return c;
+    });
+    showToast("อัปเกรดสปอนเซอร์แล้ว!");
   }
 
   /* ---------- advance day ---------- */
@@ -1330,7 +3734,8 @@ export default function App({ onMigrateToServer } = {}) {
       awardManagerXP(c, homeT.manager, homeT.id, 8); awardManagerXP(c, awayT.manager, awayT.id, 8);
       if (homeT.manager) homeT.manager.draws++; if (awayT.manager) awayT.manager.draws++;
     }
-    if (m.home === c.userTeamId) c.budget += Math.round(180000 + Math.random() * 220000);
+    applyUserMatchRevenue(c, m, homeGoals, awayGoals);
+    applyFanChangeAfterMatch(c, m, homeGoals, awayGoals);
     // weekly quest progress tracking (user's club only)
     if (m.home === c.userTeamId || m.away === c.userTeamId) {
       const uIsHome = m.home === c.userTeamId;
@@ -1364,6 +3769,8 @@ export default function App({ onMigrateToServer } = {}) {
       const won = uIsHome ? homeGoals > awayGoals : awayGoals > homeGoals;
       const draw = homeGoals === awayGoals;
       c.players.filter((p) => p.teamId === c.userTeamId).forEach((p) => { p.morale = clamp(p.morale + (won ? rand(2, 6) : draw ? 0 : -rand(2, 6)), 10, 99); });
+      updateTacticFamiliarity(c, uT.formation);
+      if (c.matchPrep) c.matchPrep = { ...c.matchPrep, markPlayerId: null };
       c.liveMatch = null;
       finalizeDayExtras(c);
       return c;
@@ -1375,6 +3782,70 @@ export default function App({ onMigrateToServer } = {}) {
   }
 
   /* ---------- transfer auction ---------- */
+  function buyScoutFind(findId) {
+    if (!career.marketScout) { showToast("ต้องจ้างแมวมองที่แท็บ Scout ในตลาดก่อน"); return; }
+    const findName = (career.scoutFinds || []).find((f) => f.findId === findId)?.name;
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const idx = (c.scoutFinds || []).findIndex((f) => f.findId === findId);
+      if (idx < 0) return c;
+      const f = c.scoutFinds[idx];
+      if (c.budget < f.buyFee) return c;
+      c.budget -= f.buyFee;
+      c.players.push({
+        id: f.playerId,
+        name: f.name,
+        position: f.position,
+        pos: f.pos,
+        altPos: f.altPos,
+        age: f.age,
+        attrs: f.attrs,
+        attack: f.attack,
+        defense: f.defense,
+        rating: f.rating,
+        potential: f.potential,
+        value: Math.round(f.buyFee * 1.15),
+        wage: f.buyWage,
+        morale: rand(68, 84),
+        teamId: c.userTeamId,
+        stamina: 92,
+        injuryDays: 0,
+        appearHistory: [],
+        careerGoals: 0,
+        seasonGoals: 0,
+        careerApps: 0,
+        role: "balanced",
+        contractEndsDay: c.day + rand(120, 280),
+      });
+      c.scoutFinds.splice(idx, 1);
+      registerNewSquadPlayer(c, f.playerId);
+      c.log = [`✅ ซื้อ ${f.name} จากรายงานแมวมอง — ค่าตัว ${formatMoney(f.buyFee)} ค่าเหนื่อย ${formatMoney(f.buyWage)}/วัน · ดูที่แท็บแทคติก`, ...c.log];
+      return c;
+    });
+    showToast(`${findName || "นักเตะ"} เข้าทีมแล้ว — ดูที่แท็บแทคติก > ตัวสำรอง`);
+  }
+
+  function manualScoutSearch() {
+    if (!career.marketScout) { showToast("ต้องจ้างแมวมองที่แท็บ Scout ในตลาดก่อน"); return; }
+    if ((career.scoutSearchDay || 0) >= career.day) { showToast("ค้นหาได้วันละ 1 ครั้ง"); return; }
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      if (!c.marketScout) return c;
+      const maxFinds = 3 + c.marketScout.grade;
+      if ((c.scoutFinds || []).length >= maxFinds) {
+        c.log = [`🔭 รายการแมวมองเต็มแล้ว (${maxFinds} คน) — ซื้อหรือรอหมดอายุก่อนค้นหาใหม่`, ...c.log];
+        return c;
+      }
+      const uT = c.teams.find((t) => t.id === c.userTeamId);
+      const find = genScoutFind(c.marketScout, uT.tier, c.day);
+      c.scoutFinds = [...(c.scoutFinds || []), find];
+      c.scoutSearchDay = c.day;
+      c.log = [`🔭 ${c.marketScout.name} ค้นพบ ${find.name} (${playerPosTH(find)}, OVR ${find.rating}) — ราคา ${formatMoney(find.buyFee)}`, ...c.log];
+      return c;
+    });
+    showToast("แมวมองรายงานนักเตะใหม่แล้ว!");
+  }
+
   function placeBid(listingId, wage, fee) {
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
@@ -1397,13 +3868,20 @@ export default function App({ onMigrateToServer } = {}) {
         if (Date.now() < l.endsAt) return true;
         changed = true;
         if (l.topBid.isUser) {
-          const negDiscount = 1; // negotiation bonus could reduce fee slightly in future
-          const newPlayer = { id: l.id, name: l.name, position: l.position, age: l.age, attrs: l.attrs, attack: l.attack, defense: l.defense, rating: l.rating, potential: l.potential, value: l.topBid.fee, wage: l.topBid.wage, morale: 75, teamId: c.userTeamId, stamina: 90, injuryDays: 0, appearHistory: [], contractEndsDay: c.day + rand(150, 400) };
+          ensureDetailedPos(l);
+          const newPlayer = {
+            id: l.id, name: l.name, position: l.position, pos: l.pos, altPos: l.altPos || [],
+            age: l.age, attrs: l.attrs, attack: l.attack, defense: l.defense, rating: l.rating,
+            potential: l.potential, value: l.topBid.fee, wage: l.topBid.wage, morale: 75,
+            teamId: c.userTeamId, stamina: 90, injuryDays: 0, appearHistory: [],
+            careerGoals: 0, seasonGoals: 0, careerApps: 0, role: "balanced",
+            contractEndsDay: c.day + rand(150, 400),
+          };
+          ensureDetailedPos(newPlayer);
           c.players.push(newPlayer);
           c.budget -= l.topBid.fee;
-          const sq = c.players.filter((p) => p.teamId === c.userTeamId);
-          c.lineups[c.userTeamId] = getBestXI(sq, c.teams.find((t) => t.id === c.userTeamId).formation);
-          c.log = [`✅ ชนะประมูล ${l.name} (${POS_TH[l.position]}) ค่าตัว ${formatMoney(l.topBid.fee)} ค่าเหนื่อย ${formatMoney(l.topBid.wage)}/สัปดาห์`, ...c.log];
+          registerNewSquadPlayer(c, newPlayer.id);
+          c.log = [`✅ ชนะประมูล ${l.name} (${playerPosTH(l)}) ค่าตัว ${formatMoney(l.topBid.fee)} ค่าเหนื่อย ${formatMoney(l.topBid.wage)}/สัปดาห์ · ดูที่แท็บแทคติก`, ...c.log];
         } else {
           c.log = [`ตลาด: ${l.name} ถูกทีมอื่นซื้อไปด้วยราคา ${formatMoney(l.topBid.fee)}`, ...c.log];
         }
@@ -1415,7 +3893,7 @@ export default function App({ onMigrateToServer } = {}) {
   }
   useEffect(() => {
     if (!career) return;
-    if (!isMarketOpen()) return;
+    if (career.playMode !== "sandbox" && !isMarketOpen()) return;
     const iv = setInterval(() => {
       updateCareer((prev) => {
         const c = JSON.parse(JSON.stringify(prev));
@@ -1434,15 +3912,19 @@ export default function App({ onMigrateToServer } = {}) {
   useEffect(() => { if (career) resolveExpiredListings(); }, [now]);
 
   function sellPlayer(playerId) {
+    const target = career.players.find((pl) => pl.id === playerId);
+    if (target?.isLegend) { showToast("ซูเปอร์สตาร์ขายไม่ได้"); return; }
+    const squad = career.players.filter((pl) => pl.teamId === career.userTeamId);
+    if (squad.length <= MIN_SELL_SQUAD) { showToast(`ขายไม่ได้ — ต้องมีนักเตะอย่างน้อย ${MIN_SELL_SQUAD} คน`); return; }
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       const p = c.players.find((pl) => pl.id === playerId);
       const squad = c.players.filter((pl) => pl.teamId === c.userTeamId);
-      if (!p || squad.length <= 11) return c;
+      if (!p || squad.length <= MIN_SELL_SQUAD) return c;
       const price = Math.round((p.value * (0.75 + Math.random() * 0.25)) / 1000) * 1000;
       c.budget += price;
       c.players = c.players.filter((pl) => pl.id !== playerId);
-      c.lineups[c.userTeamId] = (c.lineups[c.userTeamId] || []).filter((id) => id !== playerId);
+      removePlayerFromLineups(c, playerId);
       c.log = [`💰 ขาย ${p.name} ได้ ${formatMoney(price)}`, ...c.log];
       return c;
     });
@@ -1495,27 +3977,83 @@ export default function App({ onMigrateToServer } = {}) {
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       const t = c.teams.find((tm) => tm.id === c.userTeamId);
+      if (t.formation !== f) c.tacticFamiliarity = { formation: f, matches: 0 };
       t.formation = f;
       c.lineups[c.userTeamId] = getBestXI(c.players.filter((p) => p.teamId === c.userTeamId), f);
+      if (c.lineupSlots) delete c.lineupSlots[c.userTeamId];
+      const sq = c.players.filter((p) => p.teamId === c.userTeamId);
+      initBenchFromSquad(c, sq, c.lineups[c.userTeamId]);
       return c;
     });
   }
-  function toggleLineupSlot(playerId) {
+  /* กระดานจัดทีมลากวาง: ย้ายนักเตะระหว่างช่องในสนาม / ม้านั่งสำรอง / สำรองในทีม
+     src/dst: {kind:"slot", index} | {kind:"sub", index} | {kind:"bench", playerId}
+            | {kind:"benchArea"} | {kind:"subArea"} | {kind:"reserveArea"} | {kind:"reserve", playerId} */
+  function moveBoardPiece(src, dst) {
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       const t = c.teams.find((tm) => tm.id === c.userTeamId);
-      const form = FORMATIONS[t.formation];
+      if (t.autoMode) return c;
       const squad = c.players.filter((p) => p.teamId === c.userTeamId);
-      let xi = c.lineups[c.userTeamId] || [];
-      if (xi.includes(playerId)) xi = xi.filter((id) => id !== playerId);
-      else {
-        const player = squad.find((p) => p.id === playerId);
-        if (player.injuryDays > 0) return c;
-        const currentOfPos = xi.filter((id) => squad.find((p) => p.id === id)?.position === player.position).length;
-        if (currentOfPos >= (form.counts[player.position] || 0) || xi.length >= 11) return c;
-        xi = [...xi, playerId];
+      const slots = resolveLineupSlots(c, squad, t.formation);
+      let benchSlots = normalizeBenchSlots(c, squad, slots.filter(Boolean));
+      const isInjured = (id) => { const p = squad.find((x) => x.id === id); return !p || p.injuryDays > 0; };
+
+      const srcId = src.kind === "slot" ? slots[src.index]
+        : src.kind === "sub" ? benchSlots[src.index]
+          : src.playerId;
+      if (!srcId || isInjured(srcId)) return c;
+
+      const pullFromAll = (pid) => {
+        for (let i = 0; i < slots.length; i++) if (slots[i] === pid) slots[i] = null;
+        benchSlots = benchSlots.map((id) => (id === pid ? null : id));
+      };
+
+      if (dst.kind === "slot") {
+        pullFromAll(srcId);
+        const displaced = slots[dst.index];
+        slots[dst.index] = srcId;
+        if (displaced && displaced !== srcId) {
+          const emptySub = benchSlots.findIndex((id) => !id);
+          if (emptySub >= 0) benchSlots[emptySub] = displaced;
+        }
+      } else if (dst.kind === "sub") {
+        pullFromAll(srcId);
+        benchSlots[dst.index] = srcId;
+      } else if (dst.kind === "subArea") {
+        pullFromAll(srcId);
+        const emptySub = benchSlots.findIndex((id) => !id);
+        if (emptySub >= 0) benchSlots[emptySub] = srcId;
+      } else if (src.kind === "slot" && (dst.kind === "benchArea" || dst.kind === "reserveArea")) {
+        pullFromAll(srcId);
+        const emptySub = benchSlots.findIndex((id) => !id);
+        if (emptySub >= 0) benchSlots[emptySub] = srcId;
+      } else if (dst.kind === "reserveArea" || dst.kind === "benchArea") {
+        pullFromAll(srcId);
+      } else if (src.kind === "slot" && dst.kind === "slot") {
+        if (src.index === dst.index) return c;
+        const tmp = slots[src.index];
+        slots[src.index] = slots[dst.index];
+        slots[dst.index] = tmp;
+      } else if (src.kind === "bench" && dst.kind === "slot") {
+        if (isInjured(src.playerId)) return c;
+        pullFromAll(src.playerId);
+        const displaced = slots[dst.index];
+        slots[dst.index] = src.playerId;
+        if (displaced && displaced !== src.playerId) {
+          const emptySub = benchSlots.findIndex((id) => !id);
+          if (emptySub >= 0) benchSlots[emptySub] = displaced;
+        }
+      } else {
+        return c;
       }
-      c.lineups[c.userTeamId] = xi;
+
+      if (!c.lineupSlots) c.lineupSlots = {};
+      c.lineupSlots[c.userTeamId] = slots;
+      c.lineups[c.userTeamId] = slots.filter(Boolean);
+      if (!c.benchLineups) c.benchLineups = {};
+      c.benchLineups[c.userTeamId] = benchSlots;
+      if (c.newSquadPlayerId === srcId) c.newSquadPlayerId = null;
       return c;
     });
   }
@@ -1526,6 +4064,31 @@ export default function App({ onMigrateToServer } = {}) {
       if (p) p.role = role;
       return c;
     });
+  }
+  /** kind: "corner" | "freekick" | "penalty" */
+  function setSetPieceTaker(kind, playerId) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const t = c.teams.find((tm) => tm.id === c.userTeamId);
+      const field = kind === "corner" ? "cornerTakerId" : kind === "freekick" ? "freekickTakerId" : "penaltyTakerId";
+      t[field] = t[field] === playerId ? null : playerId;
+      return c;
+    });
+  }
+  /* จัดตัวจริงอัตโนมัติ (คงแผนเดิม) — ใช้จากปุ่ม "จัดทีมอัตโนมัติ" ท้ายตารางแทคติก */
+  function autoPickLineup() {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const t = c.teams.find((tm) => tm.id === c.userTeamId);
+      const avail = c.players.filter((p) => p.teamId === c.userTeamId && p.injuryDays <= 0);
+      c.lineups[c.userTeamId] = getBestXI(avail, t.formation);
+      if (c.lineupSlots) delete c.lineupSlots[c.userTeamId];
+      const sq = c.players.filter((p) => p.teamId === c.userTeamId);
+      initBenchFromSquad(c, sq, c.lineups[c.userTeamId]);
+      c.log = [`📋 จัดตัวจริงอัตโนมัติ (แผน ${t.formation})`, ...c.log];
+      return c;
+    });
+    showToast("จัดตัวจริงอัตโนมัติแล้ว");
   }
   function toggleAutoMode() {
     updateCareer((prev) => {
@@ -1539,32 +4102,29 @@ export default function App({ onMigrateToServer } = {}) {
 
   /* ---------- staff & manager hiring ---------- */
   function hireCoach(specialty) {
+    let locked = false;
+    let hired = false;
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       const offer = c.coachOffers[specialty];
       if (!offer) return c;
       const existing = c.staff[c.userTeamId][specialty];
+      if (isStaffRoleLocked(existing, c.season)) { locked = true; return c; }
       const terminationFee = existing ? Math.round((existing.weeklyWage * 8) / 1000) * 1000 : 0;
       const totalCost = offer.signingCost + terminationFee;
       if (c.budget < totalCost) return c;
       c.budget -= totalCost;
       if (existing) c.log = [`✂️ เลิกจ้าง ${existing.name} จ่ายค่าปรับ ${formatMoney(terminationFee)}`, ...c.log];
+      offer.hiredSeason = c.season;
       c.staff[c.userTeamId] = { ...c.staff[c.userTeamId], [specialty]: offer };
       c.log = [`🧢 จ้าง ${offer.name} เป็น${STAFF_TH[specialty]}แล้ว`, ...c.log];
       c.coachOffers[specialty] = null;
+      hired = true;
       return c;
     });
-    showToast("จ้างสตาฟสำเร็จ!");
-  }
-  function rerollCoach(specialty) {
-    updateCareer((prev) => {
-      const c = JSON.parse(JSON.stringify(prev));
-      const used = c.coachRerollCounts[specialty] || 0;
-      if (used >= 5) return c;
-      c.coachRerollCounts[specialty] = used + 1;
-      c.coachOffers[specialty] = genCoach(specialty);
-      return c;
-    });
+    if (locked) showToast("ตำแหน่งนี้เพิ่งเปลี่ยนสตาฟไปแล้ว — เปลี่ยนใหม่ได้ตอนขึ้นฤดูกาลหน้า");
+    else if (hired) showToast("จ้างสตาฟสำเร็จ!");
+    else showToast("งบไม่พอจ้างสตาฟคนนี้");
   }
   function hireManager() {
     updateCareer((prev) => {
@@ -1582,12 +4142,33 @@ export default function App({ onMigrateToServer } = {}) {
       const contractDays = rand(70, 160);
       offer.contractEndsDay = c.day + contractDays;
       offer.contractDays = contractDays;
-      c.log = [`📋 แต่งตั้ง ${offer.name} เป็นผจก.คนใหม่ สัญญา ${contractDays} วัน`, ...c.log];
+      offer.cardStars = managerStarsFromStats(offer.stats);
+      c.log = [`📋 แต่งตั้ง ${offer.name} (${offer.cardStars}★) เป็นผจก.คนใหม่ สัญญา ${contractDays} วัน`, ...c.log];
       t.manager = offer;
       c.managerOffer = null;
       return c;
     });
+    setManagerHireConfirm(null);
     showToast("แต่งตั้งผจก.สำเร็จ!");
+  }
+  function requestHireManager() {
+    const offer = career?.managerOffer;
+    if (!offer) return;
+    const t = career.teams.find((tm) => tm.id === career.userTeamId);
+    const underContract = t?.manager && t.manager.contractEndsDay != null && career.day < t.manager.contractEndsDay;
+    const daysLeft = underContract ? t.manager.contractEndsDay - career.day : 0;
+    const terminationFee = underContract ? Math.round((daysLeft * t.manager.weeklyWage * 1.4) / 1000) * 1000 : 0;
+    setManagerHireConfirm({
+      source: "offer",
+      name: offer.name,
+      stars: managerStarsFromStats(offer.stats),
+      preferredFormation: offer.preferredFormation,
+      weeklyWage: offer.weeklyWage,
+      signingCost: offer.signingCost || 0,
+      terminationFee,
+      daysLeft,
+      currentName: t?.manager?.name || null,
+    });
   }
   function terminateManager() {
     updateCareer((prev) => {
@@ -1597,24 +4178,208 @@ export default function App({ onMigrateToServer } = {}) {
       const underContract = t.manager.contractEndsDay != null && c.day < t.manager.contractEndsDay;
       const daysLeft = underContract ? t.manager.contractEndsDay - c.day : 0;
       const fee = underContract ? Math.round((daysLeft * t.manager.weeklyWage * 1.4) / 1000) * 1000 : 0;
-      if (c.budget < fee) return c;
+      if (fee > 0 && c.budget < fee) return c;
       c.budget -= fee;
       c.log = [`✂️ เลิกจ้าง ${t.manager.name} ${fee > 0 ? `จ่ายค่าปรับ ${formatMoney(fee)}` : "(หมดสัญญาแล้ว ไม่มีค่าปรับ)"}`, ...c.log];
       t.manager = null;
       return c;
     });
   }
-  function rerollManager() {
+
+  /* ---------- staff card gacha ---------- */
+  function pullStaffCards() {
+    const canFree = (career?.staffFreeDrawsLeft ?? 0) > 0;
+    const canTicket = (career?.staffDrawTickets ?? 0) > 0;
+    if (!canFree && !canTicket) { showToast("ไม่มีสิทธิ์เปิดการ์ด — ใช้ฟรีหมดแล้วและไม่มีตั๋ว"); return; }
+    const pulled = Array.from({ length: CARDS_PER_STAFF_PULL }, () => genStaffCard());
+    const mergeOut = { attempts: [] };
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
-      const used = c.managerRerollCount || 0;
-      if (used >= 5) return c;
-      c.managerRerollCount = used + 1;
-      c.managerOffer = genManager();
+      ensureStaffCardFields(c);
+      c.staffCardBag = [...c.staffCardBag, ...pulled];
+      const { removeIds, newCards, attempts } = computeAutoMergeAttempts(c.staffCardBag, c.autoMergeTiers);
+      if (attempts.length) {
+        const removeSet = new Set(removeIds);
+        purgeCardsFromBag(c, removeSet);
+        c.staffCardBag.push(...newCards);
+        mergeOut.attempts = attempts;
+      }
+      c.lastStaffPull = pulled.filter((card) => c.staffCardBag.some((b) => b.cardId === card.cardId));
+      if (canFree) c.staffFreeDrawsLeft -= 1;
+      else c.staffDrawTickets -= 1;
+      c.log = [`🃏 เปิดการ์ดสตาฟ ${pulled.length} ใบ (${canFree ? "ฟรี" : "ใช้ตั๋ว"})`, ...c.log];
+      if (attempts.length) {
+        const ok = attempts.filter((a) => a.success).length;
+        c.log = [`✨ รวมการ์ดอัตโนมัติ ${attempts.length} ชุด — สำเร็จ ${ok} ชุด`, ...c.log];
+      }
+      return c;
+    });
+    showToast(`ได้การ์ด ${pulled.length} ใบ! (${canFree ? "ฟรี" : "ใช้ตั๋ว"})`);
+    if (mergeOut.attempts.length) setMergeReport({ attempts: mergeOut.attempts, auto: true });
+  }
+
+  function mergeStaffCards(type, stars) {
+    const mergeOut = { applied: false, attempts: null };
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      ensureStaffCardFields(c);
+      if (stars >= 7) return prev;
+      const matches = c.staffCardBag.filter((card) => card.type === type && card.stars === stars);
+      if (matches.length < MERGE_CARD_COUNT) return prev;
+      const removeSet = new Set(matches.slice(0, MERGE_CARD_COUNT).map((card) => card.cardId));
+      const chance = mergeSuccessChance(stars);
+      const success = Math.random() < chance;
+      const upgraded = success ? genStaffCard(type, stars + 1) : null;
+      purgeCardsFromBag(c, removeSet);
+      if (upgraded) c.staffCardBag.push(upgraded);
+      c.log = success
+        ? [`✨ รวมการ์ด ${STAFF_CARD_TYPE_TH[type]} ${stars}★ สำเร็จ → ${stars + 1}★ ${upgraded.name}`, ...c.log]
+        : [`💨 รวมการ์ด ${STAFF_CARD_TYPE_TH[type]} ${stars}★ ไม่สำเร็จ (โอกาส ${Math.round(chance * 100)}%)`, ...c.log];
+      mergeOut.applied = true;
+      mergeOut.attempts = [{ type, stars, success, card: upgraded, chance }];
+      return c;
+    });
+    if (mergeOut.applied) {
+      setMergeReport({ attempts: mergeOut.attempts, auto: false });
+    } else {
+      showToast(`การ์ดไม่พอ ${MERGE_CARD_COUNT} ใบ`);
+    }
+  }
+
+  /** กดรวมอัตโนมัติทันทีจากหน้ารวมการ์ด — ใช้ tier ที่เปิดสวิตช์ไว้ */
+  function runAutoMergeNow() {
+    const mergeOut = { attempts: [] };
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      ensureStaffCardFields(c);
+      const { removeIds, newCards, attempts } = computeAutoMergeAttempts(c.staffCardBag, c.autoMergeTiers);
+      if (!attempts.length) return prev;
+      const removeSet = new Set(removeIds);
+      purgeCardsFromBag(c, removeSet);
+      c.staffCardBag.push(...newCards);
+      const ok = attempts.filter((a) => a.success).length;
+      c.log = [`✨ รวมการ์ดอัตโนมัติ ${attempts.length} ชุด — สำเร็จ ${ok} ชุด`, ...c.log];
+      mergeOut.attempts = attempts;
+      return c;
+    });
+    if (mergeOut.attempts.length) {
+      setMergeReport({ attempts: mergeOut.attempts, auto: true });
+    } else {
+      showToast("ไม่มีชุดที่รวมได้ใน tier ที่เปิดรวมอัตโนมัติ");
+    }
+  }
+
+  function toggleAutoMergeTier(stars) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      ensureStaffCardFields(c);
+      c.autoMergeTiers[stars] = !c.autoMergeTiers[stars];
       return c;
     });
   }
 
+  function requestHireFromStaffCard(cardId) {
+    const card = (career?.staffCardBag || []).find((c) => c.cardId === cardId);
+    if (!card) return;
+    if (card.type === "MANAGER") {
+      const t = career.teams.find((tm) => tm.id === career.userTeamId);
+      const underContract = t?.manager && t.manager.contractEndsDay != null && career.day < t.manager.contractEndsDay;
+      const daysLeft = underContract ? t.manager.contractEndsDay - career.day : 0;
+      const terminationFee = underContract ? Math.round((daysLeft * t.manager.weeklyWage * 1.4) / 1000) * 1000 : 0;
+      setManagerHireConfirm({
+        source: "card",
+        cardId,
+        name: card.name,
+        stars: card.stars,
+        preferredFormation: card.preferredFormation,
+        weeklyWage: card.weeklyWage,
+        signingCost: 0,
+        terminationFee,
+        daysLeft,
+        currentName: t?.manager?.name || null,
+      });
+      return;
+    }
+    hireFromStaffCard(cardId);
+  }
+
+  function hireFromStaffCard(cardId) {
+    let hired = false;
+    let locked = false;
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      ensureStaffCardFields(c);
+      const idx = c.staffCardBag.findIndex((card) => card.cardId === cardId);
+      if (idx < 0) return c;
+      const card = c.staffCardBag[idx];
+      const t = c.teams.find((tm) => tm.id === c.userTeamId);
+
+      if (card.type === "MANAGER") {
+        const underContract = t.manager && t.manager.contractEndsDay != null && c.day < t.manager.contractEndsDay;
+        const daysLeft = underContract ? t.manager.contractEndsDay - c.day : 0;
+        const terminationFee = underContract ? Math.round((daysLeft * t.manager.weeklyWage * 1.4) / 1000) * 1000 : 0;
+        if (terminationFee > 0 && c.budget < terminationFee) return c;
+        if (terminationFee > 0) {
+          c.budget -= terminationFee;
+          c.log = [`✂️ เลิกสัญญา ${t.manager.name} ก่อนครบกำหนด (เหลือ ${daysLeft} วัน) จ่ายค่าปรับ ${formatMoney(terminationFee)}`, ...c.log];
+        }
+        const mgr = staffCardToManager(card);
+        const contractDays = rand(70, 160);
+        mgr.contractEndsDay = c.day + contractDays;
+        mgr.contractDays = contractDays;
+        t.manager = mgr;
+        c.log = [`📋 แต่งตั้ง ${mgr.name} (${card.stars}★) จากการ์ด สัญญา ${contractDays} วัน`, ...c.log];
+      } else if (card.type === "COACH" || card.type === "DOCTOR") {
+        const spec = card.specialty;
+        const existing = c.staff[c.userTeamId][spec];
+        if (isStaffRoleLocked(existing, c.season)) { locked = true; return c; }
+        const terminationFee = existing ? Math.round((existing.weeklyWage * 8) / 1000) * 1000 : 0;
+        if (terminationFee > 0 && c.budget < terminationFee) return c;
+        if (terminationFee > 0) {
+          c.budget -= terminationFee;
+          c.log = [`✂️ เลิกจ้าง ${existing.name} จ่ายค่าปรับ ${formatMoney(terminationFee)}`, ...c.log];
+        }
+        c.staff[c.userTeamId] = { ...c.staff[c.userTeamId], [spec]: { ...staffCardToCoach(card), hiredSeason: c.season } };
+        c.log = [`🧢 จ้าง ${card.name} (${card.stars}★) เป็น${STAFF_TH[spec]}จากการ์ด`, ...c.log];
+      } else if (card.type === "SCOUT") {
+        const scout = staffCardToScout(card);
+        if (!c.marketScout) {
+          c.marketScout = { ...scout, hiredSeason: c.season };
+          c.log = [`🔭 จ้าง ${card.name} (${card.stars}★) เป็นแมวมองทีมชุดใหญ่จากการ์ด`, ...c.log];
+        } else if (!c.youthScout) {
+          c.youthScout = { ...scout, hiredSeason: c.season };
+          c.log = [`🔎 จ้าง ${card.name} (${card.stars}★) เป็นแมวมองเยาวชนจากการ์ด`, ...c.log];
+        } else if (!isStaffRoleLocked(c.marketScout, c.season)) {
+          const fee = Math.round((c.marketScout.weeklyWage * 8) / 1000) * 1000;
+          if (c.budget < fee) return c;
+          c.budget -= fee;
+          c.log = [`✂️ เลิกจ้างแมวมอง ${c.marketScout.name} จ่ายค่าปรับ ${formatMoney(fee)}`, ...c.log];
+          c.marketScout = { ...scout, hiredSeason: c.season };
+          c.log = [`🔭 จ้าง ${card.name} (${card.stars}★) แทนแมวมองทีมชุดใหญ่จากการ์ด`, ...c.log];
+        } else if (!isStaffRoleLocked(c.youthScout, c.season)) {
+          const fee = Math.round((c.youthScout.weeklyWage * 8) / 1000) * 1000;
+          if (c.budget < fee) return c;
+          c.budget -= fee;
+          c.log = [`✂️ เลิกจ้างแมวมอง ${c.youthScout.name} จ่ายค่าปรับ ${formatMoney(fee)}`, ...c.log];
+          c.youthScout = { ...scout, hiredSeason: c.season };
+          c.log = [`🔎 จ้าง ${card.name} (${card.stars}★) แทนแมวมองเยาวชนจากการ์ด`, ...c.log];
+        } else {
+          locked = true;
+          return c;
+        }
+      }
+
+      c.staffCardBag.splice(idx, 1);
+      hired = true;
+      return c;
+    });
+    if (hired) {
+      setManagerHireConfirm(null);
+      showToast("จ้างจากการ์ดสำเร็จ!");
+    } else if (locked) {
+      showToast("ตำแหน่งนี้เพิ่งเปลี่ยนสตาฟไปแล้ว — เปลี่ยนใหม่ได้ตอนขึ้นฤดูกาลหน้า");
+    } else showToast("จ้างไม่สำเร็จ — งบไม่พอจ่ายค่าปรับ");
+  }
   /* ---------- training calendar ---------- */
   function setTrainingDay(idx, type) {
     updateCareer((prev) => { const c = JSON.parse(JSON.stringify(prev)); c.trainingPlan[idx] = type; return c; });
@@ -1630,28 +4395,101 @@ export default function App({ onMigrateToServer } = {}) {
     });
     showToast("ผจก.จัดโปรแกรมฝึกให้แล้ว!");
   }
+  /* ---------- บอร์ดซ้อมรายตำแหน่ง ---------- */
+  function setDrillPlan(group, plan) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      if (!c.drillPlans) c.drillPlans = defaultDrillPlans();
+      c.drillPlans[group] = (plan || []).filter((id) => DRILLS[id] && DRILLS[id].groups.includes(group)).slice(0, MAX_DRILLS_PER_GROUP);
+      return c;
+    });
+  }
+  function autoAssignDrills(group) {
+    setDrillPlan(group, defaultDrillPlans()[group]);
+    showToast(`โค้ชจัดโปรแกรมซ้อม${POS_TH[group]}ให้แล้ว`);
+  }
+  function runDrillSessionNow(group) {
+    let result = null;
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      if (!c.drillDoneDay) c.drillDoneDay = {};
+      if (c.drillDoneDay[group] === c.day) { result = "done"; return c; }
+      const res = applyDrillSession(c, group);
+      if (!res) { result = "empty"; return c; }
+      c.drillDoneDay[group] = c.day;
+      result = "ok";
+      c.log = [`🏟️ ซ้อมรายตำแหน่ง ${POS_TH[group]} ${res.count} คน เสร็จแล้ว (คอนดิชัน -${res.cost}%)`, ...c.log];
+      return c;
+    });
+    if (result === "ok") showToast(`✅ ${POS_TH[group]} ซ้อมเสร็จแล้ว!`);
+    else if (result === "done") showToast("กลุ่มนี้ซ้อมไปแล้ววันนี้ — พรุ่งนี้ค่อยซ้อมใหม่");
+    else showToast("ยังไม่มีท่าซ้อม/นักเตะพร้อมซ้อมในกลุ่มนี้");
+  }
+  function setIndividualFocus(playerId, focusType) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const current = { ...(c.individualFocus || {}) };
+      const slots = (c.facilities || {}).techLab || 1;
+      if (!focusType || current[playerId] === focusType) {
+        delete current[playerId];
+      } else if (current[playerId] || Object.keys(current).length < slots) {
+        current[playerId] = focusType;
+      } else {
+        return c; // เต็มโควตาช่องโฟกัส
+      }
+      c.individualFocus = current;
+      return c;
+    });
+  }
+  function runTrainingCamp() {
+    let result = "ok";
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      if (c.day < (c.trainingCampCooldownDay || 0)) { result = "cooldown"; return c; }
+      const cost = trainingCampCost(c.facilities);
+      if (c.budget < cost) { result = "budget"; return c; }
+      c.budget -= cost;
+      c.trainingCampCooldownDay = c.day + TRAINING_CAMP_COOLDOWN_DAYS;
+      const uSquad = c.players.filter((p) => p.teamId === c.userTeamId);
+      uSquad.forEach((p) => {
+        bumpAttrs(p, 0.5);
+        p.stamina = 100;
+        p.morale = clamp(p.morale + 10, 10, 99);
+      });
+      c.log = [`🏕️ จัดแคมป์ฝึกพิเศษ! ทีมชุดใหญ่ฟิตเต็มร้อย มูดพุ่ง พัฒนาการกระชากขึ้น (-${formatMoney(cost)})`, ...c.log];
+      return c;
+    });
+    if (result === "cooldown") showToast("แคมป์ฝึกยังอยู่ในช่วงพัก รอรอบถัดไปก่อน");
+    else if (result === "budget") showToast("งบไม่พอจัดแคมป์ฝึกพิเศษ");
+    else showToast("🏕️ จัดแคมป์ฝึกพิเศษสำเร็จ!");
+  }
 
   /* ---------- youth academy ---------- */
-  function hireScout() {
+  function hireYouthScout() {
+    let locked = false;
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
-      if (!c.scoutOffer || c.budget < c.scoutOffer.signingCost) return c;
-      c.budget -= c.scoutOffer.signingCost;
-      c.scout = c.scoutOffer; c.scoutOffer = null;
-      c.log = [`🔭 จ้าง ${c.scout.name} เป็นแมวมองแล้ว`, ...c.log];
+      if (!c.youthScoutOffer || c.budget < c.youthScoutOffer.signingCost) return c;
+      if (isStaffRoleLocked(c.youthScout, c.season)) { locked = true; return c; }
+      c.budget -= c.youthScoutOffer.signingCost;
+      c.youthScout = { ...c.youthScoutOffer, hiredSeason: c.season }; c.youthScoutOffer = null;
+      c.log = [`🔎 จ้าง ${c.youthScout.name} เป็นแมวมองเยาวชนแล้ว`, ...c.log];
       return c;
     });
-    showToast("จ้างแมวมองสำเร็จ!");
+    showToast(locked ? "ตำแหน่งนี้เปลี่ยนใหม่ได้ตอนขึ้นฤดูกาลหน้า" : "จ้างแมวมองเยาวชนสำเร็จ!");
   }
-  function rerollScout() {
+  function hireMarketScout() {
+    let locked = false;
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
-      const used = c.scoutRerollCount || 0;
-      if (used >= 5) return c;
-      c.scoutRerollCount = used + 1;
-      c.scoutOffer = genScout();
+      if (!c.marketScoutOffer || c.budget < c.marketScoutOffer.signingCost) return c;
+      if (isStaffRoleLocked(c.marketScout, c.season)) { locked = true; return c; }
+      c.budget -= c.marketScoutOffer.signingCost;
+      c.marketScout = { ...c.marketScoutOffer, hiredSeason: c.season }; c.marketScoutOffer = null;
+      c.log = [`🔭 จ้าง ${c.marketScout.name} เป็นแมวมองทีมชุดใหญ่แล้ว`, ...c.log];
       return c;
     });
+    showToast(locked ? "ตำแหน่งนี้เปลี่ยนใหม่ได้ตอนขึ้นฤดูกาลหน้า" : "จ้างแมวมองทีมชุดใหญ่สำเร็จ!");
   }
   function hireAcademyManager() {
     updateCareer((prev) => {
@@ -1664,16 +4502,6 @@ export default function App({ onMigrateToServer } = {}) {
     });
     showToast("แต่งตั้งผจก.อคาเดมีสำเร็จ!");
   }
-  function rerollAcademyManager() {
-    updateCareer((prev) => {
-      const c = JSON.parse(JSON.stringify(prev));
-      const used = c.academyManagerRerollCount || 0;
-      if (used >= 5) return c;
-      c.academyManagerRerollCount = used + 1;
-      c.academyManagerOffer = genManager(true);
-      return c;
-    });
-  }
   function signProspect(prospectId) {
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
@@ -1682,7 +4510,7 @@ export default function App({ onMigrateToServer } = {}) {
       c.budget -= p.signingCost;
       c.academyPlayers.push({ ...p, teamId: c.userTeamId, contractEndsDay: c.day + rand(150, 400) });
       c.youthProspects = c.youthProspects.filter((x) => x.prospectId !== prospectId);
-      c.log = [`✅ เซ็นดาวรุ่ง ${p.name} (${POS_TH[p.position]}) เข้าอคาเดมีแล้ว`, ...c.log];
+      c.log = [`✅ เซ็นดาวรุ่ง ${p.name} (${playerPosTH(p)}) เข้าอคาเดมีแล้ว`, ...c.log];
       return c;
     });
     showToast("เซ็นดาวรุ่งสำเร็จ!");
@@ -1731,12 +4559,22 @@ export default function App({ onMigrateToServer } = {}) {
   }
 
   /* ============================== RENDER ============================== */
-  if (loading) return <div style={{ minHeight: "100vh", background: C.pitchDark, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ color: C.chalk, fontFamily: DISPLAY_FONT }}>กำลังโหลด...</div></div>;
-  if (!gameEntered) return <TitleScreen onEnter={() => setGameEntered(true)} hasProfile={!!profile} hasCareer={!!career} profile={profile} career={career} />;
-  if (!profile) return <ProfileSetup onSave={saveProfile} />;
-  if (!career) return <ClubCreator profile={profile} onCreate={startCareer} />;
+  if (loading) return <div style={{ minHeight: "100vh", background: C.pitchDark, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}><div style={{ color: C.chalk, fontFamily: FM_FONT }}>{loadMsg}</div><div style={{ fontSize: 11, color: C.textDim }}>ครั้งแรกอาจใช้เวลา 5–15 วินาที</div></div>;
+  if (!splashDone) return <SplashScreen />;
+  if (!gameEntered) return <TitleScreen onEnter={() => setGameEntered(true)} hasProfile={!!profile} hasCareer={!!career} profile={profile} career={career} toast={toast} />;
+  if (!profile) return <ProfileSetup onSave={saveProfile} booting={booting} toast={toast} />;
+  if (!career) return <ClubCreator profile={profile} onCreate={startCareer} booting={booting} toast={toast} />;
 
   const uTeam = userTeam();
+  if (!uTeam) {
+    return (
+      <div style={{ minHeight: "100vh", background: C.pitchDark, color: C.chalk, padding: 24, fontFamily: FM_FONT, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
+        <h2 style={{ color: C.amber, margin: 0 }}>⚠️ เซฟเสียหาย</h2>
+        <p style={{ color: C.textDim, textAlign: "center", maxWidth: 360, lineHeight: 1.6 }}>ไม่พบทีมของคุณในไฟล์เซฟ — กดปุ่มด้านล่างเพื่อเริ่มใหม่</p>
+        <button type="button" onClick={resetCareer} style={{ ...btnStyle(C.amber, "#0b2318"), width: "min(280px, 90vw)" }}>เริ่มอาชีพใหม่</button>
+      </div>
+    );
+  }
   const uSquadRaw = squadOf(uTeam.id);
   const uSquad = computeStatuses(uSquadRaw);
   const userLeague = career.leagues[uTeam.division];
@@ -1754,64 +4592,231 @@ export default function App({ onMigrateToServer } = {}) {
     : null;
   const xiPicked = xi.filter((id) => uSquad.find((p) => p.id === id && p.injuryDays <= 0)).length;
   const xiAfterFill = fillLineupGaps(uSquad, xi, uTeam.formation).length;
+  const canKickoff = xiAfterFill >= MIN_XI_SIZE;
+  const injuredCount = uSquadRaw.filter((p) => p.injuryDays > 0).length;
   const staffWages = Object.values(career.staff[uTeam.id] || {}).reduce((s, co) => s + co.weeklyWage, 0);
   const wageBill = uSquad.reduce((s, p) => s + p.wage, 0) + staffWages + (uTeam.manager ? uTeam.manager.weeklyWage : 0);
-  const marketOpen = isMarketOpen(new Date(now));
+  const marketOpen = resolveMarketOpen(career, new Date(now));
+  const matchPrep = career.matchPrep || defaultMatchPrep();
+  const matchScout = opponent && userMatch && !seasonOver
+    ? buildMatchScoutReport(career, uTeam, opponent, uSquad, oppSquadRaw, xi, isHome)
+    : null;
 
   return (
-    <div style={{ minHeight: "100vh", background: C.pitchDark, color: C.chalk, paddingBottom: 78, fontFamily: "'Segoe UI', Tahoma, sans-serif" }}>
-      <div style={{ background: `linear-gradient(180deg, #14301fee, ${C.panel2}ee)`, backdropFilter: "blur(6px)", borderBottom: `1px solid ${C.steel}`, padding: "12px 16px", position: "sticky", top: 0, zIndex: 20, boxShadow: "0 2px 10px rgba(0,0,0,.3)" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <ClubBadge team={uTeam} size={36} />
-            <div>
-              <div style={{ fontFamily: DISPLAY_FONT, fontSize: 14 }}>{uTeam.name}</div>
-              <div style={{ fontSize: 11, color: C.textDim }}>
-                {career.playMode === "online" ? "🌐 โลกออนไลน์" : "🔒 โลกจำลอง"} · {userLeague.name} · ฤดูกาล {career.season} · วันที่ {Math.min(career.day, userLeague.fixtures.length)}/{userLeague.fixtures.length}
-              </div>
-            </div>
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontFamily: MONO_FONT, color: C.amber, fontSize: 15, fontWeight: 700 }}>{formatMoney(career.budget)}</div>
-            <div style={{ fontSize: 10, color: C.textDim }}>งบ · ค่าเหนื่อยรวม {formatMoney(wageBill)}/วัน</div>
-          </div>
-        </div>
-      </div>
+    <div style={{ minHeight: "100vh", background: C.pitchDark, color: C.chalk, paddingBottom: 64, fontFamily: FM_FONT }}>
+      <FMHeader uTeam={uTeam} career={career} userLeague={userLeague} budget={career.budget} wageBill={wageBill} sockerCoins={profile?.sockerCoins || 0} onOpenShop={() => setTab("shop")} />
 
       {toast && <div style={{ position: "fixed", top: 70, left: "50%", transform: "translateX(-50%)", background: C.amber, color: "#0b2318", padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700, zIndex: 50 }}>{toast}</div>}
 
+      {leaguePickOpen && (
+        <LeaguePickModal currentLeagueId={career.legendLeagueId} onPick={confirmLeaguePick} onClose={() => setLeaguePickOpen(false)} />
+      )}
+      {managerHireConfirm && (
+        <ManagerHireConfirmModal
+          name={managerHireConfirm.name}
+          stars={managerHireConfirm.stars}
+          preferredFormation={managerHireConfirm.preferredFormation}
+          weeklyWage={managerHireConfirm.weeklyWage}
+          signingCost={managerHireConfirm.signingCost}
+          terminationFee={managerHireConfirm.terminationFee}
+          daysLeft={managerHireConfirm.daysLeft}
+          currentName={managerHireConfirm.currentName}
+          budget={career.budget}
+          onConfirm={() => {
+            if (managerHireConfirm.source === "card") hireFromStaffCard(managerHireConfirm.cardId);
+            else hireManager();
+          }}
+          onCancel={() => setManagerHireConfirm(null)}
+        />
+      )}
+      {mergeReport && <MergeResultModal report={mergeReport} onClose={() => setMergeReport(null)} />}
+
       {career.liveMatch && <LiveMatchModal career={career} liveMatch={career.liveMatch} userAutoMode={uTeam.autoMode} onFinish={finishLiveMatch} suggestTacticSwitch={suggestTacticSwitch} />}
 
-      <div style={{ maxWidth: 640, margin: "0 auto", padding: 14 }}>
-        <SandboxModePanel career={career} onEnterOnline={enterOnlineMode} />
+      <div style={{ maxWidth: 640, margin: "0 auto", padding: "10px 12px" }}>
+        {tab === "dashboard" && <SandboxModePanel career={career} onEnterOnline={enterOnlineMode} compact />}
         {tab === "dashboard" && (
           <Dashboard career={career} uTeam={uTeam} standings={standings} userMatch={userMatch} opponent={opponent}
             isHome={isHome} seasonOver={seasonOver} onAdvance={advanceDay} onKickoff={kickoffUserMatch}
-            onApplyManagerLineup={applyManagerLineupForMatch} onGoTactics={() => setTab("tactics")}
-            matchAdvice={matchAdvice} xiPicked={xiPicked} xiAfterFill={xiAfterFill}
-            onNewSeason={startNewSeason}
-            wageBill={wageBill} managerOffer={career.managerOffer} onHireManager={hireManager} onRerollManager={rerollManager} onTerminateManager={terminateManager}
-            onChooseSeasonGoal={chooseSeasonGoal} onAllocateSkillPoint={allocateSkillPoint} />
+            onGoTactics={() => setTab("tactics")} onGoManager={() => setTab("manager")}
+            xiPicked={xiPicked} xiAfterFill={xiAfterFill} canKickoff={canKickoff} injuredCount={injuredCount} onNewSeason={startNewSeason}
+            matchScout={matchScout} matchPrep={matchPrep}
+            onSetMentality={setMatchPrepMentality} onToggleInstruction={toggleMatchPrepInstruction}
+            onSetTeamTalk={setMatchPrepTeamTalk} onUpgradeSponsor={upgradeSponsor}
+            onApplySuggested={applySuggestedPrep} onGoClub={() => setTab("club")}
+            onSetPrepField={setMatchPrepField} onBoardMove={moveBoardPiece} />
         )}
-        {tab === "squad" && <SquadView squad={uSquad} xi={xi} onSell={sellPlayer} staff={career.staff[uTeam.id] || {}} coachOffers={career.coachOffers} coachRerollCounts={career.coachRerollCounts} budget={career.budget} onHireCoach={hireCoach} onRerollCoach={rerollCoach} currentDay={career.day} onRenewContract={renewPlayerContract} />}
-        {tab === "tactics" && <TacticsView squad={uSquad} team={uTeam} xi={xi} onSetFormation={setFormation} onToggle={toggleLineupSlot} onToggleAuto={toggleAutoMode} onSetPlayerRole={setPlayerRole} />}
-        {tab === "table" && <TableView career={career} userTeamId={uTeam.id} userDivision={uTeam.division} round={round} teams={career.teams} />}
-        {tab === "market" && <MarketView list={career.transferList} budget={career.budget} onBid={placeBid} marketOpen={marketOpen} now={now} />}
+        {tab === "club" && (
+          <ClubHubView career={career} uTeam={uTeam} standings={standings} seasonOver={seasonOver} onUpgradeSponsor={upgradeSponsor} />
+        )}
+        {tab === "profile" && (
+          <ProfileView career={career} uTeam={uTeam} standings={standings} />
+        )}
+        {tab === "manager" && (
+          <ManagerView career={career} uTeam={uTeam} userMatch={userMatch} opponent={opponent} isHome={isHome}
+            seasonOver={seasonOver} matchAdvice={matchAdvice} xiPicked={xiPicked} xiAfterFill={xiAfterFill}
+            onTerminateManager={terminateManager} onChooseSeasonGoal={chooseSeasonGoal}
+            onAllocateSkillPoint={allocateSkillPoint} onApplyManagerLineup={applyManagerLineupForMatch}
+            onGoTactics={() => setTab("tactics")} onHireManagerCard={requestHireFromStaffCard} />
+        )}
+        {tab === "tactics" && (
+          <TacticsView
+            career={career}
+            squad={uSquad}
+            team={uTeam}
+            xi={xi}
+            onSetFormation={setFormation}
+            onToggleAuto={toggleAutoMode}
+            onSetPlayerRole={setPlayerRole}
+            onSetSetPieceTaker={setSetPieceTaker}
+            onBoardMove={moveBoardPiece}
+            onSetPrepField={setMatchPrepField}
+            onAutoPick={autoPickLineup}
+          />
+        )}
+        {tab === "squad" && (
+          <SquadView
+            squad={uSquad}
+            xi={xi}
+            squadSize={uSquadRaw.length}
+            injuredCount={injuredCount}
+            canKickoff={canKickoff}
+            xiAfterFill={xiAfterFill}
+            allowSell={false}
+            budget={career.budget}
+            currentDay={career.day}
+            onRenewContract={renewPlayerContract}
+            onGoMedical={() => setTab("medical")}
+            onGoCoach={() => setTab("coach")}
+          />
+        )}
+        {tab === "market" && (
+          <MarketHubView
+            subTab={marketSub}
+            setSubTab={setMarketSub}
+            list={career.transferList}
+            scoutFinds={career.scoutFinds || []}
+            budget={career.budget}
+            onBid={placeBid}
+            onBuyScoutFind={buyScoutFind}
+            onScoutSearch={manualScoutSearch}
+            onHireMarketScout={hireMarketScout}
+            onHireScoutCard={requestHireFromStaffCard}
+            marketOpen={marketOpen}
+            now={now}
+            career={career}
+            onAcquireLegend={acquireLegend}
+            playMode={career.playMode}
+            squad={uSquad}
+            squadSize={uSquadRaw.length}
+            onSell={sellPlayer}
+          />
+        )}
         {tab === "training" && (
           <TrainingView trainingPlan={career.trainingPlan} autoTraining={career.autoTraining} currentSlot={(career.day - 1) % 10}
             onSetDay={setTrainingDay} onToggleAuto={toggleAutoTraining} onAutoAssign={autoAssignTraining}
-            facilities={career.facilities} budget={career.budget} onUpgradeFacility={upgradeFacility} />
+            facilities={career.facilities} budget={career.budget} onUpgradeFacility={upgradeFacility}
+            squad={uSquad} staff={career.staff[uTeam.id] || {}}
+            individualFocus={career.individualFocus || {}} onSetFocus={setIndividualFocus}
+            campCooldownDay={career.trainingCampCooldownDay || 0} currentDay={career.day} onRunCamp={runTrainingCamp}
+            drillPlans={career.drillPlans || {}} drillDoneDay={career.drillDoneDay || {}}
+            onSetDrillPlan={setDrillPlan} onAutoDrills={autoAssignDrills} onRunDrills={runDrillSessionNow} />
         )}
         {tab === "academy" && (
           <AcademyView career={career} budget={career.budget}
-            onHireScout={hireScout} onRerollScout={rerollScout}
-            onHireAcademyManager={hireAcademyManager} onRerollAcademyManager={rerollAcademyManager}
+            onHireScout={hireYouthScout}
+            onHireScoutCard={requestHireFromStaffCard}
+            onHireAcademyManager={hireAcademyManager}
             onSignProspect={signProspect} onLoanOut={loanOutPlayer} onSellAcademy={sellAcademyPlayer} onPromote={promotePlayer} />
+        )}
+        {tab === "more" && (
+          <MoreView setTab={setTab} marketOpen={marketOpen} />
+        )}
+        {tab === "table" && (
+          <TableView
+            career={career}
+            userTeamId={career.userTeamId}
+            userDivision={uTeam.division}
+            round={round}
+            teams={career.teams}
+          />
+        )}
+        {tab === "medical" && (
+          <MedicalRoomView
+            career={career}
+            squad={uSquad}
+            budget={career.budget}
+            inventory={profile?.inventory || {}}
+            onUseItemFromBag={useItemFromBag}
+            onUpgradeFacility={upgradeFacility}
+            onHireCoach={hireCoach}
+            onHireCard={requestHireFromStaffCard}
+          />
+        )}
+        {tab === "coach" && (
+          <CoachRoomView
+            career={career}
+            staff={career.staff[uTeam.id] || {}}
+            coachOffers={career.coachOffers}
+            budget={career.budget}
+            onHireCoach={hireCoach}
+            onHireCard={requestHireFromStaffCard}
+          />
+        )}
+        {tab === "staffcards" && (
+          <StaffCardsView
+            career={career}
+            onPull={pullStaffCards}
+            onMerge={mergeStaffCards}
+            onHire={requestHireFromStaffCard}
+            onAutoMerge={runAutoMergeNow}
+            onToggleAutoTier={toggleAutoMergeTier}
+          />
+        )}
+        {tab === "shop" && (
+          <ShopView
+            sockerCoins={profile?.sockerCoins || 0}
+            inventory={profile?.inventory || {}}
+            shopBuyCount={shopBuyCountToday(profile)}
+            onPurchasePack={purchaseCoinPack}
+            onBuyItemToBag={buyShopItemToBag}
+          />
         )}
         {tab === "settings" && <SettingsView career={career} onReset={resetCareer} onEnterOnline={enterOnlineMode} />}
       </div>
 
-      <BottomNav tab={tab} setTab={setTab} marketOpen={marketOpen} />
+      <BottomNav tab={tab} setTab={setTab} marketOpen={marketOpen} marketSub={marketSub} setMarketSub={setMarketSub} />
+    </div>
+  );
+}
+
+/* ============================== BRANDING — splash + login backdrop ============================== */
+const BRAND_SPLASH_LOGO = "/branding/master-logo.png";
+const BRAND_LOGIN_BG = "/branding/login-bg.png";
+
+function SplashScreen() {
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box", background: "#0a0a0a" }}>
+      <img
+        src={BRAND_SPLASH_LOGO}
+        alt="Master Football Manager"
+        style={{ maxWidth: "min(420px, 88vw)", width: "100%", height: "auto", objectFit: "contain" }}
+      />
+    </div>
+  );
+}
+
+function LoginBackdrop({ children, style }) {
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: `linear-gradient(180deg, rgba(7,18,13,.52) 0%, rgba(7,18,13,.8) 100%), url(${BRAND_LOGIN_BG}) center/cover no-repeat fixed`,
+      color: C.chalk,
+      fontFamily: "'Segoe UI', Tahoma, sans-serif",
+      boxSizing: "border-box",
+      ...style,
+    }}>
+      {children}
     </div>
   );
 }
@@ -1839,12 +4844,11 @@ function TitleScreen({ onEnter, hasProfile, hasCareer, profile, career }) {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: `radial-gradient(ellipse at 50% 20%, #1a4d32 0%, ${C.pitchDark} 55%)`, color: C.chalk, fontFamily: "'Segoe UI', Tahoma, sans-serif", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box" }}>
+    <LoginBackdrop style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.5, color: C.purple, background: "rgba(157,111,224,.15)", border: `1px solid ${C.purple}`, borderRadius: 20, padding: "5px 14px", marginBottom: 16 }}>
         🧪 เวอร์ชันทดลอง — เล่นฟรี ไม่ต้องสมัคร
       </div>
-      <div style={{ fontSize: 56, marginBottom: 8, filter: "drop-shadow(0 4px 12px rgba(0,0,0,.4))" }}>⚽</div>
-      <div style={{ fontFamily: DISPLAY_FONT, fontSize: 34, letterSpacing: 3, color: C.amber, textAlign: "center", textShadow: "0 2px 8px rgba(0,0,0,.5)" }}>THE SOCKER MANAGER</div>
+      <img src={BRAND_SPLASH_LOGO} alt="Master Football Manager" style={{ maxWidth: "min(320px, 82vw)", width: "100%", height: "auto", marginBottom: 12 }} />
       <div style={{ fontSize: 13, color: C.textDim, marginTop: 8, marginBottom: 8, textAlign: "center" }}>จัดการสโมสร · แข่งลีก · ลงสนามสด</div>
       <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 28, textAlign: "center", maxWidth: 360, lineHeight: 1.55 }}>
         สร้างสโมสร → วันมีนัดกด <b style={{ color: C.chalk }}>▶ ลงสนาม</b> · เซฟอัตโนมัติในเบราว์เซอร์นี้
@@ -1876,20 +4880,26 @@ function TitleScreen({ onEnter, hasProfile, hasCareer, profile, career }) {
       <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 20, textAlign: "center", maxWidth: 340, lineHeight: 1.55 }}>
         โหมดออนไลน์แข่งกับผู้เล่นจริงกำลังพัฒนา — ตอนนี้เล่นโลกจำลองกับบอทได้เต็มรูปแบบ
       </div>
-    </div>
+    </LoginBackdrop>
   );
 }
 
 /* ============================== TEAM PICKER ============================== */
 const AVATAR_CHOICES = ["⚽", "🎯", "🏆", "👔", "🧢", "📋", "🔥", "⭐", "🦁", "🛡️"];
-function ProfileSetup({ onSave }) {
+function SetupToast({ toast }) {
+  if (!toast) return null;
+  return <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", background: C.crimson, color: C.chalk, padding: "10px 16px", borderRadius: 8, fontSize: 12.5, fontWeight: 600, zIndex: 80, maxWidth: "90vw", textAlign: "center", boxShadow: "0 4px 20px rgba(0,0,0,.4)" }}>{toast}</div>;
+}
+function ProfileSetup({ onSave, booting, toast }) {
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState(AVATAR_CHOICES[0]);
+  const canSave = !!name.trim() && !booting;
   return (
-    <div style={{ minHeight: "100vh", background: `radial-gradient(circle at 50% 0%, #163a28, ${C.pitchDark} 60%)`, color: C.chalk, padding: 20, fontFamily: "'Segoe UI', Tahoma, sans-serif", display: "flex", alignItems: "center" }}>
+    <LoginBackdrop style={{ padding: 20, display: "flex", alignItems: "center" }}>
+      <SetupToast toast={toast} />
       <div style={{ maxWidth: 420, margin: "0 auto", width: "100%" }}>
         <div style={{ textAlign: "center", marginBottom: 24 }}>
-          <div style={{ fontFamily: DISPLAY_FONT, fontSize: 30, letterSpacing: 2, color: C.amber }}>THE SOCKER MANAGER</div>
+          <img src={BRAND_SPLASH_LOGO} alt="Master Football Manager" style={{ maxWidth: "min(260px, 72vw)", width: "100%", height: "auto", marginBottom: 10 }} />
           <div style={{ fontSize: 12.5, color: C.textDim, marginTop: 6 }}>สร้างโปรไฟล์ผู้จัดการก่อนเริ่มเกม (บันทึกไว้ในเครื่องนี้)</div>
         </div>
         <Panel>
@@ -1901,15 +4911,20 @@ function ProfileSetup({ onSave }) {
               <button key={a} onClick={() => setAvatar(a)} style={{ fontSize: 22, padding: "10px 0", borderRadius: 10, border: `2px solid ${avatar === a ? C.amber : C.steel}`, background: avatar === a ? "rgba(224,164,88,.15)" : C.panel2, cursor: "pointer" }}>{a}</button>
             ))}
           </div>
-          <button disabled={!name.trim()} onClick={() => onSave({ name: name.trim(), avatar })} style={btnStyle(name.trim() ? C.amber : "#2b332f", name.trim() ? "#0b2318" : C.textDim)}>เข้าสู่ระบบ</button>
+          <button type="button" disabled={!canSave} onClick={() => onSave({ name: name.trim(), avatar, sockerCoins: SOCKER_COIN_WELCOME, inventory: {}, shopBuyDay: "", shopBuyCount: 0 })} style={{ ...fmBtnPrimary(), ...(canSave ? {} : { background: "#2a3530", color: C.textDim, cursor: "not-allowed", opacity: 0.75 }) }}>
+            {booting ? "กำลังเตรียม..." : "เข้าสู่ระบบ"}
+          </button>
+          {!name.trim() && <div style={{ fontSize: 10, color: C.textDim, marginTop: 8, textAlign: "center" }}>พิมพ์ชื่อผู้จัดการก่อน แล้วกดปุ่ม</div>}
+          <div style={{ fontSize: 10, color: C.gold, marginTop: 10, textAlign: "center" }}>🎁 ผู้เล่นใหม่ได้ Socker Coin {SOCKER_COIN_WELCOME} เหรียญ</div>
         </Panel>
       </div>
-    </div>
+    </LoginBackdrop>
   );
 }
 
-function ClubCreator({ profile, onCreate }) {
+function ClubCreator({ profile, onCreate, booting, toast }) {
   const [name, setName] = useState("");
+  const canStart = !!name.trim() && !booting;
   const [logoIndex, setLogoIndex] = useState(0);
   const [primaryColor, setPrimaryColor] = useState("#c1440e");
   const [secondaryColor, setSecondaryColor] = useState("#f2f0e6");
@@ -1918,7 +4933,8 @@ function ClubCreator({ profile, onCreate }) {
   const short = name.trim().slice(0, 3).toUpperCase() || "CLB";
   const previewTeam = { color: primaryColor, secondaryColor, logoIndex };
   return (
-    <div style={{ minHeight: "100vh", background: `radial-gradient(circle at 50% 0%, #163a28, ${C.pitchDark} 60%)`, color: C.chalk, padding: 20, paddingBottom: 40, fontFamily: "'Segoe UI', Tahoma, sans-serif" }}>
+    <LoginBackdrop style={{ padding: 20, paddingBottom: 40 }}>
+      <SetupToast toast={toast} />
       <div style={{ maxWidth: 480, margin: "0 auto" }}>
         <div style={{ textAlign: "center", margin: "10px 0 20px" }}>
           <div style={{ fontSize: 13, color: C.textDim }}>{profile.avatar} สวัสดี, {profile.name}</div>
@@ -1958,12 +4974,14 @@ function ClubCreator({ profile, onCreate }) {
         </Panel>
 
         <button
-          disabled={!name.trim()}
+          type="button"
+          disabled={!canStart}
           onClick={() => onCreate({ name: name.trim(), short, logoIndex, primaryColor, secondaryColor, shirtColor, shortsColor })}
-          style={btnStyle(name.trim() ? C.amber : "#2b332f", name.trim() ? "#0b2318" : C.textDim)}
-        >เริ่มอาชีพผู้จัดการ</button>
+          style={{ ...fmBtnPrimary(), ...(canStart ? {} : { background: "#2a3530", color: C.textDim, cursor: "not-allowed", opacity: 0.75 }) }}
+        >{booting ? "กำลังสร้างโลก..." : "เริ่มอาชีพผู้จัดการ"}</button>
+        {!name.trim() && <div style={{ fontSize: 10, color: C.textDim, marginTop: 8, textAlign: "center" }}>พิมพ์ชื่อสโมสรก่อน แล้วกดปุ่ม</div>}
       </div>
-    </div>
+    </LoginBackdrop>
   );
 }
 function ColorField({ label, value, onChange }) {
@@ -1975,13 +4993,65 @@ function ColorField({ label, value, onChange }) {
   );
 }
 
+/* ============================== LEAGUE PICK (ONLINE) ============================== */
+function LeaguePickModal({ currentLeagueId, onPick, onClose }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <Panel style={{ maxWidth: 420, width: "100%", maxHeight: "85vh", overflowY: "auto" }}>
+        <SectionLabel>🌐 เลือกลีกออนไลน์</SectionLabel>
+        <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.6, marginBottom: 14 }}>
+          แต่ละลีกมีทีมล้อ 16 ทีม + ซูเปอร์สตาร์ตัวเดียวต่อเซิร์ฟเวอร์ — อยู่ Master League คว้าได้
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {LEGEND_LEAGUES.map((lg) => (
+            <button key={lg.id} onClick={() => onPick(lg.id)} style={{
+              textAlign: "left", padding: "12px 14px", borderRadius: 10, cursor: "pointer",
+              border: `1px solid ${currentLeagueId === lg.id ? C.amber : C.steel}`,
+              background: currentLeagueId === lg.id ? "rgba(224,164,88,.12)" : C.panel2, color: C.chalk,
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>{lg.emoji} {lg.name}</div>
+              <div style={{ fontSize: 11, color: C.textDim }}>{lg.region} · 16 ทีม · {(LEGEND_TEAMS[lg.id] || []).length} สโมสร</div>
+            </button>
+          ))}
+        </div>
+        <button onClick={onClose} style={{ ...btnStyle("transparent", C.textDim), border: `1px solid ${C.steel}`, marginTop: 12 }}>ยกเลิก</button>
+      </Panel>
+    </div>
+  );
+}
+
 /* ============================== SANDBOX / ONLINE UNLOCK ============================== */
-function SandboxModePanel({ career, onEnterOnline }) {
+function SandboxModePanel({ career, onEnterOnline, compact }) {
   const fin = computeTeamFinances(career);
   const pct = clamp((fin.teamValue / ONLINE_UNLOCK_TEAM_VALUE) * 100, 0, 100);
   const unlocked = career.onlineUnlocked;
   const inOnline = career.playMode === "online";
   const valueOk = fin.teamValue >= 0;
+
+  if (inOnline) {
+    if (compact) return null;
+    return (
+      <Panel style={{ marginBottom: 8 }} accent={C.good}>
+        <SectionLabel>โหมดออนไลน์</SectionLabel>
+        <div style={{ fontSize: 11, color: C.textDim }}>มูลค่าสโมสร <span style={{ color: C.amber, fontFamily: MONO_FONT }}>{formatMoney(fin.teamValue)}</span></div>
+      </Panel>
+    );
+  }
+
+  if (compact) {
+    return (
+      <div style={{ marginBottom: 8, padding: "8px 10px", background: C.panel2, borderRadius: 6, border: `1px solid ${C.steel}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.textDim, marginBottom: 4 }}>
+          <span>{unlocked ? "ปลดล็อกออนไลน์แล้ว" : "โลกจำลอง"}</span>
+          <span style={{ fontFamily: MONO_FONT, color: fin.teamValue >= ONLINE_UNLOCK_TEAM_VALUE ? C.good : C.amber }}>{formatMoney(fin.teamValue)} / 50M</span>
+        </div>
+        <MiniBar value={pct} color={fin.teamValue >= ONLINE_UNLOCK_TEAM_VALUE ? C.good : C.purple} />
+        {unlocked && valueOk && (
+          <button type="button" onClick={onEnterOnline} style={{ ...fmBtnGhost(), marginTop: 6, padding: "6px 0", fontSize: 10, color: C.good, borderColor: C.good, width: "100%" }}>เข้าสู่โลกออนไลน์</button>
+        )}
+      </div>
+    );
+  }
 
   const breakdown = [
     ["นักเตะทีมชุดใหญ่", fin.squadValue],
@@ -1995,21 +5065,9 @@ function SandboxModePanel({ career, onEnterOnline }) {
     ["งบสำรอง (เงินสด)", fin.budget],
   ];
 
-  if (inOnline) {
-    return (
-      <Panel style={{ marginBottom: 12, border: `1px solid ${C.good}` }}>
-        <SectionLabel style={{ color: C.good }}>🌐 โหมดออนไลน์</SectionLabel>
-        <div style={{ fontSize: 12.5, color: C.textDim, lineHeight: 1.7 }}>
-          คุณผ่านโลกจำลองแล้ว — พร้อมแข่งกับผู้เล่นจริงเมื่อเซิร์ฟเวอร์เปิด
-          <br />มูลค่าสโมสรรวม: <span style={{ color: C.amber, fontFamily: MONO_FONT }}>{formatMoney(fin.teamValue)}</span>
-        </div>
-      </Panel>
-    );
-  }
-
   return (
-    <Panel style={{ marginBottom: 12, border: `1px solid ${unlocked ? C.good : C.purple}` }}>
-      <SectionLabel style={{ color: unlocked ? C.good : C.purple }}>🔒 โลกจำลอง — เล่นคนเดียว</SectionLabel>
+    <Panel style={{ marginBottom: 12 }} accent={unlocked ? C.good : C.purple}>
+      <SectionLabel>โลกจำลอง — เล่นคนเดียว</SectionLabel>
       <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.65, marginBottom: 10 }}>
         ปั้นสโมสรในโลกจำลอง — มูลค่ารวมทุกสินทรัพย์ต้องถึง 50M และไม่ติดลบ
       </div>
@@ -2048,80 +5106,104 @@ function SandboxModePanel({ career, onEnterOnline }) {
   );
 }
 
-/* ============================== DASHBOARD ============================== */
-function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seasonOver, onAdvance, onKickoff, onApplyManagerLineup, onGoTactics, matchAdvice, xiPicked, xiAfterFill, onNewSeason, wageBill, managerOffer, onHireManager, onRerollManager, onTerminateManager, onChooseSeasonGoal, onAllocateSkillPoint }) {
-  const posInTable = standings.findIndex((s) => s.team.id === uTeam.id) + 1;
-  const myRow = standings.find((s) => s.team.id === uTeam.id);
+/* ============================== MANAGER TAB ============================== */
+function ManagerView({ career, uTeam, userMatch, opponent, isHome, seasonOver, matchAdvice, xiPicked, xiAfterFill,
+  onTerminateManager, onChooseSeasonGoal, onAllocateSkillPoint,
+  onApplyManagerLineup, onGoTactics, onHireManagerCard }) {
   const mgr = uTeam.manager;
+  const mgrStars = staffEntityStars(mgr);
   const daysLeftOnContract = mgr && mgr.contractEndsDay != null ? mgr.contractEndsDay - career.day : null;
+  const managerCards = (career.staffCardBag || []).filter((c) => c.type === "MANAGER");
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Panel>
-        <SectionLabel>โปรแกรมวันนี้</SectionLabel>
-        {seasonOver ? (
-          <div>
-            <div style={{ fontFamily: DISPLAY_FONT, fontSize: 16, color: C.amber, marginBottom: 8 }}>จบฤดูกาล {career.season} แล้ว</div>
-            <div style={{ fontSize: 13, color: C.textDim, marginBottom: 12 }}>อันดับสุดท้ายของทีมคุณ: {posInTable} จาก {standings.length}</div>
-            <button onClick={onNewSeason} style={btnStyle(C.amber, "#0b2318")}>เริ่มฤดูกาลใหม่ (นักเตะอายุ+1 / รีไทร์ที่ 36)</button>
+      {mgr ? (
+        <Panel>
+          <SectionLabel>ผู้จัดการทีม</SectionLabel>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {mgr.name}
+            {mgrStars ? <StarGlyphs count={mgrStars} size={10} /> : null}
           </div>
-        ) : opponent ? (
-          <div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, padding: "10px 0" }}>
-              <TeamChip team={uTeam} /><div style={{ fontFamily: DISPLAY_FONT, color: C.textDim, fontSize: 13 }}>{isHome ? "เหย้า" : "เยือน"} vs</div><TeamChip team={opponent} />
-            </div>
-
-            {uTeam.autoMode ? (
-              <div style={{ fontSize: 11.5, color: C.purple, textAlign: "center", marginBottom: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(128,90,213,.12)", border: `1px solid ${C.purple}` }}>
-                โหมดออโต้เปิด — ผจก.จัดแผน+ตัวจริงให้ทุกนัด (ปรับกลางเกมได้)
-              </div>
-            ) : (
-              <Panel style={{ marginBottom: 10, padding: 12, border: `1px solid ${C.steel}` }}>
-                <SectionLabel style={{ marginBottom: 6 }}>💡 คำแนะนำผจก.</SectionLabel>
-                {matchAdvice?.tips.map((tip, i) => (
-                  <div key={i} style={{ fontSize: 11.5, color: i === 0 ? C.chalk : C.textDim, marginBottom: 4, fontFamily: MONO_FONT }}>• {tip}</div>
+          <div style={{ fontSize: 11.5, color: C.textDim, fontFamily: MONO_FONT, marginBottom: 8 }}>
+            Lv.{mgr.level || 1} · ถนัด {mgr.preferredFormation} · ผลงาน {mgr.wins}ช-{mgr.draws}ส-{mgr.losses}พ
+            {daysLeftOnContract != null && (daysLeftOnContract > 0 ? ` · สัญญาเหลือ ${daysLeftOnContract} วัน` : " · หมดสัญญาแล้ว")}
+          </div>
+          <div style={{ fontSize: 11, color: C.textDim, marginBottom: 4 }}>EXP ขึ้นเลเวล</div>
+          <MiniBar value={((mgr.xp || 0) / ((mgr.level || 1) * 80)) * 100} color={C.gold} />
+          <div style={{ marginTop: 12 }}><RadarStats stats={mgr.stats} /></div>
+          {(mgr.skillPoints || 0) > 0 && (
+            <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(244,201,93,.1)", border: `1px solid ${C.gold}` }}>
+              <div style={{ fontSize: 11, color: C.gold, marginBottom: 8 }}>🌟 แต้มสกิล {mgr.skillPoints} — เลือกเพิ่มสเตต</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {Object.keys(MANAGER_STAT_TH).map((k) => (
+                  <button key={k} onClick={() => onAllocateSkillPoint(k)} style={{ fontSize: 10, padding: "5px 9px", borderRadius: 6, border: `1px solid ${C.gold}`, background: "transparent", color: C.gold, cursor: "pointer" }}>+{MANAGER_STAT_TH[k]}</button>
                 ))}
-                <div style={{ fontSize: 11, color: C.textDim, marginTop: 8, fontFamily: MONO_FONT }}>
-                  ตัวจริงที่เลือก: {xiPicked}/11 · หลังเติมอัตโนมัติ: {xiAfterFill}/11 · แผน {uTeam.formation}
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                  <button onClick={onGoTactics} style={{ ...btnStyle(C.steel, C.chalk), flex: 1, minWidth: 120, padding: "10px 0", fontSize: 12 }}>จัดทีมเอง</button>
-                  <button onClick={onApplyManagerLineup} style={{ ...btnStyle(C.purple, "#fff"), flex: 1, minWidth: 120, padding: "10px 0", fontSize: 12 }}>ผจก.จัดให้ (นัดนี้)</button>
-                </div>
-              </Panel>
-            )}
-
-            <button onClick={onKickoff} style={btnStyle(C.amber, "#0b2318")}>
-              ▶ ลงสนาม (แข่งสด)
-            </button>
-            <div style={{ fontSize: 10, color: C.textDim, textAlign: "center", marginTop: 6 }}>
-              {xiAfterFill < 11 ? "ทีมไม่พอ 11 คน — ตรวจสอบบาดเจ็บ/ตัวสำรอง" : "ช่องว่างใน XI จะเติมอัตโนมัติก่อนเริ่มเกม"}
+              </div>
             </div>
+          )}
+          <button onClick={onTerminateManager} style={{ ...btnStyle("transparent", C.crimson), border: `1px solid ${C.crimson}`, marginTop: 12 }}>
+            {daysLeftOnContract > 0 ? "เลิกจ้าง (มีค่าปรับ)" : "เลิกจ้าง"}
+          </button>
+        </Panel>
+      ) : (
+        <Panel>
+          <SectionLabel>ผู้จัดการทีม</SectionLabel>
+          <div style={{ fontSize: 12.5, color: C.textDim }}>ยังไม่มีผู้จัดการ — ติดตั้งจากการ์ดผจก.ที่สุ่มได้ด้านล่าง</div>
+        </Panel>
+      )}
+
+      {managerCards.length > 0 && (
+        <Panel style={{ border: `1px solid ${C.blue}` }}>
+          <SectionLabel style={{ color: C.blue }} sub={`มี ${managerCards.length} ใบในกระเป๋า — กด "จ้าง" เพื่อติดตั้งเป็นผจก.ทันที${managerCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดผจก.ที่สุ่มได้</SectionLabel>
+          <div style={CARD_LIST_SCROLL}>
+            {managerCards.map((card) => (
+              <StaffCardTile key={card.cardId} card={card} compact onHire={onHireManagerCard} {...staffCardLockInfo(career, card)} />
+            ))}
           </div>
-        ) : (
-          <div>
-            <div style={{ fontSize: 13, color: C.textDim, marginBottom: 10 }}>วันนี้ทีมคุณว่าง — แมตช์อื่นในลีกแข่งกันตามปกติ</div>
-            <button onClick={onAdvance} style={btnStyle(C.steel, C.chalk)}>▶ ข้ามไปวันถัดไป</button>
+        </Panel>
+      )}
+
+      {userMatch && opponent && !seasonOver && (
+        <Panel style={{ border: `1px solid ${C.purple}` }}>
+          <SectionLabel style={{ color: C.purple }}>คำแนะนำก่อนนัด</SectionLabel>
+          {uTeam.autoMode ? (
+            <div style={{ fontSize: 12, color: C.purple, lineHeight: 1.6 }}>
+              โหมดออโต้เปิด — ผจก.จัดแผน+ตัวจริงให้ทุกนัด และปรับกลางเกมได้
+            </div>
+          ) : (
+            <>
+              {matchAdvice?.tips.map((tip, i) => (
+                <div key={i} style={{ fontSize: 11.5, color: i === 0 ? C.chalk : C.textDim, marginBottom: 5, fontFamily: MONO_FONT }}>• {tip}</div>
+              ))}
+              <div style={{ fontSize: 11, color: C.textDim, marginTop: 8, fontFamily: MONO_FONT }}>
+                ตัวจริง {xiPicked}/11 · หลังเติมอัตโนมัติ {xiAfterFill}/11 · แผน {uTeam.formation}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <button onClick={onGoTactics} style={{ ...btnStyle(C.steel, C.chalk), flex: 1, minWidth: 120, padding: "10px 0", fontSize: 12 }}>จัดทีมเอง</button>
+                <button onClick={onApplyManagerLineup} style={{ ...btnStyle(C.purple, "#fff"), flex: 1, minWidth: 120, padding: "10px 0", fontSize: 12 }}>ผจก.จัดให้ (นัดนี้)</button>
+              </div>
+            </>
+          )}
+          <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 8 }}>
+            นัดถัดไป: {uTeam.short} {isHome ? "เหย้า" : "เยือน"} vs {opponent.short}
           </div>
-        )}
-      </Panel>
+        </Panel>
+      )}
 
       <Panel style={{ border: `1px solid ${C.gold}` }}>
-        <SectionLabel style={{ color: C.gold }}>เป้าหมายฤดูกาลนี้</SectionLabel>
+        <SectionLabel style={{ color: C.gold }}>เป้าหมายฤดูกาล</SectionLabel>
         {career.seasonGoal ? (
-          <div style={{ fontSize: 12.5 }}>🎯 {SEASON_GOAL_TEMPLATES.find((g) => g.id === career.seasonGoal)?.label} <span style={{ color: C.textDim }}>— สำเร็จแล้วรับ {formatMoney(SEASON_GOAL_TEMPLATES.find((g) => g.id === career.seasonGoal)?.reward || 0)} ตอนจบฤดูกาล</span></div>
-        ) : career.seasonGoalOptions && career.seasonGoalOptions.length ? (
-          <div>
-            <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 8 }}>เลือกเป้าหมายฤดูกาลนี้ 1 ข้อ สำเร็จแล้วรับโบนัสงบประมาณ</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {career.seasonGoalOptions.map((g) => (
-                <button key={g.id} onClick={() => onChooseSeasonGoal(g.id)} style={{ textAlign: "left", padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.steel}`, background: C.panel2, color: C.chalk, cursor: "pointer" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700 }}>{g.label}</div>
-                  <div style={{ fontSize: 10.5, color: C.amber, fontFamily: MONO_FONT }}>รางวัล {formatMoney(g.reward)}</div>
-                </button>
-              ))}
-            </div>
+          <div style={{ fontSize: 12.5 }}>🎯 {SEASON_GOAL_TEMPLATES.find((g) => g.id === career.seasonGoal)?.label}</div>
+        ) : career.seasonGoalOptions?.length ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {career.seasonGoalOptions.map((g) => (
+              <button key={g.id} onClick={() => onChooseSeasonGoal(g.id)} style={{ textAlign: "left", padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.steel}`, background: C.panel2, color: C.chalk, cursor: "pointer" }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>{g.label}</div>
+                <div style={{ fontSize: 10.5, color: C.amber, fontFamily: MONO_FONT }}>รางวัล {formatMoney(g.reward)}</div>
+              </button>
+            ))}
           </div>
-        ) : <div style={{ fontSize: 12, color: C.textDim }}>ไม่มีเป้าหมายให้เลือกตอนนี้</div>}
+        ) : <div style={{ fontSize: 12, color: C.textDim }}>ไม่มีเป้าหมายให้เลือก</div>}
       </Panel>
 
       <Panel>
@@ -2144,123 +5226,637 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
         </div>
       </Panel>
 
-      {mgr && (
-        <Panel>
-          <SectionLabel>ผจก.ปัจจุบัน</SectionLabel>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{mgr.name} <span style={{ color: C.gold, fontFamily: MONO_FONT, fontSize: 11 }}>Lv.{mgr.level || 1}</span></div>
-          <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, marginBottom: 4 }}>
-            ถนัด {mgr.preferredFormation} · ผลงาน {mgr.wins}ช-{mgr.draws}ส-{mgr.losses}พ
-            {daysLeftOnContract != null && (daysLeftOnContract > 0 ? ` · สัญญาเหลือ ${daysLeftOnContract} วัน` : " · หมดสัญญาแล้ว")}
+    </div>
+  );
+}
+
+/* ============================== MATCH BRIEFING (FM pre-match) ============================== */
+function StatCompareBar({ label, us, them, higherBetter = true }) {
+  const total = Math.max(us + them, 1);
+  const usPct = (us / total) * 100;
+  const usBetter = higherBetter ? us >= them : us <= them;
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: C.textDim, marginBottom: 3 }}>
+        <span>{label}</span>
+        <span style={{ fontFamily: MONO_FONT }}>
+          <span style={{ color: usBetter ? C.good : C.chalk }}>{us}</span>
+          {" · "}
+          <span style={{ color: !usBetter ? C.crimson : C.textDim }}>{them}</span>
+        </span>
+      </div>
+      <div style={{ display: "flex", height: 5, borderRadius: 3, overflow: "hidden", background: C.steel }}>
+        <div style={{ width: `${usPct}%`, background: usBetter ? C.good : C.blue }} />
+        <div style={{ flex: 1, background: C.crimson, opacity: 0.55 }} />
+      </div>
+    </div>
+  );
+}
+
+function MatchBriefingPanel({ scout, matchPrep, onSetMentality, onToggleInstruction, onSetTeamTalk, onGoTactics, onApplySuggested, onSetPrepField }) {
+  if (!scout) return null;
+  const prep = matchPrep || defaultMatchPrep();
+  const [expanded, setExpanded] = useState(false);
+  const topThreat = scout.keyThreats[0];
+  const winColor = scout.winChance >= 55 ? C.good : scout.winChance <= 45 ? C.crimson : C.amber;
+
+  return (
+    <Panel accent={C.blue} style={{ marginBottom: 0 }}>
+      <button type="button" onClick={() => setExpanded((v) => !v)} style={{
+        width: "100%", background: "transparent", border: "none", cursor: "pointer", padding: 0, textAlign: "left", color: C.chalk,
+      }}>
+        <SectionLabel sub={`#${scout.oppPos} ${scout.matchupLabel}`}>รายงานก่อนเกม</SectionLabel>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: expanded ? 10 : 0 }}>
+          <div style={{ fontSize: 10, fontFamily: MONO_FONT, color: C.textDim, lineHeight: 1.5 }}>
+            โอกาสชนะ <span style={{ color: winColor, fontWeight: 700 }}>~{scout.winChance}%</span>
+            {" · "}xG <span style={{ color: C.good }}>{scout.xgUs.toFixed(1)}</span>-<span style={{ color: C.crimson }}>{scout.xgThem.toFixed(1)}</span>
+            {topThreat && <> · อันตราย <span style={{ color: C.chalk }}>{topThreat.name}</span></>}
           </div>
-          <MiniBar value={((mgr.xp || 0) / ((mgr.level || 1) * 80)) * 100} color={C.gold} />
-          <div style={{ marginTop: 8 }}><RadarStats stats={mgr.stats} /></div>
-          {(mgr.skillPoints || 0) > 0 && (
-            <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(244,201,93,.1)", border: `1px solid ${C.gold}` }}>
-              <div style={{ fontSize: 11, color: C.gold, marginBottom: 6 }}>🌟 มีแต้มสกิล {mgr.skillPoints} แต้ม — เลือกเพิ่มสเตต</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {Object.keys(MANAGER_STAT_TH).map((k) => (
-                  <button key={k} onClick={() => onAllocateSkillPoint(k)} style={{ fontSize: 10, padding: "4px 8px", borderRadius: 6, border: `1px solid ${C.gold}`, background: "transparent", color: C.gold, cursor: "pointer" }}>+{MANAGER_STAT_TH[k]}</button>
-                ))}
-              </div>
+          <span style={{ fontSize: 10, color: C.amber, flexShrink: 0 }}>{expanded ? "ย่อ ▲" : "ดูรายละเอียด ▼"}</span>
+        </div>
+      </button>
+
+      {expanded && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+            <FormStrip label="ฟอร์มเรา" form={scout.userForm} />
+            <FormStrip label="ฟอร์มเขา" form={scout.oppForm} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10, fontSize: 10, fontFamily: MONO_FONT }}>
+            <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+              <div style={{ color: C.amber, fontWeight: 700, marginBottom: 4 }}>เรา · {scout.userFormation}</div>
+              <div style={{ color: C.textDim }}>XI {scout.xiCount}/11</div>
+            </div>
+            <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+              <div style={{ color: C.chalk, fontWeight: 700, marginBottom: 4 }}>เขา · {scout.oppFormation}</div>
+              <div style={{ color: C.textDim }}>อันดับ #{scout.oppPos}</div>
+            </div>
+          </div>
+          <StatCompareBar label="พลังบุก" us={scout.userAtk} them={scout.oppAtk} />
+          <StatCompareBar label="พลังรับ" us={scout.userDef} them={scout.oppDef} />
+          <StatCompareBar label="สตามินา XI" us={scout.avgStamina} them={scout.oppAvgStamina} />
+          {scout.keyThreats.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>อันตราย</div>
+              {scout.keyThreats.map((p) => (
+                <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, marginBottom: 4 }}>
+                  <RatingBadge value={p.rating} />
+                  <span style={{ fontWeight: 600 }}>{p.name}</span>
+                  <span style={{ color: playerPosColor(p), fontSize: 10 }}>{playerPosTH(p)}</span>
+                </div>
+              ))}
             </div>
           )}
-          <button onClick={onTerminateManager} style={{ ...btnStyle("transparent", C.crimson), border: `1px solid ${C.crimson}`, marginTop: 10 }}>
-            {daysLeftOnContract > 0 ? "เลิกจ้าง (มีค่าปรับ)" : "เลิกจ้าง"}
-          </button>
-        </Panel>
+          {scout.weaknesses.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 9, color: C.good, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>ช่องทาง</div>
+              {scout.weaknesses.map((w, i) => (
+                <div key={i} style={{ fontSize: 11, color: C.chalk, marginBottom: 3, lineHeight: 1.45 }}>→ {w}</div>
+              ))}
+              {scout.suggestedPrep && onApplySuggested && (
+                <button type="button" onClick={() => onApplySuggested(scout.suggestedPrep)} style={{
+                  marginTop: 6, padding: "6px 12px", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer",
+                  border: `1px solid ${C.good}`, background: "rgba(76,175,106,.12)", color: C.good, width: "100%",
+                }}>ใช้คำแนะนำ</button>
+              )}
+            </div>
+          )}
+        </>
       )}
 
-      {managerOffer && (
-        <Panel style={{ border: `1px solid ${C.purple}` }}>
-          <SectionLabel style={{ color: C.purple }}>ผจก.ผู้สมัครใหม่</SectionLabel>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>{managerOffer.name} — ถนัด {managerOffer.preferredFormation}</div>
-          <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, margin: "4px 0 8px" }}>ค่าแต่งตั้ง {formatMoney(managerOffer.signingCost)} · ค่าเหนื่อย {formatMoney(managerOffer.weeklyWage)}/วัน · สัญญา ~70-160 วัน</div>
-          {mgr && daysLeftOnContract > 0 && <div style={{ fontSize: 10.5, color: C.crimson, marginBottom: 8 }}>⚠️ {mgr.name} ยังติดสัญญาอีก {daysLeftOnContract} วัน — แต่งตั้งคนใหม่ตอนนี้จะถูกหักค่าปรับเลิกสัญญาด้วย</div>}
-          <div style={{ marginBottom: 10 }}><RadarStats stats={managerOffer.stats} /></div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={onHireManager} style={{ ...btnStyle(C.purple, "#fff"), flex: 1 }}>แต่งตั้ง</button>
-            <button disabled={(career.managerRerollCount || 0) >= 5} onClick={onRerollManager} style={{ ...btnStyle((career.managerRerollCount || 0) >= 5 ? "#2b332f" : C.steel, (career.managerRerollCount || 0) >= 5 ? C.textDim : C.chalk), flex: 1 }}>สุ่มใหม่ ({5 - (career.managerRerollCount || 0)} เหลือวันนี้)</button>
+      <div style={{ borderTop: `1px solid ${C.steel}`, paddingTop: 10, marginTop: 4 }}>
+        <SectionLabel sub="ก่อนลงสนาม">คุยนักเตะ (Team Talk)</SectionLabel>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: expanded ? 10 : 0 }}>
+          {TEAM_TALK_OPTIONS.map((tt) => (
+            <button key={tt.id} type="button" onClick={() => onSetTeamTalk(prep.teamTalk === tt.id ? null : tt.id)} style={{
+              padding: "5px 9px", borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: "pointer",
+              border: `1px solid ${prep.teamTalk === tt.id ? C.gold : C.steel}`,
+              background: prep.teamTalk === tt.id ? "rgba(212,175,55,.12)" : C.panel2,
+              color: prep.teamTalk === tt.id ? C.gold : C.textDim,
+            }}>{tt.label}</button>
+          ))}
+        </div>
+        {expanded && (
+          <>
+            <SectionLabel sub="ปรับได้ก่อนลงสนาม">แผนการเล่น</SectionLabel>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 8 }}>
+              {MATCH_MENTALITIES.map((m) => (
+                <button key={m.id} type="button" onClick={() => onSetMentality(m.id)} style={{
+                  padding: "5px 9px", borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: "pointer",
+                  border: `1px solid ${prep.mentality === m.id ? C.amber : C.steel}`,
+                  background: prep.mentality === m.id ? "rgba(201,162,39,.15)" : C.panel2,
+                  color: prep.mentality === m.id ? C.amber : C.textDim,
+                }}>{m.label}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 8 }}>
+              {MATCH_INSTRUCTIONS.map((ins) => {
+                const on = (prep.instructions || []).includes(ins.id);
+                return (
+                  <button key={ins.id} type="button" onClick={() => onToggleInstruction(ins.id)} style={{
+                    padding: "5px 8px", borderRadius: 6, fontSize: 9.5, cursor: "pointer",
+                    border: `1px solid ${on ? C.blue : C.steel}`,
+                    background: on ? "rgba(90,155,213,.12)" : C.panel2,
+                    color: on ? C.blue : C.textDim,
+                  }} title={ins.desc}>{ins.label}</button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 9.5, color: C.textDim, marginBottom: 10 }}>เลือกคำสั่งได้สูงสุด 3 อย่าง · แนะนำแผน {scout.recommendedFormation}</div>
+
+            {onSetPrepField && (
+              <>
+                {[
+                  { field: "tempo", label: "จังหวะเกม (Tempo)", options: TEMPO_OPTIONS, color: C.amber },
+                  { field: "pressing", label: "การกดดัน (Pressing)", options: PRESSING_OPTIONS, color: C.crimson },
+                  { field: "defLine", label: "แนวรับ (Defensive Line)", options: DEF_LINE_OPTIONS, color: C.blue },
+                ].map(({ field, label, options, color }) => (
+                  <div key={field} style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>{label}</div>
+                    <div style={{ display: "flex", gap: 5 }}>
+                      {options.map((opt) => {
+                        const on = (prep[field] || options[1].id) === opt.id;
+                        return (
+                          <button key={opt.id} type="button" onClick={() => onSetPrepField(field, opt.id)} title={opt.desc} style={{
+                            flex: 1, padding: "5px 4px", borderRadius: 6, fontSize: 9.5, fontWeight: on ? 700 : 400, cursor: "pointer",
+                            border: `1px solid ${on ? color : C.steel}`,
+                            background: on ? `${color}22` : C.panel2,
+                            color: on ? color : C.textDim,
+                          }}>{opt.label}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                {prep.defLine === "high" && (
+                  <button type="button" onClick={() => onSetPrepField("offsideTrap", !prep.offsideTrap)} style={{
+                    width: "100%", padding: "6px 10px", borderRadius: 6, fontSize: 10, cursor: "pointer", marginBottom: 8,
+                    border: `1px solid ${prep.offsideTrap ? C.gold : C.steel}`,
+                    background: prep.offsideTrap ? "rgba(212,175,55,.12)" : C.panel2,
+                    color: prep.offsideTrap ? C.gold : C.textDim, textAlign: "left",
+                  }}>
+                    {prep.offsideTrap ? "☑" : "☐"} กับดักล้ำหน้า (Offside Trap) — ได้ผลเมื่อแบ็คเร็วพอ ถ้าแบ็คช้าเสี่ยงโดนบอลทะลุ
+                  </button>
+                )}
+                {(scout.oppXIList || []).length > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>ประกบตัวอันตราย (Opposition Mark)</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {[...scout.oppXIList].sort((a, b) => b.attack - a.attack).slice(0, 5).map((p) => {
+                        const on = prep.markPlayerId === p.id;
+                        return (
+                          <button key={p.id} type="button" onClick={() => onSetPrepField("markPlayerId", on ? null : p.id)} style={{
+                            fontSize: 9.5, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
+                            border: `1px solid ${on ? C.crimson : C.steel}`,
+                            background: on ? "rgba(193,68,14,.15)" : C.panel2,
+                            color: on ? C.crimson : C.textDim,
+                          }}>{on ? "🔒 " : ""}{p.name.split(" ")[1] || p.name} ({playerPosCode(p)})</button>
+                        );
+                      })}
+                    </div>
+                    <div style={{ fontSize: 9, color: C.textDim, marginTop: 3 }}>ล็อกประกบ 1 คน — ลดพลังรุกตัวนั้น แต่เสียเกมรับเราเล็กน้อย (รีเซ็ตหลังจบนัด)</div>
+                  </div>
+                )}
+                {scout.familiarityMult != null && (
+                  <div style={{ fontSize: 9.5, fontFamily: MONO_FONT, color: scout.familiarityMult >= 1 ? C.good : C.crimson, marginBottom: 8 }}>
+                    ความคุ้นเคยแผน {scout.userFormation}: {scout.familiarityMatches} นัด ({scout.familiarityMult >= 1 ? "+" : ""}{Math.round((scout.familiarityMult - 1) * 100)}%)
+                  </div>
+                )}
+              </>
+            )}
+            <button type="button" onClick={onGoTactics} style={fmBtnGhost({ fontSize: 11 })}>จัด XI / แผน / บทบาท / ลูกตั้งเตะ →</button>
+          </>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+function ClubFansPanel({ career, uTeam, seasonOver, posInTable, userRow, onUpgradeSponsor }) {
+  const sponsorTier = SPONSOR_TIERS[career.sponsorTier ?? 0] || SPONSOR_TIERS[0];
+  const nextTier = SPONSOR_TIERS[(career.sponsorTier ?? 0) + 1];
+  const sponsorDaily = computeSponsorDaily(career, uTeam);
+  const merchDaily = computeMerchDaily(career, uTeam);
+  const fanCap = getFanCap(uTeam.division);
+  const canUpgrade = nextTier && (career.fanBase || 0) >= nextTier.minFans && (career.sponsorTier ?? 0) < qualifySponsorTier(career.fanBase || 0);
+  const leaguePrize = seasonOver ? getLeaguePrize(uTeam.division, posInTable) : 0;
+
+  return (
+    <Panel accent={C.gold}>
+      <SectionLabel sub={`เพดานแฟน ${fanCap.toLocaleString()} คน · ${uTeam.division === 0 ? "Master" : "Challenger"}`}>สโมสร & แฟนบอล</SectionLabel>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+        <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+          <div style={{ fontSize: 9, color: C.textDim }}>แฟนบอล</div>
+          <div style={{ fontFamily: MONO_FONT, fontSize: 16, fontWeight: 700, color: C.amber }}>{(career.fanBase || 0).toLocaleString()}</div>
+          {(career.fanDeltaToday || 0) !== 0 && (
+            <div style={{ fontSize: 10, color: career.fanDeltaToday > 0 ? C.good : C.crimson }}>
+              วันนี้ {career.fanDeltaToday > 0 ? "+" : ""}{career.fanDeltaToday.toLocaleString()}
+            </div>
+          )}
+        </div>
+        <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+          <div style={{ fontSize: 9, color: C.textDim }}>สปอนเซอร์</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.chalk }}>{sponsorTier.name}</div>
+          <div style={{ fontSize: 10, color: C.good, fontFamily: MONO_FONT }}>+{formatMoney(sponsorDaily)}/วัน</div>
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.55, marginBottom: 8 }}>
+        เสื้อ/ของที่ระลึก <b style={{ color: C.chalk }}>+{formatMoney(merchDaily)}</b>/วัน
+        {" · "}รายได้รวมวันละ <b style={{ color: C.good }}>+{formatMoney(sponsorDaily + merchDaily)}</b>
+      </div>
+      {canUpgrade && (
+        <button type="button" onClick={onUpgradeSponsor} style={{ ...btnStyle(C.gold, "#0a1210"), width: "100%", fontSize: 11, padding: "8px 0", marginBottom: 8 }}>
+          อัปเกรดสปอนเซอร์ → {nextTier.name}
+        </button>
+      )}
+      {seasonOver && (
+        <div style={{ padding: "8px 10px", borderRadius: 6, background: "rgba(212,175,55,.08)", border: `1px solid ${C.gold}`, fontSize: 11, lineHeight: 1.55 }}>
+          <b style={{ color: C.gold }}>สรุปปลายฤดูกาล</b> — อันดับ #{posInTable} · {userRow?.pts ?? 0} แต้ม
+          {leaguePrize > 0 && (
+            <div style={{ color: C.good, marginTop: 4 }}>🏆 รางวัลลีก: +{formatMoney(leaguePrize)}</div>
+          )}
+          {career.lastSeasonSnapshot && (
+            <div style={{ color: C.textDim, marginTop: 4 }}>
+              ฤดูกาลก่อน: อันดับ #{career.lastSeasonSnapshot.pos} · {career.lastSeasonSnapshot.pts} แต้ม
+              {(career.badSeasonStreak || 0) > 0 && ` · แฟนท้อ ${career.badSeasonStreak} ฤดูกาล`}
+            </div>
+          )}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+/* ============================== CLUB HUB ============================== */
+function ClubHubView({ career, uTeam, standings, seasonOver, onUpgradeSponsor }) {
+  const posInTable = standings.findIndex((s) => s.team.id === uTeam.id) + 1;
+  const userRow = standings.find((s) => s.team.id === uTeam.id);
+  const sponsorTier = SPONSOR_TIERS[career.sponsorTier ?? 0] || SPONSOR_TIERS[0];
+  const merchDaily = computeMerchDaily(career, uTeam);
+  const fin = computeTeamFinances(career);
+  const clubNews = career.log.filter((l) => /📈|📉|💼|🎉|😞|🙌|📄|✂️/.test(l)).slice(0, 10);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel accent={C.gold} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <ClubBadge team={uTeam} size={44} />
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, fontFamily: DISPLAY_FONT }}>{uTeam.name}</div>
+          <div style={{ fontSize: 10.5, color: C.textDim }}>{uTeam.division === 0 ? "Master League" : "Challenger League"} · อันดับ #{posInTable || "-"}</div>
+        </div>
+      </Panel>
+
+      <ClubFansPanel career={career} uTeam={uTeam} seasonOver={seasonOver} posInTable={posInTable} userRow={userRow} onUpgradeSponsor={onUpgradeSponsor} />
+
+      <Panel>
+        <SectionLabel sub="ยิ่งฐานแฟนเยอะ ยิ่งปลดล็อกสปอนเซอร์เกรดสูง">🪜 บันไดสปอนเซอร์</SectionLabel>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {SPONSOR_TIERS.map((t) => {
+            const active = t.tier === (career.sponsorTier ?? 0);
+            const reached = (career.fanBase || 0) >= t.minFans;
+            return (
+              <div key={t.tier} style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", borderRadius: 6,
+                background: active ? "rgba(212,175,55,.12)" : C.panel2, border: `1px solid ${active ? C.gold : C.steel}`,
+              }}>
+                <div style={{ fontSize: 11.5, fontWeight: active ? 700 : 500, color: reached ? C.chalk : C.textDim }}>
+                  {active && "▶ "}{t.name}
+                </div>
+                <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, textAlign: "right" }}>
+                  ต้องการแฟน {t.minFans.toLocaleString()}+<br />
+                  <span style={{ color: C.good }}>+{formatMoney(t.baseDaily)}/วัน (ฐาน)</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <Panel>
+        <SectionLabel sub={`ฐานแฟน ${(career.fanBase || 0).toLocaleString()} คน × โบนัสนักเตะสตาร์`}>👕 รายได้เสื้อ/ของที่ระลึก</SectionLabel>
+        <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
+          รายได้วันนี้ <b style={{ color: C.good, fontFamily: MONO_FONT }}>+{formatMoney(merchDaily)}</b>
+          <br />มีนักเตะเรต 85+ ในทีมช่วยเพิ่มยอดขาย 50% · เรต 75+ เพิ่ม 20%
+        </div>
+      </Panel>
+
+      <Panel>
+        <SectionLabel sub="ทุกสินทรัพย์รวมกันเป็นมูลค่าสโมสร">💰 การเงินสโมสร</SectionLabel>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11.5, fontFamily: MONO_FONT }}>
+          {[
+            ["งบสด", fin.budget, C.amber],
+            ["มูลค่านักเตะชุดใหญ่", fin.squadValue, C.chalk],
+            ["มูลค่าอคาเดมี+ดาวรุ่ง", fin.academyValue + fin.prospectValue, C.chalk],
+            ["สิ่งอำนวยความสะดวก", fin.facilitiesValue, C.chalk],
+            ["สตาฟ/ผจก/แมวมอง", fin.coachesValue + fin.managerValue + fin.scoutValue + fin.academyMgrValue, C.chalk],
+          ].map(([label, val, color]) => (
+            <div key={label} style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: C.textDim, fontFamily: FM_FONT }}>{label}</span>
+              <span style={{ color }}>{formatMoney(val)}</span>
+            </div>
+          ))}
+          <div style={{ display: "flex", justifyContent: "space-between", borderTop: `1px solid ${C.steel}`, paddingTop: 5, marginTop: 3 }}>
+            <span style={{ fontWeight: 700, fontFamily: FM_FONT }}>มูลค่าสโมสรรวม</span>
+            <span style={{ fontWeight: 700, color: C.gold }}>{formatMoney(fin.teamValue)}</span>
+          </div>
+        </div>
+      </Panel>
+
+      {clubNews.length > 0 && (
+        <Panel>
+          <SectionLabel>📰 ข่าวสโมสรล่าสุด</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 11, color: C.textDim, lineHeight: 1.5 }}>
+            {clubNews.map((l, i) => <div key={i} style={{ borderTop: i > 0 ? `1px solid ${C.steel}` : "none", paddingTop: i > 0 ? 6 : 0 }}>{l}</div>)}
           </div>
         </Panel>
       )}
+    </div>
+  );
+}
 
-      <Panel>
-        <SectionLabel>อันดับทีมคุณ</SectionLabel>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <div style={{ fontFamily: DISPLAY_FONT, fontSize: 30, color: C.amber }}>#{posInTable}</div>
-          <div style={{ fontSize: 12, color: C.textDim, fontFamily: MONO_FONT }}>{myRow ? `${myRow.played} นัด · ${myRow.w}ชนะ ${myRow.d}เสมอ ${myRow.l}แพ้ · ${myRow.pts} แต้ม` : ""}</div>
+/* ============================== DASHBOARD (HOME) — FM Mobile ============================== */
+function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seasonOver, onAdvance, onKickoff, onGoTactics, onGoManager, xiPicked, xiAfterFill, canKickoff, injuredCount, onNewSeason, matchScout, matchPrep, onSetMentality, onToggleInstruction, onSetTeamTalk, onUpgradeSponsor, onApplySuggested, onGoClub, onSetPrepField, onBoardMove }) {
+  const posInTable = standings.findIndex((s) => s.team.id === uTeam.id) + 1;
+  const recentResults = getRecentMatchResults(career, uTeam.division, uTeam.id, 8);
+  const newsLogs = career.log.filter((l) => !isMatchLogLine(l)).slice(0, 6);
+  const [feedTab, setFeedTab] = useState("results");
+  const [boardOpen, setBoardOpen] = useState(false);
+  const userRow = standings.find((s) => s.team.id === uTeam.id);
+  const dashSquad = career.players.filter((p) => p.teamId === uTeam.id);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Hero: นัดวันนี้ */}
+      <Panel accent={C.amber} style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: "10px 12px 0" }}>
+          <SectionLabel sub={seasonOver ? `ฤดูกาล ${career.season} จบแล้ว` : opponent ? `${isHome ? "เหย้า" : "เยือน"} · วันที่ ${career.day}` : "วันพัก"}>
+            นัดถัดไป
+          </SectionLabel>
+        </div>
+        {seasonOver ? (
+          <div style={{ padding: "0 12px 12px" }}>
+            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 10 }}>
+              อันดับสุดท้าย #{posInTable} · {userRow?.pts ?? 0} แต้ม · {userRow?.w ?? 0}ช {userRow?.d ?? 0}ส {userRow?.l ?? 0}พ
+              {getLeaguePrize(uTeam.division, posInTable) > 0 && (
+                <span style={{ color: C.good }}> · รางวัลลีก {formatMoney(getLeaguePrize(uTeam.division, posInTable))}</span>
+              )}
+            </div>
+            <button type="button" onClick={onNewSeason} style={fmBtnPrimary()}>เริ่มฤดูกาลใหม่</button>
+          </div>
+        ) : opponent ? (
+          <div style={{ padding: "0 12px 12px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <div style={{ textAlign: "center" }}>
+                <ClubBadge team={uTeam} size={40} />
+                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4 }}>{uTeam.short}</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontFamily: MONO_FONT, fontSize: 10, color: C.textDim }}>{isHome ? "H" : "A"}</div>
+                <div style={{ fontSize: 11, color: C.textDim }}>vs</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <ClubBadge team={opponent} size={40} />
+                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4 }}>{opponent.short}</div>
+              </div>
+            </div>
+            <button type="button" onClick={onKickoff} disabled={!canKickoff} style={fmBtnPrimary({ marginBottom: 8, opacity: canKickoff ? 1 : 0.45, cursor: canKickoff ? "pointer" : "not-allowed" })}>
+              {canKickoff ? "▶ ลงสนาม" : `▶ ลงสนามไม่ได้ (${xiAfterFill}/11)`}
+            </button>
+            {!canKickoff && (
+              <div style={{ fontSize: 10, color: C.crimson, marginBottom: 8, lineHeight: 1.5 }}>
+                ต้องมีนักเตะพร้อมเล่นครบ 11 คนตามแผน — บาดเจ็บ {injuredCount} คน · ไปแท็บทีมเพื่อดูสถานะ
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 6 }}>
+              <button type="button" onClick={onGoTactics} style={fmBtnGhost()}>จัดทีม · {xiPicked}/11</button>
+              <button type="button" onClick={onGoManager} style={fmBtnGhost()}>ผจก.</button>
+            </div>
+            <div style={{ fontSize: 9, color: C.textDim, marginTop: 6, textAlign: "center", fontFamily: MONO_FONT }}>
+              XI {xiPicked}/11 → เติมอัตโนมัติ {xiAfterFill}/11
+            </div>
+          </div>
+        ) : (
+          <div style={{ padding: "0 12px 12px" }}>
+            <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8 }}>ทีมว่างวันนี้ — ข้ามไปวันถัดไป</div>
+            <button type="button" onClick={onAdvance} style={fmBtnGhost({ width: "100%" })}>ข้ามวัน</button>
+          </div>
+        )}
+      </Panel>
+
+      <Panel accent={C.gold} style={{ cursor: onGoClub ? "pointer" : "default" }} onClick={onGoClub}>
+        <SectionLabel sub="แฟนบอล · สปอนเซอร์ · การเงิน — ดูรายละเอียดที่แท็บสโมสร">🏟️ สโมสร & แฟนบอล</SectionLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+            <div style={{ fontSize: 9, color: C.textDim }}>แฟนบอล</div>
+            <div style={{ fontFamily: MONO_FONT, fontSize: 16, fontWeight: 700, color: C.amber }}>{(career.fanBase || 0).toLocaleString()}</div>
+          </div>
+          <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+            <div style={{ fontSize: 9, color: C.textDim }}>สปอนเซอร์</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.chalk }}>{(SPONSOR_TIERS[career.sponsorTier ?? 0] || SPONSOR_TIERS[0]).name}</div>
+          </div>
+        </div>
+        {onGoClub && <div style={{ fontSize: 10.5, color: C.gold, marginTop: 8, textAlign: "right" }}>ดูรายละเอียดสโมสร →</div>}
+      </Panel>
+
+      {opponent && !seasonOver && matchScout && (
+        <MatchBriefingPanel scout={matchScout} matchPrep={matchPrep}
+          onSetMentality={onSetMentality} onToggleInstruction={onToggleInstruction}
+          onSetTeamTalk={onSetTeamTalk} onGoTactics={onGoTactics} onApplySuggested={onApplySuggested}
+          onSetPrepField={onSetPrepField} />
+      )}
+
+      {/* กระดานจัดทีมก่อนเกม (ลากวาง) */}
+      {opponent && !seasonOver && onBoardMove && (
+        <Panel style={{ padding: 0, overflow: "hidden" }}>
+          <button type="button" onClick={() => setBoardOpen((v) => !v)} style={{ width: "100%", background: "transparent", border: "none", cursor: "pointer", padding: "12px 14px", textAlign: "left", color: C.chalk, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontFamily: FM_FONT, color: C.textDim, fontSize: 10, fontWeight: 600, letterSpacing: 1.2, textTransform: "uppercase" }}>⚽ จัดทีมก่อนเกม ({xiPicked}/11)</span>
+            <span style={{ fontSize: 10, color: C.amber }}>{boardOpen ? "ย่อ ▲" : "เปิดสนาม ▼"}</span>
+          </button>
+          {boardOpen && (
+            <SquadPitchBoard
+              team={uTeam}
+              squad={dashSquad}
+              slots={resolveLineupSlots(career, dashSquad, uTeam.formation)}
+              editable={!uTeam.autoMode}
+              onMove={onBoardMove}
+            />
+          )}
+        </Panel>
+      )}
+
+      {/* สรุปอันดับ */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+        {[
+          ["อันดับ", `#${posInTable}`, C.amber],
+          ["แต้ม", userRow?.pts ?? 0, C.chalk],
+          ["ชนะ", userRow?.w ?? 0, C.good],
+          ["+/-", (userRow?.gd ?? 0) > 0 ? `+${userRow.gd}` : userRow?.gd ?? 0, (userRow?.gd ?? 0) >= 0 ? C.good : C.crimson],
+        ].map(([label, val, color]) => (
+          <div key={label} style={{ background: C.panel2, borderRadius: 6, padding: "8px 6px", textAlign: "center", border: `1px solid ${C.steel}` }}>
+            <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase" }}>{label}</div>
+            <div style={{ fontFamily: MONO_FONT, fontSize: 15, fontWeight: 700, color, marginTop: 2 }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ตารางคะแนน */}
+      <Panel style={{ padding: 0, overflow: "hidden" }} accent={C.good}>
+        <div style={{ padding: "10px 12px 0" }}>
+          <SectionLabel>ตารางคะแนน</SectionLabel>
+        </div>
+        <div style={{ padding: "0 4px 8px" }}>
+          <FMStandingsTable standings={standings} uTeamId={uTeam.id} />
+        </div>
+      </Panel>
+
+      {/* ผล + ข่าว (แท็บย่อย) */}
+      <Panel style={{ padding: 0 }}>
+        <div style={{ display: "flex", borderBottom: `1px solid ${C.steel}` }}>
+          {[
+            { id: "results", label: "ผลล่าสุด" },
+            { id: "news", label: "ข่าว" },
+          ].map((t) => (
+            <button key={t.id} type="button" onClick={() => setFeedTab(t.id)} style={{
+              flex: 1, padding: "8px 0", background: "transparent", border: "none", cursor: "pointer",
+              fontSize: 11, fontWeight: 600, fontFamily: FM_FONT,
+              color: feedTab === t.id ? C.amber : C.textDim,
+              borderBottom: feedTab === t.id ? `2px solid ${C.amber}` : "2px solid transparent",
+            }}>{t.label}</button>
+          ))}
+        </div>
+        <div style={{ padding: "8px 12px", maxHeight: 200, overflowY: "auto" }}>
+          {feedTab === "results" && (
+            recentResults.length === 0
+              ? <div style={{ fontSize: 11, color: C.textDim }}>ยังไม่มีผลแข่ง</div>
+              : recentResults.map((r, i) => (
+                <div key={i} style={{
+                  display: "grid", gridTemplateColumns: "28px 1fr auto 1fr 16px", alignItems: "center", gap: 4,
+                  fontSize: 11, fontFamily: MONO_FONT, padding: "5px 0",
+                  borderBottom: i < recentResults.length - 1 ? `1px solid ${C.steel}` : "none",
+                  background: r.isUser ? C.fmRowHi : "transparent",
+                }}>
+                  <span style={{ fontSize: 9, color: C.textDim }}>D{r.day}</span>
+                  <span style={{ textAlign: "right", color: r.homeGoals > r.awayGoals ? C.chalk : C.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.home.short}</span>
+                  <span style={{ color: C.amber, fontWeight: 700, padding: "0 4px" }}>{r.homeGoals}-{r.awayGoals}</span>
+                  <span style={{ color: r.awayGoals > r.homeGoals ? C.chalk : C.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.away.short}</span>
+                  <span>{r.isUser ? "★" : ""}</span>
+                </div>
+              ))
+          )}
+          {feedTab === "news" && (
+            newsLogs.length === 0
+              ? <div style={{ fontSize: 11, color: C.textDim }}>ยังไม่มีข่าว</div>
+              : newsLogs.map((l, i) => (
+                <div key={i} style={{ fontSize: 11, color: i === 0 ? C.chalk : C.textDim, lineHeight: 1.5, padding: "4px 0", borderBottom: i < newsLogs.length - 1 ? `1px solid ${C.steel}` : "none" }}>{l}</div>
+              ))
+          )}
         </div>
       </Panel>
 
       {career.lastChampMaster && (
-        <Panel style={{ border: `1px solid ${C.gold}` }}>
-          <SectionLabel style={{ color: C.gold }}>🏆 Champ Master (ฤดูกาลที่ {career.lastChampMaster.season - 1})</SectionLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {career.lastChampMaster.rounds.map((r, ri) => (
-              <div key={ri}>
-                <div style={{ fontSize: 10, color: C.textDim, marginTop: ri > 0 ? 6 : 0 }}>{r.name}</div>
-                {r.matches.map((m, mi) => (
-                  <div key={mi} style={{ fontSize: 11.5, fontFamily: MONO_FONT }}>
-                    <span style={{ color: m.winnerShort === m.a ? C.gold : C.textDim }}>{m.a}</span> {m.gA}-{m.gB} <span style={{ color: m.winnerShort === m.b ? C.gold : C.textDim }}>{m.b}</span>{m.extraTime ? " (ต่อเวลา)" : ""}
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
+        <Panel accent={C.gold}>
+          <SectionLabel>Champ Master</SectionLabel>
+          {career.lastChampMaster.rounds.slice(0, 1).map((r, ri) => (
+            <div key={ri} style={{ fontSize: 10, fontFamily: MONO_FONT, color: C.textDim }}>
+              {r.matches.slice(0, 3).map((m, mi) => <div key={mi}>{m.a} {m.gA}-{m.gB} {m.b}</div>)}
+            </div>
+          ))}
         </Panel>
       )}
-
-      <Panel>
-        <SectionLabel>ผลข่าวล่าสุด</SectionLabel>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
-          {career.log.slice(0, 14).map((l, i) => <div key={i} style={{ fontSize: 12.5, color: i === 0 ? C.chalk : C.textDim, fontFamily: MONO_FONT, lineHeight: 1.5 }}>{l}</div>)}
-        </div>
-      </Panel>
-    </div>
-  );
-}
-function TeamChip({ team }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-      <ClubBadge team={team} size={46} />
-      <div style={{ fontSize: 11, color: C.textDim, maxWidth: 90, textAlign: "center" }}>{team.name}</div>
     </div>
   );
 }
 
 /* ============================== SQUAD ============================== */
-function SquadView({ squad, xi, onSell, staff, coachOffers, coachRerollCounts, budget, onHireCoach, onRerollCoach, currentDay, onRenewContract }) {
-  const groups = ["GK", "DF", "MF", "FW"];
-  const sorted = [...squad].sort((a, b) => b.rating - a.rating);
+/** การ์ดผู้สมัครรายสัปดาห์แบบใช้ซ้ำได้ — ใช้ทั้งห้องโค้ชและห้องพยาบาล */
+function StaffOfferCard({ spec, co, offer, locked, budget, onHire }) {
+  const terminationFee = co ? Math.round((co.weeklyWage * 8) / 1000) * 1000 : 0;
+  return (
+    <div style={{ padding: "8px 10px", borderRadius: 8, background: co ? "rgba(111,174,90,.1)" : C.panel2, border: `1px solid ${co ? C.good : C.steel}` }}>
+      <div style={{ fontSize: 11, fontFamily: MONO_FONT, color: C.textDim, marginBottom: 4 }}>{STAFF_TH[spec]}</div>
+      {co && (
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          {co.name}
+          {staffEntityStars(co) ? <StarGlyphs count={staffEntityStars(co)} size={8} /> : null}
+          <span style={{ fontSize: 10, color: C.textDim, fontWeight: 500 }}>+{co.boost}</span>
+          {locked && <span style={{ fontSize: 9.5, color: C.textDim }}>🔒 เปลี่ยนได้ตอนขึ้นฤดูกาลหน้า</span>}
+        </div>
+      )}
+      {locked ? (
+        <div style={{ fontSize: 10.5, color: C.textDim }}>ล็อกจนจบฤดูกาลนี้ — เปลี่ยนสตาฟตำแหน่งนี้ได้อีกครั้งตอนขึ้นฤดูกาลหน้า</div>
+      ) : offer ? (
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700 }}>{offer.name} (เกรด {offer.grade}/5)</div>
+          <div style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT, margin: "3px 0 6px" }}>
+            ค่าแรกเข้า {formatMoney(offer.signingCost)} · ค่าเหนื่อย {formatMoney(offer.weeklyWage)}/วัน{co ? ` · +ค่าปรับเลิกจ้างคนเดิม ${formatMoney(terminationFee)}` : ""}
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button disabled={budget < offer.signingCost + terminationFee} onClick={() => onHire(spec)} style={{ fontSize: 10.5, padding: "5px 10px", borderRadius: 6, border: "none", background: budget >= offer.signingCost + terminationFee ? C.good : "#2b332f", color: budget >= offer.signingCost + terminationFee ? "#08150e" : C.textDim, cursor: "pointer", fontWeight: 700 }}>{co ? "จ้างแทนคนเดิม" : "จ้าง"}</button>
+          </div>
+        </div>
+      ) : <div style={{ fontSize: 10.5, color: C.textDim }}>ไม่มีผู้สมัครตอนนี้ รอรอบถัดไป</div>}
+    </div>
+  );
+}
+
+/* ============================== COACH ROOM ============================== */
+function CoachRoomView({ career, staff, coachOffers, budget, onHireCoach, onHireCard }) {
+  const specs = ["GK", "DF", "MF", "FW", "FITNESS"];
+  const cards = (career.staffCardBag || []).filter((c) => c.type === "COACH");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel accent={C.blue}>
+        <SectionLabel sub="ปรับ/เปลี่ยนโค้ชทุกตำแหน่งได้ที่นี่ที่เดียว">🧑‍🏫 ห้องโค้ช</SectionLabel>
+        <div style={{ fontSize: 11.5, color: C.textDim }}>จ้างจากผู้สมัครรายสัปดาห์ด้านล่าง หรือติดตั้งจากการ์ดสตาฟที่สุ่มได้โดยตรง</div>
+      </Panel>
+      {cards.length > 0 && (
+        <Panel style={{ border: `1px solid ${C.blue}` }}>
+          <SectionLabel style={{ color: C.blue }} sub={`มี ${cards.length} ใบในกระเป๋า — กด "จ้าง" เพื่อติดตั้งทันที${cards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดโค้ชที่สุ่มได้</SectionLabel>
+          <div style={CARD_LIST_SCROLL}>
+            {cards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireCard} {...staffCardLockInfo(career, card)} />)}
+          </div>
+        </Panel>
+      )}
       <Panel>
-        <SectionLabel>สตาฟทีม</SectionLabel>
+        <SectionLabel>ผู้สมัครรายสัปดาห์</SectionLabel>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {STAFF_SPECS.map((spec) => {
-            const co = staff[spec];
-            const offer = coachOffers ? coachOffers[spec] : null;
-            const rerolls = (coachRerollCounts && coachRerollCounts[spec]) || 0;
-            const terminationFee = co ? Math.round((co.weeklyWage * 8) / 1000) * 1000 : 0;
-            return (
-              <div key={spec} style={{ padding: "8px 10px", borderRadius: 8, background: co ? "rgba(111,174,90,.1)" : C.panel2, border: `1px solid ${co ? C.good : C.steel}` }}>
-                <div style={{ fontSize: 11, fontFamily: MONO_FONT, color: C.textDim, marginBottom: 4 }}>{STAFF_TH[spec]}</div>
-                {co && <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>{co.name} (เกรด {co.grade}/5, +{co.boost})</div>}
-                {offer ? (
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 700 }}>{offer.name} (เกรด {offer.grade}/5)</div>
-                    <div style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT, margin: "3px 0 6px" }}>
-                      ค่าแรกเข้า {formatMoney(offer.signingCost)} · ค่าเหนื่อย {formatMoney(offer.weeklyWage)}/วัน{co ? ` · +ค่าปรับเลิกจ้างคนเดิม ${formatMoney(terminationFee)}` : ""} · รีแล้ว {rerolls}/5 วันนี้
-                    </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button disabled={budget < offer.signingCost + terminationFee} onClick={() => onHireCoach(spec)} style={{ fontSize: 10.5, padding: "5px 10px", borderRadius: 6, border: "none", background: budget >= offer.signingCost + terminationFee ? C.good : "#2b332f", color: budget >= offer.signingCost + terminationFee ? "#08150e" : C.textDim, cursor: "pointer", fontWeight: 700 }}>{co ? "จ้างแทนคนเดิม" : "จ้าง"}</button>
-                      <button disabled={rerolls >= 5} onClick={() => onRerollCoach(spec)} style={{ fontSize: 10.5, padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.steel}`, background: "transparent", color: rerolls >= 5 ? C.textDim : C.chalk, cursor: rerolls >= 5 ? "not-allowed" : "pointer" }}>สุ่มใหม่ ({5 - rerolls} เหลือ)</button>
-                    </div>
-                  </div>
-                ) : <div style={{ fontSize: 10.5, color: C.textDim }}>ไม่มีผู้สมัครตอนนี้ รอรอบถัดไป</div>}
-              </div>
-            );
-          })}
+          {specs.map((spec) => (
+            <StaffOfferCard
+              key={spec}
+              spec={spec}
+              co={staff[spec]}
+              offer={coachOffers ? coachOffers[spec] : null}
+              locked={isStaffRoleLocked(staff[spec], career.season)}
+              budget={budget}
+              onHire={onHireCoach}
+            />
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function SquadView({ squad, xi, squadSize, injuredCount, canKickoff, xiAfterFill, onSell, allowSell, currentDay, budget, onRenewContract, onGoMedical, onGoCoach }) {
+  const groups = ["GK", "DF", "MF", "FW"];
+  const sorted = [...squad].sort((a, b) => b.rating - a.rating);
+  const fitCount = squad.filter((p) => p.injuryDays <= 0).length;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel accent={canKickoff ? C.good : C.crimson}>
+        <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+          <b>สมาชิกทีม {squadSize} คน</b> · พร้อมเล่น {fitCount} คน · บาดเจ็บ {injuredCount} คน
+          <br />ตัวจริง {xi.filter(Boolean).length}/{MIN_XI_SIZE} · ตัวสำรองสูงสุด {MATCH_BENCH_SIZE} (เปลี่ยนได้ {MAX_MATCH_SUBS}/นัด)
+          <br />ตัวจริงที่ลงได้ <b style={{ color: canKickoff ? C.good : C.crimson }}>{xiAfterFill}/11</b>
+          {!canKickoff && <span style={{ color: C.crimson }}> — ยังลงแข่งไม่ได้</span>}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          {onGoCoach && (
+            <button type="button" onClick={onGoCoach} style={{ ...fmBtnGhost(), flex: 1, minWidth: 140, fontSize: 11, borderColor: C.blue, color: C.blue }}>🧑‍🏫 ห้องโค้ช — ปรับ/เปลี่ยนสตาฟ</button>
+          )}
+          {onGoMedical && (
+            <button type="button" onClick={onGoMedical} style={{ ...fmBtnGhost(), flex: 1, minWidth: 140, fontSize: 11, borderColor: C.crimson, color: C.crimson }}>🏥 ห้องพยาบาล{injuredCount > 0 ? ` — บาดเจ็บ ${injuredCount} คน` : ""}</button>
+          )}
         </div>
       </Panel>
       {groups.map((g) => (
@@ -2268,7 +5864,7 @@ function SquadView({ squad, xi, onSell, staff, coachOffers, coachRerollCounts, b
           <SectionLabel>{POS_TH[g]} ({sorted.filter((p) => p.position === g).length})</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {sorted.filter((p) => p.position === g).map((p) => (
-              <PlayerRow key={p.id} p={p} isXI={xi.includes(p.id)} onSell={onSell} currentDay={currentDay} budget={budget} onRenewContract={onRenewContract} />
+              <PlayerRow key={p.id} p={p} isXI={xi.includes(p.id)} squadSize={squadSize} onSell={onSell} allowSell={allowSell} currentDay={currentDay} budget={budget} onRenewContract={onRenewContract} />
             ))}
           </div>
         </Panel>
@@ -2277,7 +5873,7 @@ function SquadView({ squad, xi, onSell, staff, coachOffers, coachRerollCounts, b
   );
 }
 function attrGroupAvg(p, group) { return ATTR_GROUPS[group].reduce((s, k) => s + p.attrs[k], 0) / ATTR_GROUPS[group].length; }
-function PlayerRow({ p, isXI, onSell, currentDay, budget, onRenewContract }) {
+function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, onRenewContract }) {
   const [open, setOpen] = useState(false);
   const daysLeft = p.contractEndsDay != null && currentDay != null ? p.contractEndsDay - currentDay : null;
   const contractColor = daysLeft == null ? C.textDim : daysLeft > 60 ? C.good : daysLeft > 20 ? C.amber : C.crimson;
@@ -2289,13 +5885,14 @@ function PlayerRow({ p, isXI, onSell, currentDay, budget, onRenewContract }) {
         <div style={{ flex: 1, minWidth: 0 }} onClick={() => setOpen((o) => !o)} role="button">
           <div style={{ fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             {p.name}
+            {p.isLegend && <span style={{ fontSize: 9, background: C.gold, color: "#0b2318", borderRadius: 4, padding: "1px 5px" }}>⭐ LEGEND</span>}
             {isXI && <span style={{ fontSize: 9, background: C.good, color: "#08150e", borderRadius: 4, padding: "1px 5px" }}>ตัวจริง</span>}
             {p.injuryDays > 0 && <span style={{ fontSize: 9, background: C.crimson, color: "#fff", borderRadius: 4, padding: "1px 5px" }}>เจ็บ {p.injuryDays}วัน</span>}
             <span style={{ fontSize: 9, background: STATUS_COLOR[p.status], color: "#08150e", borderRadius: 4, padding: "1px 5px" }}>{STATUS_TH[p.status]}</span>
             {daysLeft != null && <span style={{ fontSize: 9, background: contractColor, color: "#08150e", borderRadius: 4, padding: "1px 5px" }}>สัญญา {daysLeft > 0 ? `${daysLeft}วัน` : "หมดอายุ"}</span>}
           </div>
-          <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT }}>
-            อายุ {p.age} · <span style={{ color: GROUP_COLOR.technical }}>TEC {Math.round(attrGroupAvg(p, "technical"))}</span> · <span style={{ color: GROUP_COLOR.mental }}>MEN {Math.round(attrGroupAvg(p, "mental"))}</span> · <span style={{ color: GROUP_COLOR.physical }}>PHY {Math.round(attrGroupAvg(p, "physical"))}</span> · ศักยภาพ {bandOf(p.potential)}
+          <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, marginTop: 4 }}>
+            อายุ {p.age} · {playerPosTH(p)}{(p.altPos || []).length ? ` (รอง: ${p.altPos.join("/")})` : ""} · <PlayerStarsRow p={p} compact />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
             <div style={{ flex: 1 }}><MiniBar value={p.stamina} color={p.stamina > 60 ? C.good : p.stamina > 30 ? C.amber : C.crimson} /></div>
@@ -2304,7 +5901,21 @@ function PlayerRow({ p, isXI, onSell, currentDay, budget, onRenewContract }) {
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 12, color: C.amber, fontFamily: MONO_FONT }}>{formatMoney(p.value)}</div>
-          <button onClick={() => onSell(p.id)} style={{ marginTop: 4, background: "transparent", border: `1px solid ${C.crimson}`, color: C.crimson, borderRadius: 6, fontSize: 10, padding: "2px 8px", cursor: "pointer" }}>ขาย</button>
+          {allowSell && !p.isLegend && onSell && (
+            <button
+              disabled={squadSize <= MIN_SELL_SQUAD}
+              onClick={() => onSell(p.id)}
+              style={{
+                marginTop: 4, background: "transparent",
+                border: `1px solid ${squadSize <= MIN_SELL_SQUAD ? C.steel : C.crimson}`,
+                color: squadSize <= MIN_SELL_SQUAD ? C.textDim : C.crimson,
+                borderRadius: 6, fontSize: 10, padding: "2px 8px",
+                cursor: squadSize <= MIN_SELL_SQUAD ? "not-allowed" : "pointer",
+              }}
+            >
+              ขาย
+            </button>
+          )}
         </div>
       </div>
       {daysLeft != null && daysLeft <= 60 && onRenewContract && (
@@ -2315,6 +5926,7 @@ function PlayerRow({ p, isXI, onSell, currentDay, budget, onRenewContract }) {
       )}
       {open && (
         <div style={{ marginTop: 8, paddingLeft: 40, display: "flex", flexDirection: "column", gap: 8 }}>
+          <PlayerStarsRow p={p} />
           {Object.keys(ATTR_GROUPS).map((grp) => (
             <div key={grp}>
               <div style={{ fontSize: 9.5, color: GROUP_COLOR[grp], marginBottom: 3, fontWeight: 700 }}>{GROUP_TH[grp]}</div>
@@ -2338,13 +5950,473 @@ function PlayerRow({ p, isXI, onSell, currentDay, budget, onRenewContract }) {
 }
 
 /* ============================== TACTICS ============================== */
-function TacticsView({ squad, team, xi, onSetFormation, onToggle, onToggleAuto, onSetPlayerRole }) {
+/* ============================== SQUAD PITCH BOARD (ลากวางจัดทีม) ============================== */
+function ShirtToken({ player, teamColor, slotPos, size = 46, ghost }) {
+  const ratingRing = player.rating >= 82 ? C.gold : player.rating >= 72 ? "#b8c4bc" : "#7d6a45";
+  const oopMult = playerOopMult(player, slotPos);
+  const oop = slotPos && oopMult < 0.995;
+  const hurt = player.injuryDays > 0;
+  const lastName = player.name.split(" ")[1] || player.name;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: size + 20, opacity: hurt && !ghost ? 0.45 : 1, pointerEvents: "none" }}>
+      <div style={{ position: "relative", width: size, height: size, borderRadius: "50%", border: `2.5px solid ${oop ? C.crimson : ratingRing}`, background: "radial-gradient(circle at 35% 30%, rgba(255,255,255,.12), rgba(0,0,0,.35))", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: ghost ? "0 8px 20px rgba(0,0,0,.6)" : "0 2px 6px rgba(0,0,0,.4)" }}>
+        <svg width={size * 0.72} height={size * 0.72} viewBox="0 0 64 64">
+          <path d="M22 8 L32 13 L42 8 L57 17 L50 31 L44 27 L44 56 L20 56 L20 27 L14 31 L7 17 Z"
+            fill={teamColor} stroke="rgba(255,255,255,.75)" strokeWidth="2.5" strokeLinejoin="round" />
+          <text x="32" y="44" textAnchor="middle" fontSize="21" fontWeight="800" fill="#fff" fontFamily="ui-monospace, monospace">{player.rating}</text>
+        </svg>
+        {hurt && <div style={{ position: "absolute", top: -4, right: -4, fontSize: 13 }}>🤕</div>}
+        {player.isLegend && <div style={{ position: "absolute", top: -5, left: -5, fontSize: 11 }}>⭐</div>}
+      </div>
+      <div style={{ width: size - 4, height: 3, borderRadius: 2, background: "#0a1611", marginTop: 2, overflow: "hidden" }}>
+        <div style={{ width: `${player.stamina}%`, height: "100%", background: player.stamina >= 60 ? C.good : player.stamina >= 35 ? C.amber : C.crimson }} />
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 2, marginTop: 2, maxWidth: size + 20 }}>
+        <span style={{ fontSize: 8.5, color: "#fff", background: "rgba(8,18,12,.8)", borderRadius: 3, padding: "1px 4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{lastName}</span>
+        <span style={{ fontSize: 7.5, fontWeight: 800, color: "#08150e", background: playerPosColor(player), borderRadius: 3, padding: "1px 3px", flexShrink: 0 }}>{playerPosCode(player)}</span>
+      </div>
+      {oop && <span style={{ fontSize: 7.5, color: C.crimson, background: "rgba(8,18,12,.85)", borderRadius: 3, padding: "0 3px", marginTop: 1 }}>ผิดตำแหน่ง −{Math.round((1 - oopMult) * 100)}%</span>}
+    </div>
+  );
+}
+
+function SquadPitchBoard({ team, squad, slots, benchIds, editable, onMove, highlightId }) {
+  const slotDefs = FORMATIONS[resolveFormation(team.formation)].slots;
+  const benchRef = useRef(null);
+  const subRefs = useRef([]);
+  const slotRefs = useRef([]);
+  const dragRef = useRef(null);
+  const [drag, setDrag] = useState(null);
+
+  const xiIds = slots.filter(Boolean);
+  const byId = Object.fromEntries(squad.map((p) => [p.id, p]));
+  const posOrder = { GK: 0, DF: 1, MF: 2, FW: 3 };
+  const subSlotIds = benchIds || [];
+  const subs = subSlotIds.map((id) => (id ? byId[id] : null));
+  const allSubIds = subSlotIds.filter(Boolean);
+  const reserves = squad.filter((p) => !xiIds.includes(p.id) && !allSubIds.includes(p.id))
+    .sort((a, b) => (posOrder[a.position] - posOrder[b.position]) || b.rating - a.rating);
+
+  dragRef.current = drag;
+
+  function startDrag(e, src, player) {
+    if (!editable || !player) return;
+    if (player.injuryDays > 0) return;
+    e.preventDefault();
+    setDrag({ src, player, x: e.clientX, y: e.clientY });
+  }
+
+  useEffect(() => {
+    if (!drag) return;
+    const onPointerMove = (e) => {
+      e.preventDefault();
+      setDrag((d) => (d ? { ...d, x: e.clientX, y: e.clientY } : d));
+    };
+    const onPointerUp = (e) => {
+      const d = dragRef.current;
+      setDrag(null);
+      if (!d) return;
+      const x = e.clientX, y = e.clientY;
+      // หา slot ที่ใกล้จุดปล่อยที่สุด (รัศมี 46px)
+      let dst = null, bestDist = 46;
+      slotRefs.current.forEach((el, i) => {
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        const dist = Math.hypot(x - cx, y - cy);
+        if (dist < bestDist) { bestDist = dist; dst = { kind: "slot", index: i }; }
+      });
+      subRefs.current.forEach((el, i) => {
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        const dist = Math.hypot(x - cx, y - cy);
+        if (dist < 38) { bestDist = dist; dst = { kind: "sub", index: i }; }
+      });
+      if (!dst && benchRef.current) {
+        const r = benchRef.current.getBoundingClientRect();
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+          dst = drag?.src.kind === "slot" ? { kind: "subArea" } : { kind: "reserveArea" };
+        }
+      }
+      if (dst) onMove(d.src, dst);
+    };
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [drag != null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div>
+      {/* สนาม — หญ้า + เส้นสนาม SVG สัดส่วน 68×105 ม. (วงกลมกลางสนามไม่เบี้ยว) */}
+      <div style={{
+        position: "relative", width: "100%", aspectRatio: PITCH_PORTRAIT_AR,
+        background: PITCH_GRASS_STRIPES_PORTRAIT,
+        borderRadius: "8px 8px 0 0", overflow: "hidden",
+      }}>
+        <PitchMarkingsSVG layout="portrait" />
+        {slotDefs.map((slot, i) => {
+          const player = slots[i] ? byId[slots[i]] : null;
+          const isDragSrc = drag?.src.kind === "slot" && drag.src.index === i;
+          return (
+            <div
+              key={i}
+              ref={(el) => { slotRefs.current[i] = el; }}
+              onPointerDown={(e) => startDrag(e, { kind: "slot", index: i }, player)}
+              style={{
+                position: "absolute", left: `${slot.x}%`, top: `${slot.y}%`, transform: "translate(-50%,-50%)",
+                touchAction: "none", cursor: editable && player ? "grab" : "default",
+                opacity: isDragSrc ? 0.3 : 1,
+              }}
+            >
+              {player ? (
+                <ShirtToken player={player} teamColor={team.color} slotPos={slot.dpos} />
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 62 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: "50%", border: `2px dashed ${drag ? C.amber : "rgba(255,255,255,.4)"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9.5, color: drag ? C.amber : "rgba(255,255,255,.55)", fontWeight: 700 }}>{slot.dpos}</div>
+                  <span style={{ fontSize: 8.5, color: "rgba(255,255,255,.55)", marginTop: 3 }}>ว่าง</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {!editable && (
+          <div style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", fontSize: 9.5, color: C.chalk, background: "rgba(8,18,12,.75)", borderRadius: 6, padding: "3px 10px", whiteSpace: "nowrap" }}>
+            🤖 โหมดออโต้ — ผจก.จัดทีมให้ (ปิดออโต้เพื่อลากจัดเอง)
+          </div>
+        )}
+      </div>
+
+      {/* ม้านั่งสำรอง — ลงรายชื่อได้ {MATCH_BENCH_SIZE} คน (เปลี่ยนตัวได้ {MAX_MATCH_SUBS}/นัด) */}
+      <div ref={benchRef} style={{ background: "#0e1d15", border: `1px solid ${C.steel}`, borderTop: `2px solid ${drag?.src.kind === "slot" ? C.crimson : C.blue}`, borderRadius: "0 0 8px 8px", padding: "8px 6px 6px" }}>
+        <div style={{ fontSize: 8.5, color: C.textDim, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 6, paddingLeft: 4 }}>
+          ตัวสำรอง ({subs.filter(Boolean).length}/{MATCH_BENCH_SIZE}) {editable ? "— ลากขึ้นสนาม / สลับช่องสำรอง" : ""}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(MATCH_BENCH_SIZE, 5)}, 1fr)`, gap: 4, marginBottom: reserves.length ? 6 : 0 }}>
+          {subs.map((p, i) => {
+            const isDragSrc = (drag?.src.kind === "sub" && drag.src.index === i) || (drag?.src.kind === "bench" && drag.src.playerId === p?.id);
+            return (
+              <div
+                key={`sub-${i}`}
+                ref={(el) => { subRefs.current[i] = el; }}
+                onPointerDown={(e) => p && startDrag(e, { kind: "sub", index: i }, p)}
+                style={{
+                  touchAction: "none", minHeight: 72, borderRadius: 8, border: `1px dashed ${p ? C.blue : "rgba(255,255,255,.25)"}`,
+                  background: p ? (highlightId === p.id ? "rgba(224,164,88,.18)" : "rgba(90,155,213,.08)") : "rgba(0,0,0,.2)",
+                  display: "flex", alignItems: "center", justifyContent: "center", cursor: editable && p && p.injuryDays <= 0 ? "grab" : "default",
+                  opacity: isDragSrc ? 0.3 : 1,
+                }}
+              >
+                {p ? <ShirtToken player={p} teamColor={team.color} size={36} /> : (
+                  <span style={{ fontSize: 9, color: C.textDim }}>SUB {i + 1}</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {reserves.length > 0 && (
+          <>
+            <div style={{ fontSize: 8, color: C.textDim, marginBottom: 4, paddingLeft: 4 }}>นักเตะในทีม ({reserves.length}) — ลากลงมาช่อง SUB หรือเลือกจากตารางด้านล่าง</div>
+            <div style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 4 }}>
+              {reserves.map((p) => {
+                const isDragSrc = drag?.src.kind === "bench" && drag.src.playerId === p.id;
+                return (
+                  <div
+                    key={p.id}
+                    onPointerDown={(e) => startDrag(e, { kind: "bench", playerId: p.id }, p)}
+                    style={{
+                      touchAction: "none", cursor: editable && p.injuryDays <= 0 ? "grab" : "default", flexShrink: 0,
+                      opacity: isDragSrc ? 0.3 : 1, outline: highlightId === p.id ? `2px solid ${C.amber}` : "none", borderRadius: 8,
+                    }}
+                  >
+                    <ShirtToken player={p} teamColor={team.color} size={34} />
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+        {subs.filter(Boolean).length === 0 && reserves.length === 0 && (
+          <span style={{ fontSize: 10, color: C.textDim, padding: 6 }}>ไม่มีนักเตะสำรอง</span>
+        )}
+      </div>
+
+      {/* ghost ตามนิ้ว/เมาส์ตอนลาก */}
+      {drag && (
+        <div style={{ position: "fixed", left: drag.x, top: drag.y, transform: "translate(-50%,-60%)", zIndex: 9999, pointerEvents: "none" }}>
+          <ShirtToken player={drag.player} teamColor={team.color} ghost />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- ตารางนักเตะสไตล์ Top Eleven (แท็บแทคติก) ---------- */
+function PosBadge({ pos, tier, oop }) {
+  const bg = tier === "sub" ? "#5a9bd5" : tier === "res" ? "#3a4a42" : POS_COLOR[POS_GROUP[pos] || pos] || C.steel;
+  const label = tier === "sub" ? "SUB" : tier === "res" ? "RES" : pos;
+  const fg = tier === "res" ? C.textDim : "#08150e";
+  return (
+    <div style={{ position: "relative", width: 34, flexShrink: 0 }}>
+      <div style={{ fontFamily: MONO_FONT, fontWeight: 800, fontSize: 9.5, color: fg, background: bg, borderRadius: 5, textAlign: "center", padding: "3px 0" }}>{label}</div>
+      {oop && <div style={{ position: "absolute", top: -5, right: -5, fontSize: 8 }} title="ยืนผิดตำแหน่ง">⚠️</div>}
+    </div>
+  );
+}
+
+function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onAutoPick, onBoardMove, editable, highlightId }) {
+  const [expandedId, setExpandedId] = useState(null);
+  const [pick, setPick] = useState(null); // { kind, index?, playerId? }
+  const [dragOver, setDragOver] = useState(null);
+  const slots = resolveLineupSlots(career, squad, team.formation);
+  const slotDefs = FORMATIONS[resolveFormation(team.formation)].slots;
+  const xiIds = slots.filter(Boolean);
+  const benchSlots = normalizeBenchSlots(career, squad, xiIds);
+  const benchIds = benchSlots.filter(Boolean);
+  const byId = Object.fromEntries(squad.map((p) => [p.id, p]));
+
+  const xiRows = slots.map((id, i) => ({ p: id ? byId[id] : null, slotPos: slotDefs[i].dpos, tier: "xi", slotIndex: i })).filter((r) => r.p);
+  const subRows = benchSlots.map((id, i) => ({
+    p: id ? byId[id] : null, slotPos: null, tier: "sub", subIndex: i,
+  }));
+  const resRows = squad.filter((p) => !xiIds.includes(p.id) && !benchIds.includes(p.id))
+    .sort((a, b) => b.rating - a.rating)
+    .map((p) => ({ p, slotPos: null, tier: "res", playerId: p.id }));
+
+  function srcFromRow(row) {
+    if (row.tier === "xi") return { kind: "slot", index: row.slotIndex };
+    if (row.tier === "sub") return row.p ? { kind: "sub", index: row.subIndex } : null;
+    return { kind: "bench", playerId: row.p.id };
+  }
+  function dstFromRow(row) {
+    if (row.tier === "xi") return { kind: "slot", index: row.slotIndex };
+    if (row.tier === "sub") return { kind: "sub", index: row.subIndex };
+    return { kind: "reserveArea" };
+  }
+  function tryMove(src, dst) {
+    if (!editable || !onBoardMove || !src || !dst) return;
+    onBoardMove(src, dst);
+    setPick(null);
+  }
+  function onRowTap(row) {
+    if (!editable || row.p?.injuryDays > 0) return;
+    const src = srcFromRow(row);
+    if (!pick) { setPick(src); return; }
+    if (pick.kind === src.kind && pick.index === src.index && pick.playerId === src.playerId) { setPick(null); return; }
+    tryMove(pick, dstFromRow(row));
+  }
+
+  const grid = "34px 1fr 26px 66px 30px 84px";
+
+  function renderRow(row, key) {
+    const { p, slotPos, tier } = row;
+    if (!p && tier !== "sub") return null;
+    const oopMult = slotPos ? playerOopMult(p, slotPos) : 1;
+    const oop = slotPos && oopMult < 0.995;
+    const role = p ? resolvePlayerRole(p) : null;
+    const condColor = p ? (p.stamina >= 60 ? C.good : p.stamina >= 35 ? C.amber : C.crimson) : C.steel;
+    const expanded = p && expandedId === p.id;
+    const isPick = pick && ((pick.kind === "slot" && tier === "xi" && pick.index === row.slotIndex)
+      || (pick.kind === "sub" && tier === "sub" && pick.index === row.subIndex)
+      || (pick.kind === "bench" && p && pick.playerId === p.id));
+    const isNew = p && highlightId === p.id;
+    const rowBg = expanded ? "rgba(224,164,88,.05)" : isPick ? "rgba(90,155,213,.12)" : isNew ? "rgba(224,164,88,.12)" : tier === "res" ? "rgba(0,0,0,.14)" : tier === "sub" ? "rgba(90,155,213,.06)" : "transparent";
+
+    return (
+      <div
+        key={key}
+        draggable={editable && p && p.injuryDays <= 0}
+        onDragStart={(e) => { if (!p) return; e.dataTransfer.setData("text/plain", p.id); setPick(srcFromRow(row)); }}
+        onDragEnd={() => setDragOver(null)}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(key); }}
+        onDragLeave={() => setDragOver(null)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(null);
+          const pid = e.dataTransfer.getData("text/plain");
+          if (!pid || !p) return;
+          let src = pick;
+          if (!src) {
+            if (xiIds.includes(pid)) src = { kind: "slot", index: slots.indexOf(pid) };
+            else if (benchIds.includes(pid)) src = { kind: "sub", index: benchIds.indexOf(pid) };
+            else src = { kind: "bench", playerId: pid };
+          }
+          tryMove(src, dstFromRow(row));
+        }}
+        onClick={() => (p ? onRowTap(row) : editable && pick && tryMove(pick, dstFromRow(row)))}
+        style={{
+          borderBottom: `1px solid #1c2a24`, background: dragOver === key ? "rgba(111,174,90,.12)" : rowBg,
+          cursor: editable && (p || tier === "sub") ? "pointer" : "default",
+          outline: isNew ? `1px solid ${C.amber}` : "none",
+        }}
+      >
+        <div style={{ display: "grid", gridTemplateColumns: grid, gap: 6, alignItems: "center", padding: "5px 10px" }}>
+          <PosBadge pos={slotPos || (p ? playerPosCode(p) : "—")} tier={tier} oop={oop} />
+          <div style={{ minWidth: 0 }}>
+            {p ? (
+              <>
+                <div style={{ fontSize: 11.5, fontWeight: tier === "xi" ? 700 : 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {p.name}{p.injuryDays > 0 && " 🤕"}{p.isLegend && " ⭐"}{isNew && <span style={{ color: C.amber, fontSize: 9 }}> NEW</span>}
+                </div>
+                <div style={{ fontSize: 8, color: oop ? C.crimson : C.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {oop
+                    ? `ถนัด ${playerPosCode(p)} — ผิดตำแหน่ง −${Math.round((1 - oopMult) * 100)}%`
+                    : `${playerPosCode(p)}${(p.altPos || []).length ? ` · รอง: ${p.altPos.join(", ")}` : ""}`}
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 10, color: C.textDim, fontStyle: "italic" }}>ช่องสำรองว่าง — แตะเพื่อวาง</div>
+            )}
+          </div>
+          <span style={{ fontSize: 10.5, fontFamily: MONO_FONT, color: C.textDim }}>{p ? p.age : "—"}</span>
+          <div>{p ? (<><MiniBar value={p.stamina} color={condColor} /><div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}><span style={{ fontSize: 7.5, fontFamily: MONO_FONT, color: condColor }}>{Math.round(p.stamina)}%</span><span style={{ fontSize: 7.5, color: C.textDim }}>มูด {Math.round(p.morale)}</span></div></>) : null}</div>
+          {p ? <RatingBadge value={p.rating} /> : <span />}
+          {p ? (
+            <button type="button" onClick={(e) => { e.stopPropagation(); setExpandedId(expanded ? null : p.id); }} style={{
+              fontSize: 8.5, padding: "4px 4px", borderRadius: 6, cursor: "pointer", textAlign: "center",
+              border: `1px solid ${expanded ? C.amber : C.steel}`, background: expanded ? "rgba(224,164,88,.15)" : C.panel2,
+              color: expanded ? C.amber : C.chalk, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            }}>{role.label}</button>
+          ) : <span />}
+        </div>
+        {expanded && p && (
+          <div style={{ padding: "2px 10px 8px", display: "flex", flexWrap: "wrap", gap: 4 }} onClick={(e) => e.stopPropagation()}>
+            {rolesForPlayer(p).map((r) => {
+              const on = role.id === r.id;
+              return (
+                <button key={r.id} type="button" onClick={() => { onSetPlayerRole(p.id, r.id); setExpandedId(null); }} style={{
+                  fontSize: 9, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
+                  border: `1px solid ${on ? C.amber : C.steel}`, background: on ? "rgba(224,164,88,.15)" : "transparent",
+                  color: on ? C.amber : C.textDim,
+                }}>{r.label}{on ? " ✓" : ""}</button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <Panel style={{ padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "14px 14px 8px" }}>
+        <SectionLabel sub={`ตัวจริง ${MIN_XI_SIZE} · ตัวสำรอง ${MATCH_BENCH_SIZE} (เปลี่ยนได้ ${MAX_MATCH_SUBS}/นัด) · ทีมทั้งหมด ${squad.length} คน — ลากหรือแตะสลับ`}>รายชื่อนักเตะ</SectionLabel>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: grid, gap: 6, alignItems: "center", padding: "4px 10px 6px", borderBottom: `1px solid ${C.steel}` }}>
+        <span style={{ fontSize: 9, color: C.textDim, fontWeight: 700 }}>ตำแหน่ง</span>
+        <span style={{ fontSize: 9, color: C.textDim, fontWeight: 700 }}>ชื่อ</span>
+        <span style={{ fontSize: 9, color: C.textDim, fontWeight: 700 }}>อายุ</span>
+        <span style={{ fontSize: 9, color: C.textDim, fontWeight: 700 }}>คอนดิชัน</span>
+        <span style={{ fontSize: 9, color: C.textDim, fontWeight: 700 }}>OVR</span>
+        <span style={{ fontSize: 9, color: C.textDim, fontWeight: 700 }}>บทบาท</span>
+      </div>
+      <div style={{ padding: "6px 10px 2px", fontSize: 9, color: C.good, fontWeight: 700, letterSpacing: 0.5 }}>▸ ตัวจริง ({xiRows.length}/{MIN_XI_SIZE})</div>
+      {xiRows.map((row) => renderRow(row, `xi-${row.slotIndex}`))}
+      <div style={{ padding: "8px 10px 2px", fontSize: 9, color: C.blue, fontWeight: 700, letterSpacing: 0.5, borderTop: `1px solid ${C.steel}` }}>▸ ตัวสำรอง ({benchIds.length}/{MATCH_BENCH_SIZE})</div>
+      {subRows.map((row) => renderRow(row, `sub-${row.subIndex}`))}
+      <div style={{ padding: "8px 10px 2px", fontSize: 9, color: C.textDim, fontWeight: 700, letterSpacing: 0.5, borderTop: `1px solid ${C.steel}` }}>▸ นักเตะในทีม ({resRows.length})</div>
+      {resRows.map((row) => renderRow(row, `res-${row.p.id}`))}
+      {pick && editable && (
+        <div style={{ padding: "6px 10px", fontSize: 10, color: C.amber, background: "rgba(224,164,88,.08)", borderTop: `1px solid ${C.steel}` }}>
+          เลือกแล้ว — แตะแถวปลายทางเพื่อสลับ · แตะแถวเดิมอีกครั้งเพื่อยกเลิก
+        </div>
+      )}
+      <div style={{ padding: 10 }}>
+        <button type="button" onClick={onAutoPick} disabled={team.autoMode} style={{ ...btnStyle(team.autoMode ? "#2b332f" : C.blue, team.autoMode ? C.textDim : "#fff"), width: "100%", cursor: team.autoMode ? "not-allowed" : "pointer" }}>
+          {team.autoMode ? "โหมดออโต้จัดให้อยู่แล้ว" : "จัดทีมอัตโนมัติ"}
+        </button>
+      </div>
+    </Panel>
+  );
+}
+
+/* ---------- การ์ดสไตล์ทีมแบบใหญ่ (จังหวะ/เพรสซิ่ง/แนวรับ) ---------- */
+const STYLE_CARD_ICONS = {
+  tempo: { slow: "🐢", normal: "⚖️", fast: "⚡" },
+  pressing: { low: "🧱", medium: "🔁", high: "🔥" },
+  defLine: { deep: "🛡️", normal: "➖", high: "📏" },
+};
+function styleEffectLine(opt) {
+  const parts = [];
+  if (opt.atk !== 1) parts.push(`${opt.atk > 1 ? "+" : ""}${Math.round((opt.atk - 1) * 100)}% รุก`);
+  if (opt.def !== 1) parts.push(`${opt.def > 1 ? "+" : ""}${Math.round((opt.def - 1) * 100)}% รับ`);
+  if (opt.staminaDrainMult && opt.staminaDrainMult !== 1) parts.push(opt.staminaDrainMult > 1 ? `แรง x${opt.staminaDrainMult}` : "ประหยัดแรง");
+  if (opt.injuryRiskMult && opt.injuryRiskMult > 1) parts.push("เสี่ยงเจ็บ ↑");
+  return parts.length ? parts.join(" · ") : "สมดุล";
+}
+function TeamStyleCards({ matchPrep, onSetPrepField, squad, xi }) {
+  const groups = [
+    { field: "tempo", label: "จังหวะเกม (Tempo)", options: TEMPO_OPTIONS },
+    { field: "pressing", label: "เพรสซิ่ง (Pressing)", options: PRESSING_OPTIONS },
+    { field: "defLine", label: "แนวรับ (Defensive Line)", options: DEF_LINE_OPTIONS },
+  ];
+  const xiDF = squad.filter((p) => xi.includes(p.id) && p.position === "DF");
+  const avgDefPace = xiDF.length ? xiDF.reduce((s, p) => s + (p.attrs?.pace || 10), 0) / xiDF.length : 10;
+  return (
+    <Panel style={{ border: `1px solid ${C.blue}` }}>
+      <SectionLabel style={{ color: C.blue }} sub="มีผลทุกนัดจนกว่าจะเปลี่ยน — ปรับเฉพาะนัดได้ที่หน้าเตรียมแมตช์เหมือนเดิม">สไตล์การเล่นของทีม</SectionLabel>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {groups.map(({ field, label, options }) => {
+          const current = matchPrep?.[field] || (field === "pressing" ? "medium" : "normal");
+          return (
+            <div key={field}>
+              <div style={{ fontSize: 10, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{label}</div>
+              <div style={{ display: "grid", gridTemplateColumns: `repeat(${options.length}, 1fr)`, gap: 8 }}>
+                {options.map((opt) => {
+                  const on = current === opt.id;
+                  return (
+                    <button key={opt.id} type="button" onClick={() => onSetPrepField(field, opt.id)} style={{
+                      padding: "12px 6px 10px", borderRadius: 10, cursor: "pointer", textAlign: "center",
+                      border: `2px solid ${on ? "#6db3f2" : C.steel}`,
+                      background: on ? "linear-gradient(165deg,#1d3a5f,#12253f)" : C.panel2,
+                      boxShadow: on ? "0 0 12px rgba(109,179,242,.25)" : "none",
+                      transition: "all .15s",
+                    }}>
+                      <div style={{ fontSize: 24, filter: on ? "none" : "grayscale(.6)" }}>{STYLE_CARD_ICONS[field][opt.id]}</div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: on ? "#bcdcf7" : C.chalk, marginTop: 4 }}>{opt.label}</div>
+                      <div style={{ fontSize: 8, color: on ? "#8fb8dd" : C.textDim, marginTop: 3, lineHeight: 1.35 }}>{styleEffectLine(opt)}</div>
+                      {on && <div style={{ fontSize: 8.5, color: "#6db3f2", marginTop: 4, fontWeight: 700 }}>✓ ใช้อยู่</div>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 11, fontWeight: 700 }}>🪤 กับดักล้ำหน้า (Offside Trap)</div>
+            <div style={{ fontSize: 9, color: C.textDim, marginTop: 2 }}>
+              ได้ผลเมื่อใช้แนวรับสูง + แบ็คตัวเร็ว (ความเร็วเฉลี่ยกองหลังตอนนี้ {avgDefPace.toFixed(1)})
+            </div>
+          </div>
+          <button type="button" onClick={() => onSetPrepField("offsideTrap", !matchPrep?.offsideTrap)} style={{
+            fontSize: 10, fontWeight: 700, padding: "6px 12px", borderRadius: 7, cursor: "pointer",
+            border: `1px solid ${matchPrep?.offsideTrap ? "#6db3f2" : C.steel}`,
+            background: matchPrep?.offsideTrap ? "#1d3a5f" : "transparent",
+            color: matchPrep?.offsideTrap ? "#bcdcf7" : C.textDim,
+          }}>{matchPrep?.offsideTrap ? "เปิดอยู่ ✓" : "ปิดอยู่"}</button>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function TacticsView({ career, squad, team, xi, onSetFormation, onToggleAuto, onSetPlayerRole, onSetSetPieceTaker, onBoardMove, onSetPrepField, onAutoPick }) {
   const formation = team.formation;
-  const slots = FORMATIONS[formation].slots;
+  const slots = resolveLineupSlots(career, squad, formation);
+  const benchSlotIds = normalizeBenchSlots(career, squad, slots.filter(Boolean));
+  const highlightId = career?.newSquadPlayerId || null;
   const xiPlayers = squad.filter((p) => xi.includes(p.id));
-  const assign = { GK: [], DF: [], MF: [], FW: [] };
-  xiPlayers.forEach((p) => assign[p.position].push(p));
-  const posCounters = { GK: 0, DF: 0, MF: 0, FW: 0 };
+  const famMatches = career?.tacticFamiliarity && career.tacticFamiliarity.formation === formation ? career.tacticFamiliarity.matches : 0;
+  const famMult = familiarityMultiplier(famMatches);
+  const famPct = Math.round(clamp((famMatches / 15) * 100, 0, 100));
+  const famLabel = famMatches >= 15 ? "ชำนาญสูงสุด" : famMatches >= 10 ? "คุ้นเคยดี" : famMatches >= 6 ? "เริ่มเข้าที่" : famMatches >= 3 ? "กำลังปรับตัว" : "ยังใหม่กับแผนนี้";
   // manager recommendation: best average XI rating per formation
   const recommend = FORMATION_KEYS.map((f) => {
     const bestXI = getBestXI(squad, f);
@@ -2372,67 +6444,78 @@ function TacticsView({ squad, team, xi, onSetFormation, onToggle, onToggleAuto, 
             <button key={f} onClick={() => onSetFormation(f)} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${f === formation ? C.amber : C.steel}`, background: f === formation ? C.amber : "transparent", color: f === formation ? "#0b2318" : C.chalk, fontFamily: MONO_FONT, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>{f}{team.manager && team.manager.preferredFormation === f ? " ★" : ""}</button>
           ))}
         </div>
+        <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <span style={{ fontSize: 10, color: C.textDim, textTransform: "uppercase", letterSpacing: 1 }}>ความคุ้นเคยแทคติก</span>
+            <span style={{ fontSize: 10.5, fontFamily: MONO_FONT, color: famMult >= 1 ? C.good : C.crimson, fontWeight: 700 }}>
+              {famLabel} ({famMult >= 1 ? "+" : ""}{Math.round((famMult - 1) * 100)}%)
+            </span>
+          </div>
+          <div style={{ height: 6, borderRadius: 3, background: "#1c2a24", overflow: "hidden" }}>
+            <div style={{ width: `${famPct}%`, height: "100%", background: famMult >= 1 ? C.good : C.amber, transition: "width .3s" }} />
+          </div>
+          <div style={{ fontSize: 9.5, color: C.textDim, marginTop: 4 }}>
+            เล่นแผน {formation} ต่อเนื่อง {famMatches} นัด — เปลี่ยนแผนใหม่จะเริ่มนับใหม่และเสียฟอร์มช่วงแรก (เหมือน FM)
+          </div>
+        </div>
       </Panel>
       <Panel style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ position: "relative", width: "100%", paddingTop: "130%", background: `repeating-linear-gradient(0deg, ${C.pitch}, ${C.pitch} 11%, #123322 11%, #123322 22%)` }}>
-          <div style={{ position: "absolute", inset: 8, border: `2px solid ${C.pitchLine}`, opacity: 0.5, borderRadius: 4 }} />
-          <div style={{ position: "absolute", left: "50%", top: 8, bottom: 8, width: 2, background: C.pitchLine, opacity: 0.5, transform: "translateX(-1px)" }} />
-          <div style={{ position: "absolute", left: "50%", top: "50%", width: 70, height: 70, border: `2px solid ${C.pitchLine}`, opacity: 0.5, borderRadius: "50%", transform: "translate(-50%,-50%)" }} />
-          {slots.map((slot, i) => {
-            const idx = posCounters[slot.pos]++;
-            const player = assign[slot.pos][idx];
+        <SquadPitchBoard
+          team={team} squad={squad}
+          slots={slots}
+          benchIds={benchSlotIds}
+          editable={!team.autoMode}
+          onMove={onBoardMove}
+          highlightId={highlightId}
+        />
+      </Panel>
+
+      <TacticsSquadTable
+        career={career} squad={squad} team={team}
+        onSetPlayerRole={onSetPlayerRole} onAutoPick={onAutoPick}
+        onBoardMove={onBoardMove} editable={!team.autoMode} highlightId={highlightId}
+      />
+
+      <TeamStyleCards matchPrep={career.matchPrep} onSetPrepField={onSetPrepField} squad={squad} xi={xi} />
+
+      <Panel>
+        <SectionLabel sub="เลือกมือดาวเตะเอง — สเตตคนเตะมีผลต่อคุณภาพลูกตั้งเตะทั้งเกม">มือดาวเตะลูกตั้งเตะ (Set Pieces)</SectionLabel>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {[
+            { kind: "corner", label: "คอร์เนอร์", icon: "🚩", takerId: team.cornerTakerId },
+            { kind: "freekick", label: "ฟรีคิก", icon: "🎯", takerId: team.freekickTakerId },
+            { kind: "penalty", label: "จุดโทษ", icon: "⚽", takerId: team.penaltyTakerId },
+          ].map(({ kind, label, icon, takerId }) => {
+            const attrs = SET_PIECE_ATTRS[kind];
+            const candidates = [...xiPlayers]
+              .map((p) => ({ p, score: attrs.reduce((s, k) => s + (p.attrs?.[k] || 8), 0) / attrs.length }))
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 5);
             return (
-              <div key={i} style={{ position: "absolute", left: `${slot.x}%`, top: `${slot.y}%`, transform: "translate(-50%,-50%)", display: "flex", flexDirection: "column", alignItems: "center", width: 62 }}>
-                <div style={{ width: 30, height: 30, borderRadius: "50%", background: player ? POS_COLOR[slot.pos] : "#3a4a42", border: `2px solid ${C.chalk}`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: MONO_FONT, fontSize: 10, fontWeight: 700, color: "#08150e" }}>{player ? player.rating : "?"}</div>
-                <div style={{ fontSize: 9, color: C.chalk, textAlign: "center", marginTop: 2, background: "rgba(0,0,0,.45)", borderRadius: 3, padding: "0 3px", maxWidth: 62, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{player ? player.name.split(" ")[1] || player.name : "ว่าง"}</div>
+              <div key={kind}>
+                <div style={{ fontSize: 10.5, color: C.chalk, marginBottom: 4 }}>
+                  {icon} {label} <span style={{ fontSize: 9, color: C.textDim }}>(ใช้สเตต {attrs.map((k) => ATTR_TH[k]).join(" + ")})</span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {candidates.map(({ p, score }) => {
+                    const on = takerId === p.id;
+                    return (
+                      <button key={p.id} onClick={() => onSetSetPieceTaker(kind, p.id)} style={{
+                        fontSize: 9.5, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
+                        border: `1px solid ${on ? C.good : C.steel}`,
+                        background: on ? "rgba(111,174,90,.15)" : "transparent",
+                        color: on ? C.good : C.textDim,
+                      }}>{p.name.split(" ")[1] || p.name} · {score.toFixed(1)}{on ? " ✓" : ""}</button>
+                    );
+                  })}
+                  {candidates.length === 0 && <span style={{ fontSize: 10, color: C.textDim }}>ยังไม่มีตัวจริง</span>}
+                </div>
               </div>
             );
           })}
         </div>
       </Panel>
 
-      <Panel>
-        <SectionLabel>หน้าที่ผู้เล่น (Player Roles)</SectionLabel>
-        <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8 }}>ปรับเฉพาะตัวจริง: "บุก" เพิ่มพลังรุกของคนนั้น -พลังรับ, "รับ" กลับกัน, "สมดุล" ค่าปกติ</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {xiPlayers.sort((a, b) => (a.position > b.position ? 1 : -1)).map((p) => (
-            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 11.5, flex: 1, color: POS_COLOR[p.position] }}>{p.name}</span>
-              {["defensive", "balanced", "attacking"].map((r) => (
-                <button key={r} onClick={() => onSetPlayerRole(p.id, r)} style={{
-                  fontSize: 9.5, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
-                  border: `1px solid ${(p.role || "balanced") === r ? ROLE_COLOR[r] : C.steel}`,
-                  background: (p.role || "balanced") === r ? `${ROLE_COLOR[r]}22` : "transparent",
-                  color: (p.role || "balanced") === r ? ROLE_COLOR[r] : C.textDim,
-                }}>{ROLE_TH[r]}</button>
-              ))}
-            </div>
-          ))}
-          {xiPlayers.length === 0 && <div style={{ fontSize: 11, color: C.textDim }}>ยังไม่มีตัวจริง</div>}
-        </div>
-      </Panel>
-
-      {!team.autoMode && (
-        <Panel>
-          <SectionLabel>เลือกผู้เล่นตัวจริง ({xi.length}/11)</SectionLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {["GK", "DF", "MF", "FW"].map((pos) => (
-              <div key={pos}>
-                <div style={{ fontSize: 10, color: C.textDim, marginTop: 6, textTransform: "uppercase", letterSpacing: 1 }}>{POS_TH[pos]}</div>
-                {squad.filter((p) => p.position === pos).sort((a, b) => b.rating - a.rating).map((p) => {
-                  const active = xi.includes(p.id);
-                  const hurt = p.injuryDays > 0;
-                  return (
-                    <button key={p.id} disabled={hurt} onClick={() => onToggle(p.id)} style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", background: active ? C.steelLight : "transparent", border: "none", borderRadius: 6, padding: "6px 8px", cursor: hurt ? "not-allowed" : "pointer", color: hurt ? C.textDim : C.chalk, marginTop: 2, opacity: hurt ? 0.5 : 1 }}>
-                      <RatingBadge value={p.rating} /><span style={{ fontSize: 12.5, flex: 1 }}>{p.name}{hurt ? ` (เจ็บ ${p.injuryDays}วัน)` : ""}</span>{active && <span style={{ color: C.good, fontSize: 11 }}>✓ ตัวจริง</span>}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        </Panel>
-      )}
     </div>
   );
 }
@@ -2498,17 +6581,285 @@ function TableView({ career, userTeamId, userDivision, round, teams }) {
   );
 }
 
-/* ============================== MARKET (AUCTION) ============================== */
-function MarketView({ list, budget, onBid, marketOpen, now }) {
+/* ============================== MARKET HUB ============================== */
+const MARKET_SUB_TABS = [
+  { id: "trade", label: "ซื้อ/ขาย", icon: "¤" },
+  { id: "scout", label: "Scout", icon: "🔭" },
+];
+
+function MarketHubView({
+  subTab, setSubTab, list, scoutFinds, budget, onBid, onBuyScoutFind, onScoutSearch,
+  onHireMarketScout, onHireScoutCard, marketOpen, now, career, onAcquireLegend, playMode,
+  squad, squadSize, onSell,
+}) {
+  const activeSub = subTab === "squad" ? "trade" : subTab;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        {MARKET_SUB_TABS.map((t) => {
+          const active = activeSub === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setSubTab(t.id)}
+              style={{
+                flex: 1, padding: "10px 6px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 700,
+                background: active ? "rgba(224,164,88,.15)" : C.panel2,
+                border: `2px solid ${active ? C.amber : C.steel}`,
+                color: active ? C.amber : C.textDim,
+              }}
+            >
+              <div style={{ fontSize: 14, marginBottom: 2 }}>{t.icon}</div>
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+      {activeSub === "trade" && (
+        <MarketTradeView
+          list={list}
+          budget={budget}
+          onBid={onBid}
+          marketOpen={marketOpen}
+          now={now}
+          career={career}
+          onAcquireLegend={onAcquireLegend}
+          squad={squad}
+          squadSize={squadSize}
+          onSell={onSell}
+          playMode={playMode}
+        />
+      )}
+      {activeSub === "scout" && (
+        <MarketScoutView
+          scoutFinds={scoutFinds}
+          budget={budget}
+          onBuyScoutFind={onBuyScoutFind}
+          onScoutSearch={onScoutSearch}
+          onHireMarketScout={onHireMarketScout}
+          onHireScoutCard={onHireScoutCard}
+          career={career}
+        />
+      )}
+    </div>
+  );
+}
+
+function MarketTradeView({ list, budget, onBid, marketOpen, now, career, onAcquireLegend, squad, squadSize, onSell, playMode }) {
+  const [legendExpanded, setLegendExpanded] = useState(false);
+  const uTeam = career?.teams?.find((t) => t.id === career.userTeamId);
+  const inMaster = canBidForLegend(uTeam?.division ?? 1);
+  const userRank = inMaster ? standingsForDivision(career, 0).findIndex((s) => s.team.id === career.userTeamId) + 1 : null;
+  const teamValue = career ? computeTeamFinances(career).teamValue : 0;
+  const meetsValue = teamValue >= LEGEND_ACQUIRE_MIN_TEAM_VALUE;
+  const canBidLegend = inMaster && meetsValue;
+  const leagueLegends = career?.legendLeagueId
+    ? LEGEND_PLAYERS.filter((l) => l.leagueId === career.legendLeagueId)
+    : [];
+  const sortedLegends = [...leagueLegends].sort((a, b) => b.rating - a.rating);
+  const LEGEND_PREVIEW = 4;
+  const visibleLegends = legendExpanded ? sortedLegends : sortedLegends.slice(0, LEGEND_PREVIEW);
+  const sellable = [...squad].sort((a, b) => b.rating - a.rating);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {leagueLegends.length > 0 && (
+        <Panel style={{ border: `1px solid ${C.gold}` }}>
+          <SectionLabel style={{ color: C.gold }} sub={`${sortedLegends.length} คน · ตัวเดียวต่อเซิร์ฟเวอร์`}>⭐ ซูเปอร์สตาร์</SectionLabel>
+          <div style={{ fontSize: 10.5, color: C.textDim, marginBottom: 8, fontFamily: MONO_FONT }}>
+            {!inMaster
+              ? "ต้องอยู่ Master League"
+              : !meetsValue
+                ? `มูลค่า ${formatMoney(teamValue)} · ต้อง ≥ ${formatMoney(LEGEND_ACQUIRE_MIN_TEAM_VALUE)}`
+                : `Master #${userRank} · มูลค่า ${formatMoney(teamValue)} · คว้าได้`}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {visibleLegends.map((def) => {
+              const player = career.players.find((p) => p.legendId === def.legendId);
+              const ownerTeam = career.teams.find((t) => t.id === player?.teamId);
+              const owned = player?.teamId === career.userTeamId;
+              const canBuy = canBidLegend && budget >= def.acquireCost && player && !owned;
+              return (
+                <div key={def.legendId} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: `1px solid ${C.steel}` }}>
+                  <RatingBadge value={def.rating} />
+                  <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 5, overflow: "hidden" }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{def.name}</span>
+                    <span style={{ fontSize: 9, color: POS_COLOR[def.position], flexShrink: 0 }}>{POS_TH[def.position]}</span>
+                    <span style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, flexShrink: 0 }}>{formatMoney(def.acquireCost)}</span>
+                    <span style={{ fontSize: 9.5, color: C.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ownerTeam?.short || "?"}</span>
+                  </div>
+                  {owned ? (
+                    <span style={{ fontSize: 9, color: C.good, flexShrink: 0 }}>✓</span>
+                  ) : (
+                    <button
+                      disabled={!canBuy}
+                      onClick={() => onAcquireLegend(def.legendId)}
+                      style={{ ...btnStyle(canBuy ? C.gold : "#2b332f", canBuy ? "#0b2318" : C.textDim), width: "auto", padding: "5px 10px", fontSize: 10, flexShrink: 0 }}
+                    >คว้า</button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {sortedLegends.length > LEGEND_PREVIEW && (
+            <button type="button" onClick={() => setLegendExpanded((v) => !v)} style={{
+              marginTop: 6, width: "100%", padding: "6px 0", background: "transparent", border: "none",
+              color: C.amber, fontSize: 10, cursor: "pointer", fontWeight: 600,
+            }}>{legendExpanded ? "ย่อ ▲" : `ดูทั้งหมด (${sortedLegends.length}) ▼`}</button>
+          )}
+        </Panel>
+      )}
       <Panel style={{ border: `1px solid ${marketOpen ? C.good : C.steel}` }}>
         <SectionLabel>สถานะตลาดซื้อขาย</SectionLabel>
-        {marketOpen ? <div style={{ fontSize: 13, color: C.good, fontWeight: 700 }}>🟢 เปิดอยู่ตอนนี้ — ประมูลได้ (12:00-14:00, 18:00-22:00)</div> : <div style={{ fontSize: 13, color: C.textDim }}>🔴 ปิดอยู่ · {nextMarketOpenLabel(new Date(now))}</div>}
+        {marketOpen ? (
+          <div style={{ fontSize: 13, color: C.good, fontWeight: 700 }}>
+            {playMode === "sandbox"
+              ? "🟢 เปิดตลอดเวลา — โหมดโลกจำลอง"
+              : "🟢 เปิดอยู่ตอนนี้ — ประมูลได้ (12:00-14:00, 18:00-22:00)"}
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: C.textDim }}>🔴 ปิดอยู่ · {nextMarketOpenLabel(new Date(now))}</div>
+        )}
         <div style={{ fontSize: 11.5, color: C.textDim, marginTop: 6 }}>งบคงเหลือ: <span style={{ color: C.amber, fontFamily: MONO_FONT }}>{formatMoney(budget)}</span> — เสนอ "ค่าเหนื่อย" สูงกว่าชนะก่อน ถ้าเท่ากันตัดสินด้วย "ค่าตัว"</div>
       </Panel>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {list.map((l) => <ListingCard key={l.listingId} l={l} budget={budget} onBid={onBid} marketOpen={marketOpen} now={now} />)}
+      </div>
+      <Panel accent={C.crimson}>
+        <SectionLabel sub={`ต้องมีอย่างน้อย ${MIN_SELL_SQUAD} คนในทีม`}>💰 ขายนักเตะในทีม</SectionLabel>
+        {squadSize <= MIN_SELL_SQUAD ? (
+          <div style={{ fontSize: 12, color: C.textDim }}>ขายไม่ได้ — ทีมเหลือน้อยเกินไป</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {sellable.filter((p) => !p.isLegend).map((p) => (
+              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: `1px solid ${C.steel}` }}>
+                <RatingBadge value={p.rating} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name} <span style={{ fontSize: 10, color: playerPosColor(p) }}>{playerPosTH(p)}</span></div>
+                  <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT }}>มูลค่า ~{formatMoney(p.value)}</div>
+                </div>
+                <button type="button" onClick={() => onSell(p.id)} style={{ fontSize: 10, padding: "5px 10px", borderRadius: 6, border: `1px solid ${C.crimson}`, background: "transparent", color: C.crimson, cursor: "pointer", fontWeight: 700 }}>ขาย</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+function MarketScoutView({ scoutFinds, budget, onBuyScoutFind, onScoutSearch, onHireMarketScout, onHireScoutCard, career }) {
+  const hasScout = Boolean(career?.marketScout);
+  const scout = career?.marketScout;
+  const canSearchToday = hasScout && (career.scoutSearchDay || 0) < career.day;
+  const maxFinds = scout ? 3 + scout.grade : 0;
+  const scoutCards = (career?.staffCardBag || []).filter((c) => c.type === "SCOUT");
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel style={{ border: `1px solid ${hasScout ? C.blue : C.steel}` }}>
+        <SectionLabel sub="แยกจากแมวมองเยาวชนในอคาเดมี">แมวมองทีมชุดใหญ่</SectionLabel>
+        {career.marketScout ? (
+          <div>
+            <div style={{ fontSize: 12.5, fontFamily: MONO_FONT, color: C.textDim }}>{career.marketScout.name} · เกรด {career.marketScout.grade}/5 · ค่าเหนื่อย {formatMoney(career.marketScout.weeklyWage)}/วัน</div>
+            {isStaffRoleLocked(career.marketScout, career.season) && (
+              <div style={{ fontSize: 10, color: C.textDim, marginTop: 4 }}>🔒 เปลี่ยนแมวมองคนนี้ได้ตอนขึ้นฤดูกาลหน้า</div>
+            )}
+          </div>
+        ) : career.marketScoutOffer ? (
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{career.marketScoutOffer.name} (เกรด {career.marketScoutOffer.grade}/5)</div>
+            <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, margin: "4px 0 10px" }}>ค่าแรกเข้า {formatMoney(career.marketScoutOffer.signingCost)} · ค่าเหนื่อย {formatMoney(career.marketScoutOffer.weeklyWage)}/วัน</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={onHireMarketScout} style={{ ...btnStyle(C.good, "#08150e"), flex: 1 }}>จ้าง</button>
+            </div>
+          </div>
+        ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
+      </Panel>
+
+      {scoutCards.length > 0 && (
+        <Panel style={{ border: `1px solid ${C.blue}` }}>
+          <SectionLabel style={{ color: C.blue }} sub={`มี ${scoutCards.length} ใบในกระเป๋า — ติดตั้งได้ทั้งแมวมองชุดใหญ่/เยาวชน${scoutCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดแมวมองที่สุ่มได้</SectionLabel>
+          <div style={CARD_LIST_SCROLL}>
+            {scoutCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireScoutCard} {...staffCardLockInfo(career, card)} />)}
+          </div>
+        </Panel>
+      )}
+      <Panel style={{ border: `1px solid ${hasScout ? C.blue : C.steel}` }}>
+        <SectionLabel sub={hasScout ? `${scout.name} · เกรด ${scout.grade}/5 · สูงสุด ${maxFinds} รายการ` : "จ้างแมวมองด้านบนก่อน"}>
+          🔭 รายงานจากแมวมอง
+        </SectionLabel>
+        {!hasScout ? (
+          <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.65 }}>
+            จ้าง <b style={{ color: C.blue }}>แมวมองทีมชุดใหญ่</b> แล้วระบบจะค้นหานักเตะราคาถูกมาให้ที่นี่
+            <br />ตัวไม่เก่งมาก แต่พอใช้เติมสควอด / สำรองได้
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 10, lineHeight: 1.6 }}>
+              ซื้อตรงราคาคงที่ — ไม่ต้องประมูล · รายการหมดอายุใน 8 วัน · แมวมองค้นหาให้อัตโนมัติทุกวัน
+            </div>
+            <button
+              type="button"
+              disabled={!canSearchToday || scoutFinds.length >= maxFinds}
+              onClick={onScoutSearch}
+              style={{
+                ...btnStyle(canSearchToday && scoutFinds.length < maxFinds ? C.blue : "#2b332f", canSearchToday && scoutFinds.length < maxFinds ? "#fff" : C.textDim),
+                width: "auto", padding: "8px 14px", fontSize: 11, marginBottom: 12,
+                cursor: canSearchToday && scoutFinds.length < maxFinds ? "pointer" : "not-allowed",
+              }}
+            >
+              {canSearchToday ? "🔍 สั่งค้นหาเพิ่มวันนี้" : "✓ ค้นหาวันนี้แล้ว"}
+            </button>
+            {scoutFinds.length === 0 ? (
+              <div style={{ fontSize: 12, color: C.textDim }}>ยังไม่มีรายการ — รอแมวมองรายงานหรือกดค้นหา</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {scoutFinds.map((f) => (
+                  <ScoutFindCard key={f.findId} f={f} budget={budget} currentDay={career.day} onBuy={onBuyScoutFind} />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </Panel>
+    </div>
+  );
+}
+function ScoutFindCard({ f, budget, currentDay, onBuy }) {
+  const daysLeft = f.expiresDay - currentDay;
+  const canBuy = budget >= f.buyFee;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.steel}` }}>
+      <RatingBadge value={f.rating} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>
+          {f.name} <span style={{ fontSize: 10, color: playerPosColor(f) }}>{playerPosTH(f)}</span>
+        </div>
+        <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, marginTop: 2 }}>
+          อายุ {f.age} · ศักยภาพ {bandOf(f.potential)} · {f.sourceNote}
+        </div>
+        <div style={{ fontSize: 10.5, color: C.blue, marginTop: 2 }}>
+          รายงานโดย {f.scoutName} (เกรด {f.scoutGrade}/5) · เหลือ {daysLeft} วัน
+        </div>
+      </div>
+      <div style={{ textAlign: "right" }}>
+        <div style={{ fontSize: 11, fontFamily: MONO_FONT, color: C.amber }}>{formatMoney(f.buyFee)}</div>
+        <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT }}>{formatMoney(f.buyWage)}/วัน</div>
+        <button
+          type="button"
+          disabled={!canBuy}
+          onClick={() => onBuy(f.findId)}
+          style={{
+            marginTop: 4, fontSize: 10, padding: "4px 10px", borderRadius: 6, border: "none", fontWeight: 700,
+            background: canBuy ? C.good : "#2b332f",
+            color: canBuy ? "#08150e" : C.textDim,
+            cursor: canBuy ? "pointer" : "not-allowed",
+          }}
+        >
+          ซื้อเลย
+        </button>
       </div>
     </div>
   );
@@ -2527,7 +6878,7 @@ function ListingCard({ l, budget, onBid, marketOpen, now }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <RatingBadge value={l.rating} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>{l.name} <span style={{ fontSize: 10, color: POS_COLOR[l.position] }}>{POS_TH[l.position]}</span></div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>{l.name} <span style={{ fontSize: 10, color: playerPosColor(l) }}>{playerPosTH(l)}</span></div>
           <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT }}>อายุ {l.age} · ศักยภาพ {bandOf(l.potential)} · <span style={{ color: GROUP_COLOR.technical }}>TEC {Math.round(attrGroupAvg(l, "technical"))}</span> · <span style={{ color: GROUP_COLOR.mental }}>MEN {Math.round(attrGroupAvg(l, "mental"))}</span> · <span style={{ color: GROUP_COLOR.physical }}>PHY {Math.round(attrGroupAvg(l, "physical"))}</span> · จาก {l.sourceTeamName}</div>
         </div>
         <div style={{ textAlign: "right", fontFamily: MONO_FONT, fontSize: 11 }}><div style={{ color: secsLeft <= 20 ? C.crimson : C.textDim }}>⏱ {secsLeft}s</div></div>
@@ -2560,27 +6911,15 @@ function StepperField({ label, value, step, onChange }) {
 }
 
 /* ============================== LIVE MATCH MODAL ============================== */
-const HALF_SECONDS = 180;
+// 428 หน่วย clock × ~420ms/tick ที่ความเร็ว 1x ≈ 3 นาทีจริงต่อครึ่ง (เต็มเกม ~6 นาที)
+const HALF_SECONDS = 428;
 
 const FM_LIVE = {
   bg: "#0c0a18", panel: "#13112a", panel2: "#1a1838", bar: "#252245",
   accent: "#6b4fd4", text: "#eceaf5", dim: "#8d88ad", green: "#3dba6a", red: "#e05a4a",
 };
-const MENTALITIES = [
-  { id: "very_defensive", label: "รับมาก", atk: 0.82, def: 1.12 },
-  { id: "defensive", label: "รับ", atk: 0.9, def: 1.06 },
-  { id: "balanced", label: "สมดุล", atk: 1, def: 1 },
-  { id: "attacking", label: "บุก", atk: 1.08, def: 0.94 },
-  { id: "very_attacking", label: "บุกมาก", atk: 1.16, def: 0.86 },
-];
-const INSTRUCTIONS = [
-  { id: "wider", label: "กางเกม", desc: "เปิดช่องข้าง" },
-  { id: "narrower", label: "บีบกลาง", desc: "แน่นกลางสนาม" },
-  { id: "higher_line", label: "แนวรับสูง", desc: "ดันขึ้นกดดัน" },
-  { id: "deeper", label: "แนวรับลึก", desc: "ถอยรอสวน" },
-  { id: "more_direct", label: "บอลยาว", desc: "ส่งตรงเร็ว" },
-  { id: "shorter", label: "บอลสั้น", desc: "ผ่านบอลต่อเนื่อง" },
-];
+const MENTALITIES = MATCH_MENTALITIES;
+const INSTRUCTIONS = MATCH_INSTRUCTIONS;
 
 function initMatchRatings(xi, squad) {
   const r = {};
@@ -2618,7 +6957,7 @@ function FMTopBtn({ children, active, onClick, accent }) {
 }
 
 function FMFormationPanel({ team, formation, squad, xi, ratings, side }) {
-  const slots = FORMATIONS[formation].slots;
+  const slots = FORMATIONS[resolveFormation(formation)].slots;
   const assign = { GK: [], DF: [], MF: [], FW: [] };
   squad.filter((p) => xi.includes(p.id)).forEach((p) => assign[p.position].push(p));
   const counters = { GK: 0, DF: 0, MF: 0, FW: 0 };
@@ -2715,6 +7054,48 @@ function FMSquadBar({ squad, xi, ratings, subsUsed, team }) {
   );
 }
 
+function LivePlanEditor({ formation, mentality, instructions, onFormation, onMentality, onToggleInstruction }) {
+  return (
+    <>
+      <div style={{ fontSize: 11, color: FM_LIVE.dim, marginBottom: 6 }}>รูปแบบการเล่น</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+        {FORMATION_KEYS.map((f) => (
+          <button key={f} type="button" onClick={() => onFormation(f)} style={{
+            padding: "7px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 700, fontSize: 12,
+            border: `1px solid ${f === formation ? FM_LIVE.accent : FM_LIVE.bar}`,
+            background: f === formation ? FM_LIVE.accent : "transparent", color: FM_LIVE.text,
+          }}>{f}</button>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: FM_LIVE.dim, marginBottom: 6 }}>แนวทางเกม</div>
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 14 }}>
+        {MENTALITIES.map((m) => (
+          <button key={m.id} type="button" onClick={() => onMentality(m.id)} style={{
+            padding: "6px 10px", borderRadius: 7, cursor: "pointer", fontSize: 11,
+            border: `1px solid ${mentality === m.id ? C.amber : FM_LIVE.bar}`,
+            background: mentality === m.id ? "rgba(224,164,88,.2)" : "transparent", color: FM_LIVE.text,
+          }}>{m.label}</button>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: FM_LIVE.dim, marginBottom: 6 }}>คำสั่ง (สูงสุด 3)</div>
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+        {INSTRUCTIONS.map((ins) => {
+          const on = instructions.includes(ins.id);
+          const full = instructions.length >= 3 && !on;
+          return (
+            <button key={ins.id} type="button" disabled={full} onClick={() => onToggleInstruction(ins.id)} title={ins.desc} style={{
+              padding: "5px 9px", borderRadius: 6, cursor: full ? "not-allowed" : "pointer", fontSize: 10,
+              border: `1px solid ${on ? FM_LIVE.green : FM_LIVE.bar}`,
+              background: on ? "rgba(61,186,106,.15)" : "transparent",
+              color: full ? FM_LIVE.dim : FM_LIVE.text, opacity: full ? 0.5 : 1,
+            }}>{ins.label}</button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
 function FMTacticsPanel({ formation, mentality, instructions, onFormation, onMentality, onToggleInstruction, onClose }) {
   return (
     <div style={{
@@ -2724,41 +7105,110 @@ function FMTacticsPanel({ formation, mentality, instructions, onFormation, onMen
       <div style={{ background: FM_LIVE.panel, borderRadius: 14, padding: 18, maxWidth: 420, width: "100%", border: `1px solid ${FM_LIVE.accent}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div style={{ fontFamily: DISPLAY_FONT, fontSize: 15, color: FM_LIVE.text }}>แทคติก & เปลี่ยนตัว</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: FM_LIVE.dim, fontSize: 18, cursor: "pointer" }}>✕</button>
+          <button type="button" onClick={onClose} style={{ background: "none", border: "none", color: FM_LIVE.dim, fontSize: 18, cursor: "pointer" }}>✕</button>
         </div>
-        <div style={{ fontSize: 11, color: FM_LIVE.dim, marginBottom: 6 }}>รูปแบบการเล่น</div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-          {FORMATION_KEYS.map((f) => (
-            <button key={f} onClick={() => onFormation(f)} style={{
-              padding: "7px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 700, fontSize: 12,
-              border: `1px solid ${f === formation ? FM_LIVE.accent : FM_LIVE.bar}`,
-              background: f === formation ? FM_LIVE.accent : "transparent", color: FM_LIVE.text,
-            }}>{f}</button>
-          ))}
+        <LivePlanEditor
+          formation={formation}
+          mentality={mentality}
+          instructions={instructions}
+          onFormation={onFormation}
+          onMentality={onMentality}
+          onToggleInstruction={onToggleInstruction}
+        />
+      </div>
+    </div>
+  );
+}
+
+function HalftimeOverlay({ scoreLabel, formation, mentality, instructions, onFormation, onMentality, onToggleInstruction, teamTalkHalf, onSetTeamTalkHalf, onContinue, myXI, mySquad, bench, onSub, subsUsed }) {
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(4,10,7,.94)", zIndex: 110,
+      display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 16,
+    }}>
+      <div style={{ width: "100%", maxWidth: 520, marginTop: 24 }}>
+        <div style={{ textAlign: "center", marginBottom: 16 }}>
+          <div style={{ fontFamily: DISPLAY_FONT, fontSize: 22, color: C.amber, letterSpacing: 2 }}>⏸ พักครึ่ง</div>
+          <div style={{ fontFamily: MONO_FONT, fontSize: 28, fontWeight: 800, color: C.chalk, marginTop: 8 }}>{scoreLabel}</div>
+          <div style={{ fontSize: 12, color: C.textDim, marginTop: 8 }}>ปรับแผนได้ครั้งเดียวตอนนี้ · เปลี่ยนตัวได้ตลอดเกม</div>
         </div>
-        <div style={{ fontSize: 11, color: FM_LIVE.dim, marginBottom: 6 }}>แนวทางเกม (Mentality)</div>
-        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 14 }}>
-          {MENTALITIES.map((m) => (
-            <button key={m.id} onClick={() => onMentality(m.id)} style={{
-              padding: "6px 10px", borderRadius: 7, cursor: "pointer", fontSize: 11,
-              border: `1px solid ${mentality === m.id ? C.amber : FM_LIVE.bar}`,
-              background: mentality === m.id ? "rgba(224,164,88,.2)" : "transparent", color: FM_LIVE.text,
-            }}>{m.label}</button>
-          ))}
-        </div>
-        <div style={{ fontSize: 11, color: FM_LIVE.dim, marginBottom: 6 }}>คำสั่ง (Instructions)</div>
-        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-          {INSTRUCTIONS.map((ins) => {
-            const on = instructions.includes(ins.id);
-            return (
-              <button key={ins.id} onClick={() => onToggleInstruction(ins.id)} title={ins.desc} style={{
-                padding: "5px 9px", borderRadius: 6, cursor: "pointer", fontSize: 10,
-                border: `1px solid ${on ? FM_LIVE.green : FM_LIVE.bar}`,
-                background: on ? "rgba(61,186,106,.15)" : "transparent", color: FM_LIVE.text,
-              }}>{ins.label}</button>
-            );
-          })}
-        </div>
+        <Panel accent={C.amber} style={{ marginBottom: 12 }}>
+          <SectionLabel>ปรับแผน (ครึ่งหลัง)</SectionLabel>
+          <LivePlanEditor
+            formation={formation}
+            mentality={mentality}
+            instructions={instructions}
+            onFormation={onFormation}
+            onMentality={onMentality}
+            onToggleInstruction={onToggleInstruction}
+          />
+        </Panel>
+        <Panel style={{ marginBottom: 12 }}>
+          <SectionLabel sub="เลือก 1 อย่าง — มีผลครึ่งหลัง">คุยนักเตะ (Team Talk)</SectionLabel>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {TEAM_TALK_OPTIONS.map((tt) => (
+              <button key={tt.id} type="button" onClick={() => onSetTeamTalkHalf(teamTalkHalf === tt.id ? null : tt.id)} style={{
+                padding: "6px 10px", borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: "pointer",
+                border: `1px solid ${teamTalkHalf === tt.id ? C.gold : C.steel}`,
+                background: teamTalkHalf === tt.id ? "rgba(212,175,55,.12)" : C.panel2,
+                color: teamTalkHalf === tt.id ? C.gold : C.textDim,
+              }}>{tt.label}</button>
+            ))}
+          </div>
+        </Panel>
+        <Panel style={{ marginBottom: 12 }}>
+          <SectionLabel sub={`ใช้ไป ${subsUsed}/5 · เปลี่ยนได้ตลอดแมตช์`}>เปลี่ยนตัว</SectionLabel>
+          <SubPicker myXI={myXI} mySquad={mySquad} bench={bench} onSub={onSub} disabled={subsUsed >= MAX_MATCH_SUBS} />
+        </Panel>
+        <button type="button" onClick={onContinue} style={{ ...btnStyle(C.good, "#08150e"), width: "100%", fontSize: 16, padding: "14px 0" }}>
+          ▶ เริ่มครึ่งหลัง
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** หน้ารายชื่อผู้เล่นก่อนเขี่ยเปิดเกม — โชว์ทีละฝั่ง เรียงตามฟอร์เมชัน มีดาว/เรตติ้ง */
+function LineupScreen({ team, squad, xi, onSkip }) {
+  const players = xi.map((id) => squad.find((sp) => sp.id === id)).filter(Boolean);
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 200, display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center", padding: 16,
+      background: "linear-gradient(160deg,#0a1c12,#05100a)",
+    }}>
+      <ClubBadge team={team} size={56} />
+      <div style={{ fontFamily: DISPLAY_FONT, fontSize: 20, fontWeight: 800, color: "#fff", margin: "10px 0 2px", textAlign: "center" }}>
+        {team.name || team.short}
+      </div>
+      <div style={{ fontSize: 11, color: C.textDim, marginBottom: 14 }}>ตัวจริง 11 คน</div>
+      <div style={{ width: "100%", maxWidth: 360, display: "flex", flexDirection: "column", gap: 6, maxHeight: "52vh", overflowY: "auto" }}>
+        {players.map((p, i) => (
+          <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 8, background: "rgba(255,255,255,.05)" }}>
+            <span style={{ width: 20, textAlign: "center", fontFamily: MONO_FONT, fontSize: 11, color: C.textDim }}>{i + 1}</span>
+            <span style={{ flex: 1, fontSize: 13, color: "#fff" }}>{p.name}</span>
+            <span style={{ fontSize: 10, color: C.textDim, width: 34, textAlign: "center" }}>{playerPosCode(p)}</span>
+            <span style={{ fontSize: 11, color: C.gold, letterSpacing: 1 }}>{"★".repeat(starsFromRating(p.rating))}</span>
+          </div>
+        ))}
+      </div>
+      <button type="button" onClick={onSkip} style={{ marginTop: 18, ...btnStyle(C.steel, C.chalk), padding: "9px 22px" }}>ข้าม ▶</button>
+    </div>
+  );
+}
+
+/** หน้ารอนกหวีดเขี่ยกลาง — ข้ามไม่ได้ */
+function KickoffWhistleBanner() {
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center",
+      background: "rgba(4,10,7,.55)", pointerEvents: "none",
+    }}>
+      <div style={{
+        fontFamily: DISPLAY_FONT, fontSize: 16, fontWeight: 700, color: "#fff",
+        padding: "10px 20px", borderRadius: 10, background: "rgba(10,10,14,.85)", border: `1px solid ${C.gold}`,
+      }}>
+        🟨 ผู้ตัดสินเป่านกหวีด — เตรียมเขี่ยเปิดเกม!
       </div>
     </div>
   );
@@ -2777,28 +7227,38 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   const [awayGoals, setAwayGoals] = useState(0);
   const [events, setEvents] = useState([]);
   const [speed, setSpeed] = useState(1);
-  const [paused, setPaused] = useState(false);
+  // ก่อนเขี่ยเปิดเกม: รายชื่อผู้เล่น(บ้าน) → รายชื่อผู้เล่น(เยือน) → เดินออกอุโมง → รอนกหวีด → เล่นจริง
+  // เกมค้าง (paused=true) ตลอดจนกว่านกหวีดจะจบ ใช้ paused ตัวเดิมที่คุมลูป sim อยู่แล้ว ไม่ต้องเพิ่มธงใหม่
+  const [preMatchPhase, setPreMatchPhase] = useState("lineup-home");
+  const [walkoutT, setWalkoutT] = useState(0);
+  const [paused, setPaused] = useState(true);
+  // ฉากเปลี่ยนตัว — { outId, inId, side, outSlotIdx, outNum, inNum, outName, inName, phase: "board"|"walk", t }
+  // เกมหยุดสนิทตลอดฉาก (ตั้ง paused=true ตอนเริ่ม) จนกว่าตัวใหม่จะเดินถึงตำแหน่ง
+  const [subScene, setSubScene] = useState(null);
   const [homeFormation, setHomeFormation] = useState(liveMatch.homeFormation);
   const [awayFormation, setAwayFormation] = useState(liveMatch.awayFormation);
   const [homeXI, setHomeXI] = useState(liveMatch.homeXI);
   const [awayXI, setAwayXI] = useState(liveMatch.awayXI);
   const [subsUsed, setSubsUsed] = useState(0);
-  const [showSubs, setShowSubs] = useState(false);
-  const [showTactics, setShowTactics] = useState(false);
-  const [myMentality, setMyMentality] = useState("balanced");
-  const [myInstructions, setMyInstructions] = useState([]);
+  const [showSubs, setShowSubs] = useState(true);
+  const [halftimeOpen, setHalftimeOpen] = useState(false);
+  const [teamTalkHalf, setTeamTalkHalf] = useState(null);
+  const prep = career.matchPrep || defaultMatchPrep();
+  const [myMentality, setMyMentality] = useState(prep.mentality || "balanced");
+  const [myInstructions, setMyInstructions] = useState(() => [...(prep.instructions || [])]);
   const [playerRatings, setPlayerRatings] = useState(() => ({
   ...initMatchRatings(liveMatch.homeXI, homeSquad),
   ...initMatchRatings(liveMatch.awayXI, awaySquad),
   }));
   const [dugoutTip, setDugoutTip] = useState(null);
   const [goalLog, setGoalLog] = useState([]);
-  const [stats, setStats] = useState({ shotsH: 0, shotsA: 0, sotH: 0, sotA: 0, cornersH: 0, cornersA: 0, foulsH: 0, foulsA: 0 });
+  const [stats, setStats] = useState({ shotsH: 0, shotsA: 0, sotH: 0, sotA: 0, cornersH: 0, cornersA: 0, foulsH: 0, foulsA: 0, cardsH: 0, cardsA: 0 });
   const [possession, setPossession] = useState({ homeTicks: 1, awayTicks: 1 });
   const [momentum, setMomentum] = useState([]);
   const [highlight, setHighlight] = useState(null); // { team, kind, minute }
-  const [highlightSeq, setHighlightSeq] = useState(null);
+  // ระบบรีเพลย์แยกถูกถอดออกแล้ว — ทุกช็อตเล่นสดต่อเนื่องใน ambient sim (สโลว์โมชั่นในตัว)
   const [goalFlash, setGoalFlash] = useState(null);
+  const [refereeCard, setRefereeCard] = useState(null); // { team, kind: "yellow"|"red", player, minute }
   const [ended, setEnded] = useState(false);
   const [pressure, setPressure] = useState(0);
   const [livePossSide, setLivePossSide] = useState("home");
@@ -2808,13 +7268,19 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
     id: 1, minute: 0, text: "⚽ เริ่มเกม — แมตช์จำลองอัตโนมัติจาก engine",
   }]);
   const [animTick, setAnimTick] = useState(0);
+  const [crowdMuted, setCrowdMutedState] = useState(() => isCrowdMuted());
+  const [crowdNeedsUnlock, setCrowdNeedsUnlock] = useState(false);
+  const [crowdUnlockTick, setCrowdUnlockTick] = useState(0);
   const [ballSim, setBallSim] = useState(() => ({
     px: 42, py: 50, fromPx: 42, fromPy: 50, toPx: 48, toPy: 50,
-    t: 1, side: "home", carrier: 6, phase: "dribble",
+    t: 0, side: "home", carrier: 6, phase: "dribble",
   }));
+  const playerMotionRef = useRef({});
+  const ambientRef = useRef(null);
+  const livePossSideRef = useRef("home");
 
   const tickRef = useRef(0);
-  const gameStateRef = useRef({ possSide: "home", pressure: 0 });
+  const gameStateRef = useRef({ pressure: 0, homePressure: 0.5 });
   const homeFormationRef = useRef(homeFormation);
   const awayFormationRef = useRef(awayFormation);
   homeFormationRef.current = homeFormation;
@@ -2822,19 +7288,108 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   const finishedRef = useRef(false);
   const lastAiCheckRef = useRef(0);
   const bucketRef = useRef({ home: 0, away: 0 });
-  const highlightSeqRef = useRef(null);
-  const slowMoRef = useRef(1);
-  const goalFlashShownRef = useRef(false);
-  const applyHighlightResultRef = useRef(null);
+  const lastShotMetaRef = useRef(null); // { scorerName, teamShort, shotSide } ของช็อตล่าสุด — ใช้ตอนบอลถึงตาข่ายค่อยโชว์ GOAL flash
   const ballSimRef = useRef(ballSim);
   ballSimRef.current = ballSim;
   const possBallXRef = useRef(0.5);
-  const lastHighlightTickRef = useRef(-999);
+  const cardsRef = useRef(new Map()); // playerId -> จำนวนใบเหลืองสะสม (สอง = แดง)
   const virtualBallPxRef = useRef(50);
   const commentaryIdRef = useRef(1);
   const gameMinRef = useRef(0);
   const xgRef = useRef({ xgHome: 1, xgAway: 1 });
   const lastAttackingHomeRef = useRef(true);
+
+  function toggleCrowdMute() {
+    setCrowdMutedState((m) => {
+      const next = !m;
+      setCrowdMuted(next);
+      if (!next) setCrowdNeedsUnlock(false);
+      return next;
+    });
+  }
+
+  async function unlockCrowdAudio() {
+    setCrowdMutedState(false);
+    setCrowdMuted(false);
+    setCrowdNeedsUnlock(false);
+    setCrowdUnlockTick((t) => t + 1);
+  }
+
+  useStadiumCrowd({
+    active: !ended,
+    paused: paused || halftimeOpen,
+    ended,
+    half,
+    pressure,
+    ballPx: ballSim.px,
+    highlight,
+    goalFlash,
+    highlightSeq: null,
+    fanBase: career.fanBase || 2500,
+    muted: crowdMuted,
+    onNeedsUnlock: setCrowdNeedsUnlock,
+    unlockTick: crowdUnlockTick,
+  });
+
+  // หน้ารายชื่อผู้เล่น ~5 วิ/ฝั่ง แล้วไปต่ออัตโนมัติ (กดข้ามได้ผ่าน skipPreMatch)
+  useEffect(() => {
+    if (preMatchPhase !== "lineup-home" && preMatchPhase !== "lineup-away") return undefined;
+    const t = setTimeout(() => {
+      setPreMatchPhase((p) => (p === "lineup-home" ? "lineup-away" : "walkout"));
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [preMatchPhase]);
+
+  // นักเตะเดินออกจากอุโมงเข้าตำแหน่งฟอร์เมชัน ~3.6 วิ (กดข้ามได้)
+  useEffect(() => {
+    if (preMatchPhase !== "walkout") return undefined;
+    let raf;
+    const start = performance.now();
+    const tick = (now) => {
+      const t = Math.min(1, (now - start) / 3600);
+      setWalkoutT(t);
+      if (t < 1) raf = requestAnimationFrame(tick);
+      else setPreMatchPhase("whistle");
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [preMatchPhase]);
+
+  // ผู้ตัดสินเป่านกหวีดเขี่ยกลาง — ข้ามไม่ได้ ปล่อยเกมเดินหลังเป่าเสร็จ
+  useEffect(() => {
+    if (preMatchPhase !== "whistle") return undefined;
+    const t1 = setTimeout(() => playWhistle(), 250);
+    const t2 = setTimeout(() => { setPreMatchPhase(null); setPaused(false); }, 950);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [preMatchPhase]);
+
+  // กดข้าม — ตัดตรงไปจุดยืนรอเขี่ยกลาง (ยังต้องรอนกหวีดเสมอ ข้ามนกหวีดไม่ได้)
+  function skipPreMatch() {
+    if (preMatchPhase && preMatchPhase !== "whistle") setPreMatchPhase("whistle");
+  }
+
+  // ฉากเปลี่ยนตัว — หน้าป้าย (~2 วิ) แล้วเดินสวนกันจริง (~2.2 วิ) หยุดเกมสนิทตลอด
+  useEffect(() => {
+    if (!subScene) return undefined;
+    if (subScene.phase === "board") {
+      const t = setTimeout(() => setSubScene((s) => (s ? { ...s, phase: "walk", t: 0 } : s)), 2000);
+      return () => clearTimeout(t);
+    }
+    if (subScene.phase === "walk") {
+      let raf;
+      const start = performance.now();
+      const tick = (now) => {
+        const t = (now - start) / 1000;
+        if (t >= 2.2) { finishSubScene(); return; }
+        setSubScene((s) => (s ? { ...s, t } : s));
+        raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+      return () => cancelAnimationFrame(raf);
+    }
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subScene?.phase]);
 
   function pushCommentary(text, minute) {
     commentaryIdRef.current += 1;
@@ -2844,11 +7399,19 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
 
   const myXI = isUserHome ? homeXI : awayXI;
   const mySquad = isUserHome ? homeSquad : awaySquad;
-  const bench = mySquad.filter((p) => !myXI.includes(p.id) && p.injuryDays <= 0);
+  const namedBenchIds = (career.benchLineups?.[career.userTeamId] || []).filter((id) => mySquad.some((p) => p.id === id) && !myXI.includes(id));
+  const bench = namedBenchIds.length
+    ? namedBenchIds.map((id) => mySquad.find((p) => p.id === id)).filter((p) => p && p.injuryDays <= 0)
+    : mySquad.filter((p) => !myXI.includes(p.id) && p.injuryDays <= 0);
 
   const myTeam = isUserHome ? homeTeam : awayTeam;
   const myFormation = isUserHome ? homeFormation : awayFormation;
   const oppFormation = isUserHome ? awayFormation : homeFormation;
+  const oppSquadForMark = isUserHome ? awaySquad : homeSquad;
+  const oppXIForMark = isUserHome ? awayXI : homeXI;
+  const familiarityMult = familiarityMultiplier(
+    career.tacticFamiliarity && career.tacticFamiliarity.formation === myFormation ? career.tacticFamiliarity.matches : 0
+  );
 
   function setMyFormation(f) {
     const newXI = getBestXI(mySquad, f);
@@ -2858,7 +7421,31 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   }
 
   function toggleInstruction(id) {
-    setMyInstructions((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+    setMyInstructions((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.length >= 3) return prev;
+      return [...prev, id];
+    });
+  }
+
+  const halfRef = useRef(half);
+  const teamTalkHalfRef = useRef(teamTalkHalf);
+  halfRef.current = half;
+  teamTalkHalfRef.current = teamTalkHalf;
+
+  function startSecondHalf() {
+    setHalf(2);
+    setClock(0);
+    setHalftimeOpen(false);
+    setPaused(false);
+    const tt = teamTalkHalf ? TEAM_TALK_OPTIONS.find((t) => t.id === teamTalkHalf) : null;
+    if (tt) {
+      pushCommentary(`🗣️ คุยนักเตะครึ่งหลัง: ${tt.label}`, 45);
+      setEvents((e) => [`🗣️ คุยนักเตะครึ่งหลัง: ${tt.label}`, ...e]);
+    } else {
+      pushCommentary("▶ เริ่มครึ่งหลัง", 45);
+      setEvents((e) => [`▶ เริ่มครึ่งหลัง`, ...e]);
+    }
   }
 
   function bumpRating(playerId, delta) {
@@ -2867,19 +7454,76 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   }
 
   function applyTacticMods(ctx, isUserCtx) {
-    if (!isUserCtx) return ctx;
+    if (!isUserCtx) return applyOppositionMarkToContext(ctx, prep.markPlayerId, oppSquadForMark, oppXIForMark);
     const ment = MENTALITIES.find((m) => m.id === myMentality) || MENTALITIES[2];
     let atk = ctx.effAttack * ment.atk;
     let def = ctx.effDefense * ment.def;
     if (myInstructions.includes("more_direct")) atk *= 1.04;
     if (myInstructions.includes("shorter")) atk *= 1.02;
-    if (myInstructions.includes("higher_line")) { atk *= 1.03; def *= 0.97; }
-    if (myInstructions.includes("deeper")) { atk *= 0.97; def *= 1.04; }
+    if (myInstructions.includes("wider")) atk *= 1.02;
+    if (myInstructions.includes("narrower")) def *= 1.02;
+    const tempo = TEMPO_OPTIONS.find((t) => t.id === prep.tempo) || TEMPO_OPTIONS[1];
+    atk *= tempo.atk; def *= tempo.def;
+    const pressing = PRESSING_OPTIONS.find((t) => t.id === prep.pressing) || PRESSING_OPTIONS[1];
+    atk *= pressing.atk; def *= pressing.def;
+    const defLineOpt = DEF_LINE_OPTIONS.find((t) => t.id === prep.defLine) || DEF_LINE_OPTIONS[1];
+    atk *= defLineOpt.atk; def *= defLineOpt.def;
+    const ownDefenders = mySquad.filter((p) => myXI.includes(p.id) && (p.position === "DF" || p.position === "GK"));
+    const avgDefPace = ownDefenders.length ? ownDefenders.reduce((s, p) => s + (p.attrs?.pace || 10), 0) / ownDefenders.length : 10;
+    def *= offsideTrapMult(prep.defLine, prep.offsideTrap, avgDefPace);
+    atk *= setPieceBonusMult(myTeam, mySquad);
+    if (prep.markPlayerId) def *= 0.985;
+    const ttId = halfRef.current === 2 ? teamTalkHalfRef.current : prep.teamTalk;
+    if (ttId) {
+      const tt = TEAM_TALK_OPTIONS.find((t) => t.id === ttId);
+      if (tt) {
+        if (tt.atk) atk *= tt.atk;
+        if (tt.def) def *= tt.def;
+      }
+    }
+    atk *= familiarityMult; def *= familiarityMult;
     return { ...ctx, effAttack: atk, effDefense: def };
   }
 
+  // เปลี่ยนตัวระหว่างเกมจริง (ไม่ใช่ตอนพักครึ่ง) — เริ่มฉาก: หยุดเกม, ผจก./ตัวสำรอง/ผู้ช่วยผู้ตัดสิน/คนถือป้ายโผล่ข้างสนาม
+  // ข้อมูลจริง (สลับ XI ฯลฯ) ค่อยอัปเดตตอนจบฉาก (finishSubScene) พร้อมกับตอนตัวใหม่เดินถึงตำแหน่งพอดี
+  function startSubScene(outId, inId) {
+    if (subsUsed >= MAX_MATCH_SUBS || subScene) return;
+    const side = isUserHome ? "home" : "away";
+    const xi = isUserHome ? homeXI : awayXI;
+    const outSlotIdx = xi.indexOf(outId);
+    if (outSlotIdx < 0) return;
+    const outP = mySquad.find((p) => p.id === outId);
+    const inP = mySquad.find((p) => p.id === inId);
+    const benchIdx = bench.findIndex((p) => p.id === inId);
+    setPaused(true);
+    setSubScene({
+      outId, inId, side, outSlotIdx, t: 0, phase: "board",
+      outName: outP?.name || "?", inName: inP?.name || "?",
+      outNum: outSlotIdx + 1, inNum: 12 + Math.max(0, benchIdx),
+    });
+  }
+
+  function finishSubScene() {
+    setSubScene((sc) => {
+      if (!sc) return null;
+      if (sc.side === "home") setHomeXI((xi) => xi.map((id) => (id === sc.outId ? sc.inId : id)));
+      else setAwayXI((xi) => xi.map((id) => (id === sc.outId ? sc.inId : id)));
+      setSubsUsed((s) => s + 1);
+      setPlayerRatings((r) => {
+        const nr = { ...r };
+        const p = career.players.find((pl) => pl.id === sc.inId);
+        nr[sc.inId] = clamp(6.2 + (p ? p.rating / 85 : 0), 5.8, 7.2);
+        return nr;
+      });
+      setEvents((e) => [`🔁 เปลี่ยนตัว: นำ ${sc.inName} ลงแทน ${sc.outName}`, ...e]);
+      return null;
+    });
+    setPaused(false);
+  }
+
   function doSub(outId, inId) {
-    if (subsUsed >= 5) return;
+    if (subsUsed >= MAX_MATCH_SUBS) return;
     if (isUserHome) setHomeXI((xi) => xi.map((id) => (id === outId ? inId : id)));
     else setAwayXI((xi) => xi.map((id) => (id === outId ? inId : id)));
     setSubsUsed((s) => s + 1);
@@ -2890,41 +7534,13 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       return nr;
     });
     setEvents((e) => [`🔁 เปลี่ยนตัว: นำ ${mySquad.find((p) => p.id === inId)?.name} ลงแทน ${mySquad.find((p) => p.id === outId)?.name}`, ...e]);
-    setShowSubs(false);
-    setShowTactics(false);
   }
 
-  function applyHighlightResult(seq) {
-    const { shotResult, shotSide, gameMin, teamShort } = seq;
-    if (shotResult === "goal") {
-      setHighlight({ team: shotSide, kind: "goal", minute: gameMin });
-    } else if (shotResult === "save") {
-      setEvents((e) => [`🧤 ${gameMin}' ${teamShort} ยิงตรงกรอบ แต่โดนเซฟ!`, ...e]);
-      setHighlight({ team: shotSide, kind: "save", minute: gameMin });
-    } else {
-      setEvents((e) => [`📐 ${gameMin}' ${teamShort} ยิง... หลุดกรอบ`, ...e]);
-      setHighlight({ team: shotSide, kind: "miss", minute: gameMin });
-    }
-    if (shotResult !== "goal") setTimeout(() => setHighlight(null), 2200);
-    const gkSide = shotSide === "home" ? "away" : "home";
-    const gkPx = gkSide === "home" ? 14 : 86;
-    if (shotResult === "goal") {
-      setBallSim({
-        px: 50, py: 50, fromPx: 50, fromPy: 50, toPx: 50, toPy: 50,
-        t: 1, side: gkSide, carrier: 4, phase: "dribble", shotResult: null,
-        fromCarrier: null, toCarrier: null,
-      });
-      setTimeout(() => setHighlight(null), 800);
-    } else {
-      setBallSim({
-        px: gkPx, py: 48, fromPx: gkPx, fromPy: 48, toPx: gkPx, toPy: 48,
-        t: 1, side: gkSide, carrier: 0, phase: "dribble", shotResult: null,
-        fromCarrier: null, toCarrier: null,
-      });
-    }
-    gameStateRef.current = { possSide: gkSide, pressure: 0 };
-  }
-  applyHighlightResultRef.current = applyHighlightResult;
+  useEffect(() => {
+    const hSlots = FORMATIONS[resolveFormation(homeFormation)].slots;
+    const aSlots = FORMATIONS[resolveFormation(awayFormation)].slots;
+    ambientRef.current = createAmbientPitchState(hSlots, aSlots);
+  }, [homeFormation, awayFormation]);
 
   function finalize(finalHomeGoals, finalAwayGoals) {
     if (finishedRef.current) return;
@@ -2936,8 +7552,11 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   function skipToFullTime() {
     const elapsedMin = Math.round((half === 1 ? 0 : 45) + (clock / HALF_SECONDS) * 45);
     const remainingFrac = clamp((90 - elapsedMin) / 90, 0, 1);
-    const hc = buildMatchContext(homeTeam, homeSquad, homeXI, awayFormation, true, homeTeam.chemistry);
-    const ac = buildMatchContext(awayTeam, awaySquad, awayXI, homeFormation, false, awayTeam.chemistry);
+    const uSlotSkip = userAutoMode ? null : userSlotAssignMap(career);
+    let hc = buildMatchContext(homeTeam, homeSquad, homeXI, awayFormation, true, homeTeam.chemistry, isUserHome ? uSlotSkip : null);
+    let ac = buildMatchContext(awayTeam, awaySquad, awayXI, homeFormation, false, awayTeam.chemistry, isUserHome ? null : uSlotSkip);
+    hc = applyTacticMods(hc, isUserHome);
+    ac = applyTacticMods(ac, !isUserHome);
     const { xgHome, xgAway } = expectedGoalsFull(hc, ac);
     const extraHome = poisson(xgHome * remainingFrac);
     const extraAway = poisson(xgAway * remainingFrac);
@@ -2955,46 +7574,58 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
     const frame = (now) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      const sm = highlightSeqRef.current ? HIGHLIGHT_SLOW_MO : 1;
-      slowMoRef.current = sm;
-      const dtSm = dt * sm;
-      setAnimTick((t) => t + dtSm * 60);
+      setAnimTick((t) => t + dt * 60);
 
-      if (highlightSeqRef.current) {
-        const { seq, done, showGoalText } = advanceGoalHighlight(highlightSeqRef.current, dt);
-        highlightSeqRef.current = seq;
-        setBallSim(seq.ball);
-        setHighlightSeq({ type: seq.type, stage: seq.stage, shotResult: seq.shotResult });
-        if (showGoalText && seq.stage === "celebrate" && !goalFlashShownRef.current) {
-          goalFlashShownRef.current = true;
-          if (!seq.scoredApplied && seq.shotResult === "goal") {
-            seq.scoredApplied = true;
-            highlightSeqRef.current = seq;
-            if (seq.attackingHome) setHomeGoals((g) => g + 1); else setAwayGoals((g) => g + 1);
-            setGoalLog((g) => [{ minute: seq.gameMin, team: seq.shotSide, player: seq.scorer?.name || seq.teamShort }, ...g].slice(0, 8));
-            setEvents((e) => [`⚽ ${seq.gameMin}' ประตู! ${seq.scorer?.name || seq.teamShort} (${seq.teamShort})`, ...e]);
+      const gs = gameStateRef.current;
+      const hSlots = FORMATIONS[resolveFormation(homeFormationRef.current)].slots;
+      const aSlots = FORMATIONS[resolveFormation(awayFormationRef.current)].slots;
+      if (!ambientRef.current) {
+        ambientRef.current = createAmbientPitchState(hSlots, aSlots);
+      }
+      // timeScale = สโลว์โมชั่นจังหวะยิง (ambient ตั้งเอง 0.35 ช่วงเงื้อ→บอลถึงเป้า)
+      const ts = ambientRef.current.timeScale ?? 1;
+      ambientRef.current = advanceAmbientPitch(ambientRef.current, dt * ts, {
+        pressure: gs.pressure,
+        homeSlots: hSlots,
+        awaySlots: aSlots,
+      });
+      const bs = ambientAsBallSim(ambientRef.current);
+      ballSimRef.current = bs;
+      if (livePossSideRef.current !== ambientRef.current.possSide) {
+        livePossSideRef.current = ambientRef.current.possSide;
+        setLivePossSide(ambientRef.current.possSide);
+      }
+      setBallSim(bs);
+
+      // เหตุการณ์จาก ambient (ช็อตถึงปลายทาง / นกหวีดเขี่ยกลาง) — โชว์ผล/นับช็อตที่เกิดในซีน (เตะมุม/ฟรีคิก = counted:false)
+      const evs = ambientRef.current.pendingEvents;
+      if (evs && evs.length) {
+        const list = evs.splice(0, evs.length);
+        list.forEach((ev) => {
+          if (ev.type === "kickoffWhistle") {
+            playWhistle();
+            return;
           }
-          setGoalFlash({ player: seq.scorer?.name, team: seq.shotSide });
-        }
-        if (done) {
-          applyHighlightResultRef.current?.(seq);
-          highlightSeqRef.current = null;
-          slowMoRef.current = 1;
-          goalFlashShownRef.current = false;
-          setHighlightSeq(null);
-          setGoalFlash(null);
-        }
-      } else {
-        const gs = gameStateRef.current;
-        const nextBall = advanceBallVisual(ballSimRef.current, dtSm * LIVE_BALL_DT, {
-          possSide: gs.possSide,
-          pressure: gs.pressure,
-          homeFormation: homeFormationRef.current,
-          awayFormation: awayFormationRef.current,
-          tick: tickRef.current,
+          if (ev.type !== "shotResolved") return;
+          const evMin = gameMinRef.current;
+          const evTeam = ev.shotSide === "home" ? homeTeam : awayTeam;
+          if (!ev.counted) {
+            const onT = ev.outcome === "goal" || ev.outcome === "save";
+            setStats((st) => (ev.shotSide === "home"
+              ? { ...st, shotsH: st.shotsH + 1, sotH: st.sotH + (onT ? 1 : 0) }
+              : { ...st, shotsA: st.shotsA + 1, sotA: st.sotA + (onT ? 1 : 0) }));
+            if (ev.outcome === "goal") {
+              if (ev.shotSide === "home") setHomeGoals((g) => g + 1); else setAwayGoals((g) => g + 1);
+              setGoalLog((g) => [{ minute: evMin, team: ev.shotSide, player: evTeam.short }, ...g].slice(0, 8));
+              setEvents((e) => [`⚽ ${evMin}' ประตูจากลูกเซ็ตพีซ! (${evTeam.short})`, ...e]);
+            }
+          }
+          if (ev.outcome === "goal") {
+            const meta = ev.counted ? lastShotMetaRef.current : null;
+            setGoalFlash({ player: meta?.scorerName, team: ev.shotSide });
+            setTimeout(() => setGoalFlash(null), 2200);
+          }
         });
-        ballSimRef.current = nextBall;
-        setBallSim(nextBall);
       }
       id = requestAnimationFrame(frame);
     };
@@ -3005,21 +7636,27 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   useEffect(() => {
     if (paused || ended) return;
     const iv = setInterval(() => {
-      if (highlightSeqRef.current) return;
-
       tickRef.current += 1;
       setClock((c) => {
         const next = c + 1 * speed;
         if (next >= HALF_SECONDS) {
-          if (half === 1) { setHalf(2); setEvents((e) => [`ครึ่งแรกจบ ${homeGoals}-${awayGoals}`, ...e]); return 0; }
-          else { clearInterval(iv); setTimeout(() => finalize(homeGoals, awayGoals), 600); return HALF_SECONDS; }
+          if (half === 1) {
+            setPaused(true);
+            setHalftimeOpen(true);
+            setEvents((e) => [`⏸ พักครึ่ง ${homeGoals}-${awayGoals}`, ...e]);
+            return HALF_SECONDS;
+          }
+          clearInterval(iv);
+          setTimeout(() => finalize(homeGoals, awayGoals), 600);
+          return HALF_SECONDS;
         }
         return next;
       });
 
       const gameMin = Math.round((half === 1 ? 0 : 45) + (clock / HALF_SECONDS) * 45);
-      let hc = buildMatchContext(homeTeam, homeSquad, homeXI, awayFormation, true, homeTeam.chemistry);
-      let ac = buildMatchContext(awayTeam, awaySquad, awayXI, homeFormation, false, awayTeam.chemistry);
+      const uSlotLive = userAutoMode ? null : userSlotAssignMap(career);
+      let hc = buildMatchContext(homeTeam, homeSquad, homeXI, awayFormation, true, homeTeam.chemistry, isUserHome ? uSlotLive : null);
+      let ac = buildMatchContext(awayTeam, awaySquad, awayXI, homeFormation, false, awayTeam.chemistry, isUserHome ? null : uSlotLive);
       hc = applyTacticMods(hc, isUserHome);
       ac = applyTacticMods(ac, !isUserHome);
       const { xgHome, xgAway } = expectedGoalsFull(hc, ac);
@@ -3034,8 +7671,8 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       bucketRef.current[attackingHome ? "home" : "away"] += 1;
       const pr = clamp(pressure + (attackingHome ? 0.12 : -0.12), -1, 1);
       setPressure(pr);
-      gameStateRef.current = { possSide: attackingHome ? "home" : "away", pressure: pr };
-      setLivePossSide(attackingHome ? "home" : "away");
+      gameStateRef.current = { pressure: pr, homePressure };
+      if (tickRef.current % 4 === 0) setLivePossSide(livePossSideRef.current);
 
       if (tickRef.current % 5 === 0) {
         const sideTeam = attackingHome ? homeTeam : awayTeam;
@@ -3057,23 +7694,55 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       }
 
       // corners / fouls flavor stats
-      if (tickRef.current % 5 === 0 && Math.random() < 0.5) {
-        if (Math.random() < homePressure) setStats((s) => ({ ...s, cornersH: s.cornersH + 1 }));
+      // ×speed ชดเชยจำนวนติ๊กที่หายไปตอนเร่งความเร็ว (เร็ว 6 เท่า = ติ๊กน้อยลง 6 เท่า) — จำนวน event ต่อแมตช์คงที่ทุกความเร็ว
+      if (tickRef.current % 5 === 0 && Math.random() < Math.min(0.8, 0.06 * speed)) {
+        const cornerHome = Math.random() < homePressure;
+        if (cornerHome) setStats((s) => ({ ...s, cornersH: s.cornersH + 1 }));
         else setStats((s) => ({ ...s, cornersA: s.cornersA + 1 }));
+        // ซีนเตะมุมเต็ม: บอลออกหลัง → วิ่งไปเตะมุมธง → ออกันหน้าโกล → เปิด → จบช็อต → กลับตำแหน่ง
+        const ambC = ambientRef.current;
+        if (ambC && !ambC.shotSeq && !ambC.setPiece && !ambC.celebration && !ambC.restart) {
+          startCornerScene(ambC, cornerHome ? "home" : "away");
+        }
       }
-      if (tickRef.current % 6 === 0 && Math.random() < 0.4) {
-        if (Math.random() < homePressure) setStats((s) => ({ ...s, foulsA: s.foulsA + 1 }));
+      if (tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.14 * speed)) {
+        const awayFouled = Math.random() < homePressure;
+        if (awayFouled) setStats((s) => ({ ...s, foulsA: s.foulsA + 1 }));
         else setStats((s) => ({ ...s, foulsH: s.foulsH + 1 }));
+        playWhistle();
+
+        // ผู้ตัดสิน — บางฟาวล์ได้ใบเหลือง/แดง (สะสม 2 เหลือง = แดง) เก็บทั้งเกม ยังไม่ตัดผู้เล่นออกจากสนามจริง (ผลกระทบเชิงภาพ/สถิติเท่านั้น)
+        if (Math.random() < 0.16) {
+          const foulTeam = awayFouled ? awayTeam : homeTeam;
+          const offender = pickLivePlayer(awayFouled ? awaySquad : homeSquad, awayFouled ? awayXI : homeXI);
+          if (offender) {
+            const prevYellow = cardsRef.current.get(offender.id) || 0;
+            const isRed = prevYellow >= 1 || Math.random() < 0.05;
+            cardsRef.current.set(offender.id, prevYellow + 1);
+            const kind = isRed ? "red" : "yellow";
+            setStats((s) => (awayFouled ? { ...s, cardsA: s.cardsA + 1 } : { ...s, cardsH: s.cardsH + 1 }));
+            setEvents((e) => [`${isRed ? "🟥 ใบแดง!" : "🟨 ใบเหลือง"} ${gameMin}' ${offender.name} (${foulTeam.short})`, ...e]);
+            setRefereeCard({ team: awayFouled ? "away" : "home", kind, player: offender.name, minute: gameMin });
+            playWhistle(true);
+            setTimeout(() => setRefereeCard(null), 2200);
+          }
+        }
+
+        // ฟาวล์บางลูก (ในระยะยิงได้) = ฟรีคิก — นักเตะเดินมาตั้งกำแพง ยิงเสร็จกลับตำแหน่ง
+        const fkSide = awayFouled ? "home" : "away";
+        const amb = ambientRef.current;
+        if (amb && !amb.shotSeq && !amb.setPiece && !amb.celebration && !amb.restart && Math.random() < 0.4) {
+          startFreekickScene(amb, fkSide);
+        }
       }
 
-      // ช็อต / ไฮไลต์ — engine อัตโนมัติ (แบบ FM: ดราม่ามากขึ้นเมื่อเกมสูสี)
+      // ช็อต — engine อัตโนมัติ (แบบ FM: ดราม่ามากขึ้นเมื่อเกมสูสี) เล่นสดในจอปกติทุกลูก (สโลว์โมในตัว)
       const bs = ballSimRef.current;
       const inAttThird = bs.px > 62 || bs.px < 38;
       const inBox = bs.px > 74 || bs.px < 26;
-      const cooledDown = tickRef.current - lastHighlightTickRef.current >= HIGHLIGHT_COOLDOWN_TICKS;
       const highlightBias = getLiveHighlightBias(homeGoals, awayGoals, gameMin);
-      const shotBase = (inBox ? 0.1 : inAttThird ? 0.065 : 0.022) * highlightBias;
-      const shotChance = shotBase + Math.abs(pr) * 0.035;
+      const shotBase = (inBox ? 0.16 : inAttThird ? 0.1 : 0.035) * highlightBias;
+      const shotChance = Math.min(0.85, (shotBase + Math.abs(pr) * 0.05) * speed);
       if (tickRef.current % 3 === 0 && Math.random() < shotChance) {
         const scoreProb = attackingHome ? xgHome / 40 : xgAway / 40;
         const zone = { inBox, inAttThird };
@@ -3084,8 +7753,8 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         const shotSide = attackingHome ? "home" : "away";
         const xi = attackingHome ? homeXI : awayXI;
         const sq = attackingHome ? homeSquad : awaySquad;
-        const scorer = pickScorer(sq, xi);
-        const formation = attackingHome ? homeFormation : awayFormation;
+        const shootingIsUser = attackingHome === isUserHome;
+        const scorer = pickScorer(sq, xi, shootingIsUser ? null : prep.markPlayerId);
         setStats((s) => attackingHome
           ? { ...s, shotsH: s.shotsH + 1, sotH: s.sotH + (onTarget ? 1 : 0) }
           : { ...s, shotsA: s.shotsA + 1, sotA: s.sotA + (onTarget ? 1 : 0) });
@@ -3099,21 +7768,22 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         pushCommentary(statusMsg, gameMin);
         if (!isGoal) setEvents((e) => [`${statusMsg.replace(/ \(นาที.*\)/, "")} — นาที ${gameMin}'`, ...e]);
 
-        const playHighlight = !highlightSeqRef.current && (isGoal || (cooledDown && shouldPlayHighlight(shotResult, zone)));
-        if (playHighlight) {
-          const hl = initGoalHighlight(shotSide, shotResult, formation, zone);
-          lastHighlightTickRef.current = tickRef.current;
-          highlightSeqRef.current = {
-            ...hl, gameMin, scorer, teamShort, attackingHome,
-          };
-          slowMoRef.current = HIGHLIGHT_SLOW_MO;
-          goalFlashShownRef.current = false;
-          setHighlightSeq({ type: hl.type, stage: "buildup", shotResult });
-          setBallSim(hl.ball);
-          gameStateRef.current = { possSide: shotSide, pressure: 0.5 };
-        } else if (!isGoal && onTarget) {
-          ballSimRef.current = startShotAnimation(ballSimRef.current, shotSide, shotResult);
-          setBallSim(ballSimRef.current);
+        // ประตูนับผลทันที (สกอร์บอร์ดขึ้นก่อนภาพเล็กน้อย) — GOAL flash จะเด้งตอนบอลถึงตาข่ายจริงผ่าน pendingEvents
+        if (isGoal) {
+          if (attackingHome) setHomeGoals((g) => g + 1); else setAwayGoals((g) => g + 1);
+          setGoalLog((g) => [{ minute: gameMin, team: shotSide, player: scorer?.name || teamShort }, ...g].slice(0, 8));
+          setEvents((e) => [`⚽ ${gameMin}' ประตู! ${scorer?.name || teamShort} (${teamShort})`, ...e]);
+        } else {
+          setHighlight({ team: shotSide, kind: shotResult === "save" ? "save" : "miss", minute: gameMin });
+          setTimeout(() => setHighlight(null), 2200);
+        }
+
+        // ยิงสดในจอปกติ: สโลว์โมตั้งแต่เงื้อจนบอลถึงเป้า + เส้นปะวิถียิง (ambient จัดการเอง)
+        const ambShot = ambientRef.current;
+        if (ambShot && !ambShot.shotSeq && !ambShot.setPiece && !ambShot.celebration && !ambShot.restart) {
+          const outcome = isGoal ? "goal" : shotResult === "save" ? "save" : (Math.random() < 0.3 ? "post" : "wide");
+          lastShotMetaRef.current = { scorerName: scorer?.name, teamShort, shotSide };
+          beginAmbientShot(ambShot, { shotSide, outcome });
         }
       }
 
@@ -3163,32 +7833,175 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   const possHomePct = Math.round((possession.homeTicks / possTotal) * 100);
   const possAwayPct = 100 - possHomePct;
 
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(4,10,7,.96)", zIndex: 100, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", overflowY: "auto", padding: 12 }}>
-      <div style={{ width: "100%", maxWidth: 560 }}>
-        <div style={{ textAlign: "center", marginBottom: 8 }}>
-          <div style={{ fontFamily: MONO_FONT, color: C.amber, fontSize: 13 }}>🔴 สด · {half === 1 ? "ครึ่งแรก" : "ครึ่งหลัง"} · นาที {gameMinuteDisplay}'</div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 18, marginBottom: 12 }}>
-          <TeamChip team={homeTeam} />
-          <div style={{ fontFamily: DISPLAY_FONT, fontSize: 34, color: highlight?.kind === "goal" ? (highlight.team === "home" ? C.good : C.crimson) : C.chalk }}>{homeGoals} - {awayGoals}</div>
-          <TeamChip team={awayTeam} />
-        </div>
+  const hSlots = FORMATIONS[resolveFormation(homeFormation)].slots;
+  const aSlots = FORMATIONS[resolveFormation(awayFormation)].slots;
 
-        {/* สนาม 2D ตลอดแมตช์ — ไฮไลต์จาก engine อัตโนมัติ */}
+  // ชื่อนักเตะตามลำดับ slot เดียวกับ homeXI/awayXI (getBestXI push ตามลำดับ slotDefs)
+  const homeNames = homeXI.map((id) => {
+    const p = homeSquad.find((sp) => sp.id === id);
+    return p ? (p.name.split(" ")[1] || p.name) : "";
+  });
+  const awayNames = awayXI.map((id) => {
+    const p = awaySquad.find((sp) => sp.id === id);
+    return p ? (p.name.split(" ")[1] || p.name) : "";
+  });
+
+  let livePlayers;
+  if (ambientRef.current) {
+    const { home, away } = computeAmbientLivePlayers(hSlots, aSlots, ambientRef.current, animTick, pitchToWide);
+    livePlayers = [
+      ...home.map((d, i) => ({
+        ...d, key: "h" + i,
+        shirtColor: teamShirtColor(homeTeam),
+        shortsColor: teamShortsColor(homeTeam),
+        gkColor: gkKitColor(homeTeam, "home"),
+        name: homeNames[d.idx],
+      })),
+      ...away.map((d, i) => ({
+        ...d, key: "a" + i,
+        shirtColor: teamShirtColor(awayTeam),
+        shortsColor: teamShortsColor(awayTeam),
+        gkColor: gkKitColor(awayTeam, "away"),
+        name: awayNames[d.idx],
+      })),
+    ].sort((a, b) => a.z - b.z);
+    if (ambientRef.current.referee) {
+      const refPos = pitchToWide(ambientRef.current.referee.px, ambientRef.current.referee.py);
+      livePlayers.push({
+        key: "ref", x: refPos.x, y: refPos.y, z: Math.round(refPos.y * 10) + 1,
+        shirtColor: "#232330", shortsColor: "#0c0c10", gkColor: "#232330",
+        shirtNum: "", isGK: false, isCarrier: false, isPasser: false, isReceiver: false, facing: 1,
+        // ชูใบ — โชว์ใบเหลือง/แดงลอยเหนือหัวผู้ตัดสินผ่านช่องป้ายชื่อที่มีอยู่แล้ว
+        name: refereeCard ? (refereeCard.kind === "red" ? "🟥" : "🟨") : "",
+      });
+    }
+  } else {
+    livePlayers = [];
+  }
+
+  // เดินออกจากอุโมง — บดบัง livePlayers ปกติชั่วคราวด้วยจุดนักเตะที่ไล่จากจุดอุโมงเข้าตำแหน่งฟอร์เมชันจริง
+  if (preMatchPhase === "walkout") {
+    const te = 1 - (1 - walkoutT) ** 2;
+    const tunnel = { px: 50, py: 103 };
+    const buildWalkers = (slots, side, team, names) => slots.map((slot, i) => {
+      const anchor = slotToPitchAmbient(slot, side);
+      const px = tunnel.px + (anchor.px - tunnel.px) * te;
+      const py = tunnel.py + (anchor.py - tunnel.py) * te;
+      const pos = pitchToWide(px, py);
+      return {
+        key: `${side[0]}${i}`, x: pos.x, y: pos.y, z: Math.round(pos.y * 10),
+        shirtColor: teamShirtColor(team), shortsColor: teamShortsColor(team), gkColor: gkKitColor(team, side),
+        shirtNum: i + 1, isGK: slot.pos === "GK", isCarrier: false, isPasser: false, isReceiver: false,
+        facing: side === "home" ? 1 : -1, name: names[i],
+      };
+    });
+    livePlayers = [
+      ...buildWalkers(hSlots, "home", homeTeam, homeNames),
+      ...buildWalkers(aSlots, "away", awayTeam, awayNames),
+    ].sort((a, b) => a.z - b.z);
+  }
+
+  // ฉากเปลี่ยนตัว — เอาจุดเดิมของ slot ที่ถูกเปลี่ยนออก แล้ววาดตัวออก/ตัวเข้า/ผจก./ผู้ช่วยผู้ตัดสิน/ป้ายเลขแทน
+  if (subScene) {
+    const sc = subScene;
+    const teamObj = sc.side === "home" ? homeTeam : awayTeam;
+    const slots = sc.side === "home" ? hSlots : aSlots;
+    const outSlot = slots[sc.outSlotIdx];
+    const outAnchor = slotToPitchAmbient(outSlot, sc.side);
+    // py=97 (ริมเส้นข้างสุดในกรอบที่มองเห็น) เดิม 108 หลุดขอบล่างของกล่อง overflow:hidden ไปครึ่งนึง
+    const sidelinePt = { px: 46, py: 97 };
+    const walkT = sc.phase === "walk" ? Math.min(1, sc.t / 2.2) : 0;
+    const we = 1 - (1 - walkT) ** 2;
+    const outPt = { px: outAnchor.px + (sidelinePt.px - outAnchor.px) * we, py: outAnchor.py + (sidelinePt.py - outAnchor.py) * we };
+    const inPt = { px: sidelinePt.px + (outAnchor.px - sidelinePt.px) * we, py: sidelinePt.py + (outAnchor.py - sidelinePt.py) * we };
+    const outPos = pitchToWide(outPt.px, outPt.py);
+    const inPos = pitchToWide(inPt.px, inPt.py);
+    // กระจายให้ห่างกันทั้งแนวนอน-แนวตั้ง กันป้ายชื่อ (name label ลอยเหนือหัว) ทับกันตอนยืนแน่นๆ ริมเส้น
+    const coachPos = pitchToWide(sidelinePt.px - 7, sidelinePt.py + 1);
+    const refPos2 = pitchToWide(sidelinePt.px + 7, sidelinePt.py + 1);
+    const boardPos = pitchToWide(sidelinePt.px, sidelinePt.py - 6);
+    const slotKey = sc.side === "home" ? `h${sc.outSlotIdx}` : `a${sc.outSlotIdx}`;
+    livePlayers = [
+      ...livePlayers.filter((p) => p.key !== slotKey),
+      { key: "sub-out", x: outPos.x, y: outPos.y, z: Math.round(outPos.y * 10), shirtColor: teamShirtColor(teamObj), shortsColor: teamShortsColor(teamObj), gkColor: teamShirtColor(teamObj), shirtNum: sc.outNum, isGK: outSlot.pos === "GK", isCarrier: false, isPasser: false, isReceiver: false, facing: sc.side === "home" ? -1 : 1, name: sc.outName },
+      { key: "sub-in", x: inPos.x, y: inPos.y, z: Math.round(inPos.y * 10), shirtColor: teamShirtColor(teamObj), shortsColor: teamShortsColor(teamObj), gkColor: teamShirtColor(teamObj), shirtNum: sc.inNum, isGK: false, isCarrier: false, isPasser: false, isReceiver: false, facing: sc.side === "home" ? 1 : -1, name: sc.inName },
+      { key: "sub-coach", x: coachPos.x, y: coachPos.y, z: 998, shirtColor: "#2b3a4a", shortsColor: "#1a2430", gkColor: "#2b3a4a", shirtNum: "", isGK: false, isCarrier: false, isPasser: false, isReceiver: false, facing: 1, name: "ผจก." },
+      { key: "sub-ref2", x: refPos2.x, y: refPos2.y, z: 999, shirtColor: "#232330", shortsColor: "#0c0c10", gkColor: "#232330", shirtNum: "", isGK: false, isCarrier: false, isPasser: false, isReceiver: false, facing: 1, name: "ผู้ช่วยฯ" },
+      { key: "sub-board", x: boardPos.x, y: boardPos.y, z: 1000, shirtColor: "#4a4a52", shortsColor: "#2c2c33", gkColor: "#4a4a52", shirtNum: "", isGK: false, isCarrier: false, isPasser: false, isReceiver: false, facing: 1, name: `${sc.outNum} → ${sc.inNum}` },
+    ];
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(4,10,7,.96)", zIndex: 100, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", overflowY: "auto", padding: "8px 4px" }}>
+      {preMatchPhase === "lineup-home" && <LineupScreen team={homeTeam} squad={homeSquad} xi={homeXI} onSkip={skipPreMatch} />}
+      {preMatchPhase === "lineup-away" && <LineupScreen team={awayTeam} squad={awaySquad} xi={awayXI} onSkip={skipPreMatch} />}
+      {preMatchPhase === "walkout" && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", alignItems: "flex-end", justifyContent: "center", paddingBottom: 24 }}>
+          <button type="button" onClick={skipPreMatch} style={{ ...btnStyle(C.steel, C.chalk), padding: "9px 22px" }}>ข้าม ▶</button>
+        </div>
+      )}
+      {preMatchPhase === "whistle" && <KickoffWhistleBanner />}
+      {halftimeOpen && (
+        <HalftimeOverlay
+          scoreLabel={`${homeTeam.short} ${homeGoals} - ${awayGoals} ${awayTeam.short}`}
+          formation={myFormation}
+          mentality={myMentality}
+          instructions={myInstructions}
+          onFormation={setMyFormation}
+          onMentality={setMyMentality}
+          onToggleInstruction={toggleInstruction}
+          teamTalkHalf={teamTalkHalf}
+          onSetTeamTalkHalf={setTeamTalkHalf}
+          onContinue={startSecondHalf}
+          myXI={myXI}
+          mySquad={mySquad}
+          bench={bench}
+          onSub={doSub}
+          subsUsed={subsUsed}
+        />
+      )}
+      <div style={{ width: "100%", maxWidth: "min(920px, 100%)", opacity: halftimeOpen ? 0.35 : 1, pointerEvents: halftimeOpen ? "none" : "auto" }}>
+        {!halftimeOpen && half === 1 && (
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6, textAlign: "center" }}>แผนล็อกระหว่างเกม · ปรับได้อีกครั้งตอนพักครึ่ง</div>
+        )}
+        {/* สนาม tracker — จุดนักบอล FM + บอล */}
         <div style={{ marginBottom: 8, position: "relative" }}>
-          <div style={{
-            filter: highlightSeq ? "brightness(1.08) contrast(1.05)" : "brightness(0.97)",
-            transform: highlightSeq ? "scale(1.01)" : "scale(1)",
-            transformOrigin: "center center",
-            transition: "filter .25s ease, transform .25s ease",
-          }}>
-            <BroadcastPitch homeTeam={homeTeam} awayTeam={awayTeam} homeFormation={homeFormation} awayFormation={awayFormation} ballSim={ballSim} pressure={pressure} animTick={animTick} />
+          <div style={{ filter: "brightness(0.97)" }}>
+            <TrackerMatchView
+              homeTeam={homeTeam}
+              awayTeam={awayTeam}
+              homeGoals={homeGoals}
+              awayGoals={awayGoals}
+              half={half}
+              clock={clock}
+              halfSeconds={HALF_SECONDS}
+              ballSim={ballSim}
+              livePossSide={livePossSide}
+              possHomePct={possHomePct}
+              sponsorLabel={(SPONSOR_TIERS[career.sponsorTier ?? 0] || SPONSOR_TIERS[0]).name}
+              animTick={animTick}
+              goalFlash={goalFlash}
+              players={livePlayers}
+              shotPath={ambientRef.current?.shotPath || null}
+            />
           </div>
           <LiveCommentaryStrip lines={commentaryFeed} minute={gameMinuteDisplay} />
-          <HighlightMomentBanner seq={highlightSeq} />
           <GoalCelebrationOverlay flash={goalFlash} animTick={animTick} />
-          {highlight && !goalFlash && !highlightSeq && (
+          {refereeCard && (
+            <div style={{
+              position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)", zIndex: 45,
+              display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 8,
+              background: "rgba(10,10,14,.85)", border: `1px solid ${refereeCard.kind === "red" ? "#e05a4e" : "#e0c458"}`,
+              fontFamily: DISPLAY_FONT, fontSize: 11.5, color: "#fff", whiteSpace: "nowrap",
+            }}>
+              <span style={{
+                display: "inline-block", width: 10, height: 14, borderRadius: 2,
+                background: refereeCard.kind === "red" ? "#e0453a" : "#f0d048",
+              }} />
+              {refereeCard.player} — {refereeCard.kind === "red" ? "ใบแดง!" : "ใบเหลือง"}
+            </div>
+          )}
+          {highlight && !goalFlash && (
             <div style={{ minHeight: 30, marginTop: 6, textAlign: "center" }}>
               <div style={{
                 display: "inline-block", padding: "5px 12px", borderRadius: 8,
@@ -3203,24 +8016,19 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           )}
         </div>
 
-        {/* possession bar */}
-        <Panel style={{ marginBottom: 10 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: MONO_FONT, marginBottom: 4 }}>
-            <span style={{ color: C.chalk }}>ครองบอล {possHomePct}%</span><span style={{ color: C.textDim }}>ครองบอล {possAwayPct}%</span>
+        {/* สถิติแมตช์ — กระชับ ไม่ซ้ำแถบครองบอลบนสนาม */}
+        <Panel style={{ marginBottom: 10, padding: "10px 12px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span style={{ fontSize: 10, color: C.textDim }}>โมเมนตัม</span>
+            <span style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT }}>{possHomePct}% — {possAwayPct}%</span>
           </div>
-          <div style={{ display: "flex", width: "100%", height: 8, borderRadius: 4, overflow: "hidden" }}>
-            <div style={{ width: `${possHomePct}%`, background: homeTeam.color || C.good }} />
-            <div style={{ width: `${possAwayPct}%`, background: awayTeam.color || C.crimson }} />
-          </div>
-
-          <div style={{ fontSize: 10, color: C.textDim, margin: "12px 0 4px" }}>โมเมนตัมเกม</div>
-          <div style={{ display: "flex", alignItems: "center", height: 34, gap: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", height: 22, gap: 1, marginBottom: 10 }}>
             {momentum.length === 0 && <div style={{ fontSize: 10, color: C.textDim }}>รอข้อมูล...</div>}
-            {momentum.map((v, i) => (
+            {momentum.slice(-18).map((v, i) => (
               <div key={i} style={{ flex: 1, height: "100%", position: "relative" }}>
                 <div style={{
                   position: "absolute", left: 0, right: 0, height: `${Math.abs(v) / 2}%`,
-                  background: v >= 0 ? C.good : C.crimson,
+                  background: v >= 0 ? "#ffd54f" : "#64b5f6",
                   top: v >= 0 ? `${50 - Math.abs(v) / 2}%` : "50%",
                   borderRadius: 1,
                 }} />
@@ -3228,32 +8036,49 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
             ))}
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
             <StatRow label="ยิงประตู" home={stats.shotsH} away={stats.shotsA} />
             <StatRow label="ยิงตรงกรอบ" home={stats.sotH} away={stats.sotA} />
             <StatRow label="เตะมุม" home={stats.cornersH} away={stats.cornersA} />
             <StatRow label="ฟาวล์" home={stats.foulsH} away={stats.foulsA} />
+            <StatRow label="ใบเหลือง/แดง" home={stats.cardsH} away={stats.cardsA} />
           </div>
         </Panel>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-          <button onClick={() => setPaused((p) => !p)} style={{ ...btnStyle(C.steel, C.chalk), flex: 1, minWidth: 90 }}>{paused ? "▶ เล่นต่อ" : "⏸ หยุด"}</button>
-          <button onClick={() => setSpeed((s) => (s === 1 ? 3 : s === 3 ? 6 : 1))} style={{ ...btnStyle(C.amber, "#0b2318"), flex: 1, minWidth: 90 }}>ความเร็ว x{speed}</button>
-          <button onClick={() => setShowSubs((s) => !s)} style={{ ...btnStyle(subsUsed >= 5 ? "#2b332f" : C.purple, subsUsed >= 5 ? C.textDim : "#fff"), flex: 1, minWidth: 90 }}>เปลี่ยนตัว ({subsUsed}/5)</button>
-          <button onClick={skipToFullTime} style={{ ...btnStyle("transparent", C.textDim), flex: 1, minWidth: 90, border: `1px dashed ${C.steel}` }}>⏭ จบเกม (เบต้า)</button>
+          <button type="button" onClick={() => setPaused((p) => !p)} disabled={halftimeOpen} style={{ ...btnStyle(C.steel, C.chalk), flex: 1, minWidth: 90, opacity: halftimeOpen ? 0.5 : 1 }}>{paused ? "▶ เล่นต่อ" : "⏸ หยุด"}</button>
+          <button type="button" onClick={() => setSpeed((s) => (s === 1 ? 3 : s === 3 ? 6 : 1))} disabled={halftimeOpen} style={{ ...btnStyle(C.amber, "#0b2318"), flex: 1, minWidth: 90, opacity: halftimeOpen ? 0.5 : 1 }}>ความเร็ว x{speed}</button>
+          <button type="button" onClick={toggleCrowdMute} style={{ ...btnStyle(crowdMuted ? C.steel : C.good, crowdMuted ? C.textDim : "#0b2318"), flex: 1, minWidth: 90 }} title="เสียงกองเชียในสนาม">{crowdMuted ? "🔇 ปิดเสียง" : "🔊 กองเชีย"}</button>
+          <button type="button" onClick={() => setShowSubs((s) => !s)} style={{ ...btnStyle(showSubs ? C.purple : C.steel, showSubs ? "#fff" : C.chalk), flex: 1, minWidth: 90 }}>{showSubs ? "ซ่อนเปลี่ยนตัว" : "เปลี่ยนตัว"} ({subsUsed}/5)</button>
+          <button type="button" onClick={skipToFullTime} disabled={halftimeOpen} style={{ ...btnStyle("transparent", C.textDim), flex: 1, minWidth: 90, border: `1px dashed ${C.steel}`, opacity: halftimeOpen ? 0.5 : 1 }}>⏭ จบเกม (เบต้า)</button>
         </div>
-        <div style={{ fontSize: 9.5, color: C.textDim, textAlign: "center", marginTop: -6, marginBottom: 10 }}>* ปุ่ม "จบเกม" มีให้เฉพาะเวอร์ชันเบต้า — เวอร์ชันออนไลน์จริงต้องรอชมจนจบ 6 นาทีเสมอ</div>
+        {crowdNeedsUnlock && !crowdMuted && (
+          <div style={{ textAlign: "center", marginBottom: 8 }}>
+            <button type="button" onClick={unlockCrowdAudio} style={{ ...btnStyle(C.good, "#0b2318"), fontSize: 11, padding: "8px 16px" }}>
+              🔊 แตะเพื่อเปิดเสียงกองเชีย
+            </button>
+          </div>
+        )}
+        <div style={{ fontSize: 9.5, color: C.textDim, textAlign: "center", marginTop: -6, marginBottom: 10 }}>
+          เปลี่ยนตัวได้ตลอดแมตช์ · ปรับแผนได้ก่อนเกม + พักครึ่งเท่านั้น
+        </div>
 
-        {showSubs && (
+        {showSubs && !halftimeOpen && (
           <Panel style={{ marginBottom: 10 }}>
-            <SectionLabel>เปลี่ยนตัว — เลือกตัวจริงที่จะเปลี่ยนออก แล้วเลือกตัวสำรองที่จะลง (ตำแหน่งเดียวกัน)</SectionLabel>
-            <SubPicker myXI={myXI} mySquad={mySquad} bench={bench} onSub={doSub} disabled={subsUsed >= 5} />
+            <SectionLabel sub={`${subsUsed}/5 ครั้ง · เปลี่ยนได้ตลอดเกม`}>เปลี่ยนตัว</SectionLabel>
+            <SubPicker myXI={myXI} mySquad={mySquad} bench={bench} onSub={startSubScene} disabled={subsUsed >= MAX_MATCH_SUBS || !!subScene} />
+          </Panel>
+        )}
+
+        {showSubs && halftimeOpen && (
+          <Panel style={{ marginBottom: 10, opacity: 0.5 }}>
+            <SectionLabel>เปลี่ยนตัว — ใช้แผงพักครึ่งด้านบน</SectionLabel>
           </Panel>
         )}
 
         <Panel>
           <SectionLabel>ไทม์ไลน์เหตุการณ์</SectionLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 180, overflowY: "auto" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 120, overflowY: "auto" }}>
             {events.slice(0, 24).map((e, i) => <div key={i} style={{ fontSize: 12, fontFamily: MONO_FONT, color: i === 0 ? C.chalk : C.textDim }}>{e}</div>)}
             {events.length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>เกมเริ่มแล้ว รอลุ้นจังหวะแรก...</div>}
           </div>
@@ -3263,12 +8088,32 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   );
 }
 /* FM top-down pitch — มองจากบน ประตูซ้าย/ขวา บอลเล่นไปข้างหน้าเข้าประตู */
-const PITCH = { left: 5, top: 7, width: 90, height: 48 };
+const PITCH = { left: 0, top: 0, width: 100, height: 100 };
 const PLAY_MIN_PX = 8;
 const PLAY_MAX_PX = 92;
+const PITCH_REAL_M = { length: 105, width: 68, playerD: 0.52, gkD: 0.58, ballD: 0.22 };
+const LIVE_DOT_SCALE = 4.5;
+function realPitchRadius(diameterM) {
+  return (diameterM / PITCH_REAL_M.width) * PITCH.width / 2;
+}
+const LIVE_PLAYER_R = realPitchRadius(PITCH_REAL_M.playerD) * LIVE_DOT_SCALE;
+const LIVE_GK_R = realPitchRadius(PITCH_REAL_M.gkD) * LIVE_DOT_SCALE;
+const LIVE_BALL_R = realPitchRadius(PITCH_REAL_M.ballD) * LIVE_DOT_SCALE * 1.15;
+/* สนาม + หญ้า — กรอบหญ้าต้องอยู่ใน cutout กลางสนาม ไม่ทับป้ายโฆษณารอบสนาม */
+const STADIUM_ASSETS = {
+  stadium: "/stadium/local-pitch-stadium.png",
+  grass: "/stadium/green-pitch.png",
+  aspect: 1536 / 1024,
+};
+/* ปรับให้ตรง cutout ของ Local Pitch stadium (Progression stadium/) */
+const GRASS_FRAME = { left: 15.8, top: 21.8, width: 67.0, height: 55.5 };
 
 function teamShirtColor(team) {
   return team?.shirtColor || team?.color || "#888";
+}
+
+function teamShortsColor(team) {
+  return team?.shortsColor || team?.secondaryColor || "#1a1a1a";
 }
 
 function gkKitColor(team, side) {
@@ -3286,13 +8131,6 @@ function blendHex(a, b, t) {
   return `#${((1 << 24) + (r << 16) + (g << 8) + bl).toString(16).slice(1)}`;
 }
 
-function dotTextColor(hex) {
-  const h = hex.replace("#", "");
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return (0.299 * r + 0.587 * g + 0.114 * b) > 145 ? "#1a1a1a" : "#fff";
-}
 
 function startShotAnimation(prev, shotSide, shotResult) {
   const goalPx = shotSide === "home" ? 95 : 5;
@@ -3311,14 +8149,44 @@ function startShotAnimation(prev, shotSide, shotResult) {
   };
 }
 
-/* ---------- goal highlight / slow-motion sequence ---------- */
-const GOAL_HIGHLIGHT_META = {
-  breakaway: { label: "หลุดเดี่ยวเข้า!", buildup: 2.4, shot: 1.85, celebrate: 2.8, hold: 0.65 },
-  dribble: { label: "เลี้ยงเข้าไปยิง!", buildup: 2.6, shot: 1.75, celebrate: 2.8, hold: 0.65 },
-  corner: { label: "โหล่งจากลูกเตะมุม!", buildup: 2.9, shot: 1.9, celebrate: 2.8, hold: 0.65 },
-};
-const HIGHLIGHT_SLOW_MO = 0.62;
-const HIGHLIGHT_COOLDOWN_TICKS = 28;
+/* ---------- referee whistle (WebAudio สังเคราะห์ ไม่ใช้ไฟล์เสียง) ---------- */
+let whistleCtx = null;
+function playWhistle(long = false) {
+  if (isCrowdMuted()) return;
+  try {
+    whistleCtx = whistleCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = whistleCtx;
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+    const burst = (start, dur) => {
+      const osc = ctx.createOscillator();
+      const trem = ctx.createOscillator();
+      const tremGain = ctx.createGain();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = 2300;
+      trem.type = "sine";
+      trem.frequency.value = 42; // ลูกกลิ้งในนกหวีด (pea) — สั่นความถี่ให้เสียง "ปรี๊ด" สมจริง
+      tremGain.gain.value = 350;
+      trem.connect(tremGain);
+      tremGain.connect(osc.frequency);
+      gain.gain.setValueAtTime(0.0001, t0 + start);
+      gain.gain.exponentialRampToValueAtTime(0.09, t0 + start + 0.02);
+      gain.gain.setValueAtTime(0.09, t0 + start + dur - 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + start + dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t0 + start);
+      osc.stop(t0 + start + dur + 0.02);
+      trem.start(t0 + start);
+      trem.stop(t0 + start + dur + 0.02);
+    };
+    burst(0, long ? 0.55 : 0.3);
+    if (long) burst(0.65, 0.35);
+  } catch { /* ไม่มีเสียงก็ไม่พังเกม */ }
+}
+
+/* ---------- live shot pacing ---------- */
 const LIVE_BALL_DT = 0.72;
 
 /** FM-style: นำ 3 ลูก → ไฮไลต์น้อยลง, เกมสูสีช่วงท้าย → มากขึ้น */
@@ -3377,169 +8245,11 @@ function buildLiveCommentary({ team, squad, xi, bs, pushing }) {
   ]);
 }
 
-function shouldPlayHighlight(shotResult, zone) {
-  if (shotResult === "goal") return true;
-  if (shotResult === "save") return Math.random() < 0.48;
-  if (shotResult === "miss" && zone.inBox) return Math.random() < 0.28;
-  if (shotResult === "miss" && zone.inAttThird) return Math.random() < 0.14;
-  return false;
-}
-
-function pickGoalHighlightType({ inBox, inAttThird }) {
-  const r = Math.random();
-  if (inAttThird && r < 0.07) return "breakaway";
-  if (inBox && r < 0.55) return "dribble";
-  if (r < 0.72) return "dribble";
-  return "corner";
-}
-
 function resolveShotResult(scoreProb, { inBox, inAttThird }) {
   const goalBoost = inBox ? 1.2 : inAttThird ? 1.05 : 1;
   if (Math.random() < scoreProb * goalBoost) return "goal";
   const onTargetChance = inBox ? 0.36 : inAttThird ? 0.46 : 0.52;
   return Math.random() < onTargetChance ? "save" : "miss";
-}
-
-function initGoalHighlight(shotSide, shotResult, formationKey, zone = {}) {
-  const { inBox = false, inAttThird = false } = zone;
-  const type = pickGoalHighlightType({ inBox, inAttThird });
-  const slots = FORMATIONS[formationKey].slots;
-  const fwIdx = slots.reduce((best, s, i) => (s.pos === "FW" ? i : best), 9);
-  const fwd = shotSide === "home" ? 1 : -1;
-  const goalPy = clamp(38 + Math.random() * 24, 32, 68);
-  const meta = GOAL_HIGHLIGHT_META[type];
-  let ball;
-
-  if (type === "breakaway") {
-    const startPx = 50 + fwd * 20;
-  const endPx = 50 + fwd * 34;
-    ball = {
-      px: startPx, py: goalPy, side: shotSide, carrier: fwIdx,
-      phase: "highlight", highlightType: type, shotResult,
-      fromPx: startPx, fromPy: goalPy, toPx: endPx, toPy: goalPy, t: 0,
-    };
-  } else if (type === "dribble") {
-    const pts = [
-      { px: 50 + fwd * 12, py: goalPy },
-      { px: 50 + fwd * 20, py: goalPy + (Math.random() > 0.5 ? 7 : -7) },
-      { px: 50 + fwd * 28, py: goalPy + (Math.random() > 0.5 ? 5 : -5) },
-      { px: 50 + fwd * 36, py: goalPy },
-    ];
-    ball = {
-      px: pts[0].px, py: pts[0].py, side: shotSide, carrier: fwIdx,
-      phase: "highlight", highlightType: type, shotResult, dribblePts: pts, t: 0,
-    };
-  } else {
-    const cornerPy = Math.random() > 0.5 ? 13 : 87;
-    const crossTo = { px: 50 + fwd * 40, py: 46 + (Math.random() - 0.5) * 12 };
-    ball = {
-      px: shotSide === "home" ? 90 : 10, py: cornerPy, side: shotSide, carrier: fwIdx,
-      phase: "highlight", highlightType: type, shotResult, crossTo,
-      fromPx: shotSide === "home" ? 90 : 10, fromPy: cornerPy, t: 0,
-    };
-  }
-
-  return {
-    type, stage: "buildup", stageT: 0, celebrateT: 0,
-    shotSide, shotResult, ball, meta,
-    buildupDur: meta.buildup * (shotResult === "goal" ? 1 : shotResult === "save" ? 0.92 : 0.88),
-    shotDur: meta.shot,
-    celebrateDur: shotResult === "goal" ? meta.celebrate : 0,
-    holdDur: shotResult !== "goal" ? (meta.hold ?? 0.65) : 0,
-  };
-}
-
-function advanceHighlightBuildup(ball, type, progress) {
-  const e = easeOut(clamp(progress, 0, 1));
-  const next = { ...ball };
-  if (type === "breakaway") {
-    next.px = lerp(ball.fromPx, ball.toPx, e);
-    next.py = ball.toPy;
-    next.phase = "dribble";
-  } else if (type === "dribble") {
-    const pts = ball.dribblePts;
-    const seg = (pts.length - 1) * e;
-    const i = Math.min(Math.floor(seg), pts.length - 2);
-    const t = seg - i;
-    next.px = lerp(pts[i].px, pts[i + 1].px, t);
-    next.py = lerp(pts[i].py, pts[i + 1].py, t);
-    next.phase = "dribble";
-  } else {
-    const mid = ball.crossTo;
-    if (e < 0.58) {
-      const t = e / 0.58;
-      const arcLift = ball.side === "home" ? -6 : 6;
-      next.px = (1 - t) * (1 - t) * ball.fromPx + 2 * (1 - t) * t * (mid.px + arcLift) + t * t * mid.px;
-      next.py = (1 - t) * (1 - t) * ball.fromPy + 2 * (1 - t) * t * (mid.py - 10) + t * t * mid.py;
-      next.phase = "pass";
-    } else {
-      const t = (e - 0.58) / 0.42;
-      const fwd = ball.side === "home" ? 1 : -1;
-      next.px = lerp(mid.px, mid.px + fwd * 10, t);
-      next.py = lerp(mid.py, mid.py - 3, t);
-      next.phase = "dribble";
-    }
-  }
-  return next;
-}
-
-function advanceGoalHighlight(seq, dt) {
-  let { stage, stageT, celebrateT, holdT, ball, shotSide, shotResult, type, meta } = seq;
-  const buildupDur = seq.buildupDur ?? meta.buildup;
-  const shotDur = seq.shotDur ?? meta.shot;
-  const celebrateDur = seq.celebrateDur ?? meta.celebrate ?? 2.8;
-  const holdDur = seq.holdDur ?? meta.hold ?? 0.65;
-  stageT += dt;
-  let done = false;
-  let showGoalText = false;
-
-  if (stage === "buildup") {
-    ball = advanceHighlightBuildup(ball, type, stageT / buildupDur);
-    if (stageT >= buildupDur) {
-      stage = "shot";
-      stageT = 0;
-      const goalPx = shotSide === "home" ? 95 : 5;
-      const goalPy = clamp(ball.py, 32, 68);
-      const missPy = shotResult === "miss" ? clamp(goalPy + (Math.random() > 0.5 ? 14 : -14), 8, 92) : goalPy;
-      ball = {
-        ...ball, phase: "shot", shotResult,
-        fromPx: ball.px, fromPy: ball.py, toPx: goalPx, toPy: missPy, t: 0,
-      };
-    }
-  } else if (stage === "shot") {
-    ball = { ...ball, t: Math.min(1, ball.t + dt * 1.15) };
-    const e = easeOut(ball.t);
-    ball.px = lerp(ball.fromPx, ball.toPx, e);
-    ball.py = lerp(ball.fromPy, ball.toPy, e);
-    if (stageT >= shotDur) {
-      ball.px = ball.toPx;
-      ball.py = ball.toPy;
-      if (shotResult === "goal") {
-        stage = "celebrate";
-        stageT = 0;
-        celebrateT = 0;
-        showGoalText = true;
-      } else {
-        stage = "hold";
-        stageT = 0;
-        holdT = 0;
-      }
-    }
-  } else if (stage === "hold") {
-    holdT = (holdT || 0) + dt;
-    if (holdT >= holdDur) done = true;
-  } else if (stage === "celebrate") {
-    celebrateT += dt;
-    showGoalText = true;
-    if (celebrateT >= celebrateDur) done = true;
-  }
-
-  return {
-    seq: { ...seq, stage, stageT, celebrateT, holdT, ball },
-    done,
-    showGoalText,
-    goalScored: done && shotResult === "goal",
-  };
 }
 
 function GoalCelebrationOverlay({ flash, animTick }) {
@@ -3570,22 +8280,22 @@ function GoalCelebrationOverlay({ flash, animTick }) {
 }
 
 function LiveCommentaryStrip({ lines, minute }) {
+  const shown = lines.slice(0, 2);
   return (
     <div style={{
-      background: FM_LIVE.panel, borderRadius: 8, padding: "8px 12px",
-      border: `1px solid ${FM_LIVE.bar}`, marginTop: 6, minHeight: 48,
+      background: FM_LIVE.panel, borderRadius: 8, padding: "6px 10px",
+      border: `1px solid ${FM_LIVE.bar}`, marginTop: 6,
     }}>
-      <div style={{ fontSize: 9, color: FM_LIVE.dim, fontFamily: MONO_FONT, marginBottom: 4 }}>
-        คอมเมนตารี · นาที {minute}'
+      <div style={{ fontSize: 9, color: FM_LIVE.dim, fontFamily: MONO_FONT, marginBottom: 3 }}>
+        คอมเมนตารี · {minute}'
       </div>
-      {lines.length === 0 ? (
+      {shown.length === 0 ? (
         <div style={{ fontSize: 11, color: C.textDim }}>รอจังหวะแรก...</div>
-      ) : lines.slice(0, 4).map((line, i) => (
+      ) : shown.map((line, i) => (
         <div key={line.id} style={{
-          fontSize: i === 0 ? 12 : 11, fontFamily: MONO_FONT,
+          fontSize: i === 0 ? 12 : 10.5, fontFamily: MONO_FONT,
           color: i === 0 ? C.chalk : C.textDim,
-          marginBottom: i < Math.min(lines.length, 4) - 1 ? 3 : 0,
-          opacity: 1 - i * 0.12,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}>
           {line.text}
         </div>
@@ -3628,23 +8338,6 @@ function PossessionSwingView({ homeTeam, awayTeam, possSide, ballX, status, anim
       <div style={{ textAlign: "center", marginTop: 8, fontSize: 11.5, color: C.chalk, fontFamily: MONO_FONT, minHeight: 18 }}>
         {status}
       </div>
-    </div>
-  );
-}
-
-function HighlightMomentBanner({ seq }) {
-  if (!seq) return null;
-  if (seq.stage === "celebrate") return null;
-  const label = GOAL_HIGHLIGHT_META[seq.type]?.label || "จังหวะยิง!";
-  return (
-    <div style={{
-      position: "absolute", top: 6, left: "50%", transform: "translateX(-50%)", zIndex: 11,
-      padding: "5px 14px", borderRadius: 8,
-      background: "rgba(0,0,0,.72)", border: "1px solid rgba(224,164,88,.65)",
-      boxShadow: "0 4px 16px rgba(0,0,0,.5)",
-    }}>
-      <span style={{ fontFamily: MONO_FONT, fontSize: 10, color: C.amber, marginRight: 8 }}>⏱ SLOW MOTION</span>
-      <span style={{ fontFamily: DISPLAY_FONT, fontSize: 12.5, color: "#fff" }}>{label}</span>
     </div>
   );
 }
@@ -3699,15 +8392,89 @@ function pickPassTarget(slots, side, carrierIdx, phase) {
   return scored[0];
 }
 
-function advanceBallVisual(prev, dt, { possSide, pressure, homeFormation, awayFormation, tick }) {
-  const formation = possSide === "home" ? homeFormation : awayFormation;
-  const slots = FORMATIONS[formation].slots;
-  let next = { ...prev };
-  const fwdSign = possSide === "home" ? 1 : -1;
+function ensurePlayerMotion(motionStore, side, formationKey, slots) {
+  const key = `${side}:${resolveFormation(formationKey)}`;
+  if (!motionStore[key] || motionStore[key].length !== slots.length) {
+    motionStore[key] = slots.map((slot) => ({ ...slotToPitch(slot, side), vx: 0, vy: 0 }));
+  }
+  return motionStore[key];
+}
+
+/** FM — block เลื่อนตามลูกบอล แต่ละแถว/ตำแหน่งขยับไม่เท่ากัน */
+function fmBlockShift(slot, ball, side, hasBall) {
+  const bx = ball.px - 50;
+  const by = ball.py - 50;
+  const grp = slot.pos || "MF";
+  const depth = clamp(slot.y / 92, 0, 1);
+  const fwd = side === "home" ? 1 : -1;
+
+  let shiftX = bx;
+  let shiftY = by * 0.32;
+
+  if (grp === "GK") {
+    shiftX *= 0.12;
+    shiftY *= 0.22;
+  } else if (grp === "DF") {
+    shiftX *= hasBall ? 0.2 : 0.16;
+    shiftY *= 0.1;
+  } else if (grp === "MF") {
+    shiftX *= hasBall ? 0.32 : 0.26;
+    shiftY *= 0.16;
+  } else {
+    shiftX *= hasBall ? 0.4 : 0.3;
+    shiftY *= 0.2;
+  }
+
+  if (hasBall) {
+    shiftX += fwd * (2.2 + depth * 1.8);
+  } else {
+    shiftX -= fwd * (1.4 + (1 - depth) * 0.8);
+    shiftX *= 0.88;
+  }
+
+  return { shiftX, shiftY };
+}
+
+/** FM — เลื่อนทีละนิด มี max speed ต่อเฟรม (ไม่วาป) */
+function advanceFmMotion(prev, targetPx, targetPy, maxStep) {
+  let dx = targetPx - prev.px;
+  let dy = targetPy - prev.py;
+  const dist = Math.hypot(dx, dy);
+  if (dist > maxStep && dist > 0.001) {
+    const s = maxStep / dist;
+    dx *= s;
+    dy *= s;
+  }
+  return {
+    px: prev.px + dx,
+    py: prev.py + dy,
+    vx: dx,
+    vy: dy,
+  };
+}
+
+function fmMaxStep(slot, { isGK, isCarrier, isPasser, isReceiver, hasBall, running }) {
+  if (isCarrier) return 0.48;
+  if (isReceiver) return 0.38;
+  if (isPasser) return 0.07;
+  if (isGK) return 0.16;
+  const grp = slot.pos || "MF";
+  if (grp === "DF") return running ? 0.26 : 0.2;
+  if (grp === "MF") return running ? 0.32 : 0.24;
+  if (grp === "FW") return running ? 0.36 : 0.28;
+  return running ? 0.28 : 0.22;
+}
+
+function advanceBallVisual(prev, dt, { pressure, homeFormation, awayFormation, tick, homePressure = 0.5 }) {
+  const activeSide = prev.side || "home";
+  const formation = activeSide === "home" ? homeFormation : awayFormation;
+  const slots = FORMATIONS[resolveFormation(formation)].slots;
+  let next = { ...prev, side: activeSide };
+  const fwdSign = activeSide === "home" ? 1 : -1;
   const isPassPhase = ["pass", "through", "safe", "contest"].includes(next.phase);
   const speed = next.phase === "shot" ? 2.6
-    : next.phase === "dribble" ? 1.05
-    : isPassPhase ? 2.15
+    : next.phase === "dribble" ? 1.15
+    : isPassPhase ? 2.65
     : 1.5;
 
   if (next.phase === "shot") {
@@ -3736,21 +8503,12 @@ function advanceBallVisual(prev, dt, { possSide, pressure, homeFormation, awayFo
     return next;
   }
 
-  if (prev.side !== possSide && prev.t >= 0.88 && !isPassPhase) {
-    const stealIdx = Math.floor(Math.random() * slots.length);
-    const stealPos = slotToPitch(slots[stealIdx], possSide);
-    next = {
-      ...next, side: possSide, carrier: stealIdx, fromCarrier: prev.carrier, toCarrier: stealIdx,
-      phase: "contest", fromPx: prev.px, fromPy: prev.py, toPx: stealPos.px, toPy: stealPos.py, t: 0,
-    };
-  }
-
   next.t = Math.min(1, next.t + speed * dt);
 
   if (isPassPhase && next.t < 1) {
-    const arcLift = next.phase === "through" ? 4 : next.phase === "pass" ? 2.2 : 1.2;
+    const arcLift = next.phase === "through" ? 4.5 : next.phase === "pass" ? 2.8 : 1.4;
     const e = easeOut(next.t);
-    const midPx = (next.fromPx + next.toPx) / 2 + fwdSign * (next.phase === "through" ? 2.5 : 0);
+    const midPx = (next.fromPx + next.toPx) / 2 + fwdSign * (next.phase === "through" ? 3 : 1.2);
     const midPy = (next.fromPy + next.toPy) / 2 - arcLift * Math.sin(Math.PI * e);
     next.px = (1 - e) * (1 - e) * next.fromPx + 2 * (1 - e) * e * midPx + e * e * next.toPx;
     next.py = (1 - e) * (1 - e) * next.fromPy + 2 * (1 - e) * e * midPy + e * e * next.toPy;
@@ -3769,20 +8527,41 @@ function advanceBallVisual(prev, dt, { possSide, pressure, homeFormation, awayFo
       next.t = 0;
       next.fromPx = next.px;
       next.fromPy = next.py;
-      const hold = fwdSign * 1.8;
+      const hold = fwdSign * 1.6;
       next.toPx = clamp(next.px + hold, PLAY_MIN_PX, PLAY_MAX_PX);
       next.toPy = next.py;
       return next;
     }
 
+    const defendStr = activeSide === "home" ? (1 - homePressure) : homePressure;
+    if (Math.random() < 0.032 + defendStr * 0.045 + Math.abs(pressure) * 0.02) {
+      const newSide = activeSide === "home" ? "away" : "home";
+      const newForm = newSide === "home" ? homeFormation : awayFormation;
+      const newSlots = FORMATIONS[resolveFormation(newForm)].slots;
+      const stealIdx = 1 + Math.floor(Math.random() * Math.max(1, newSlots.length - 1));
+      const stealPos = slotToPitch(newSlots[stealIdx], newSide);
+      return {
+        ...next,
+        side: newSide,
+        carrier: stealIdx,
+        fromCarrier: next.carrier,
+        toCarrier: stealIdx,
+        phase: "contest",
+        fromPx: next.px,
+        fromPy: next.py,
+        toPx: stealPos.px,
+        toPy: stealPos.py,
+        t: 0,
+      };
+    }
+
     const roll = tick % 10;
     if (roll <= 7) next.phase = "pass";
     else if (roll === 8) next.phase = "through";
-    else if (roll === 9) next.phase = "dribble";
-    else next.phase = "safe";
+    else next.phase = "dribble";
 
     if (next.phase === "dribble") {
-      const fwd = fwdSign * (3.5 + pressure * 2);
+      const fwd = fwdSign * (3.2 + pressure * 1.8);
       next.fromPx = next.px; next.fromPy = next.py;
       next.toPx = clamp(next.px + fwd, PLAY_MIN_PX, PLAY_MAX_PX);
       next.toPy = clamp(next.py + (Math.sin(tick * 0.3) * 1.2), 12, 88);
@@ -3791,18 +8570,17 @@ function advanceBallVisual(prev, dt, { possSide, pressure, homeFormation, awayFo
       next.t = 0;
     } else {
       const fromIdx = next.carrier;
-      const target = pickPassTarget(slots, possSide, fromIdx, next.phase);
-      const passerPos = slotToPitch(slots[fromIdx], possSide);
-      const recvPos = slotToPitch(slots[target.i], possSide);
+      const target = pickPassTarget(slots, activeSide, fromIdx, next.phase);
+      const recvPos = slotToPitch(slots[target.i], activeSide);
       next.fromCarrier = fromIdx;
       next.toCarrier = target.i;
-      next.fromPx = passerPos.px + fwdSign * 2.2;
-      next.fromPy = passerPos.py;
+      next.fromPx = next.px;
+      next.fromPy = next.py;
       next.toPx = recvPos.px - fwdSign * 1.8;
       next.toPy = recvPos.py + (Math.random() - 0.5) * 2;
       next.t = 0;
     }
-    next.side = possSide;
+    next.side = activeSide;
   }
 
   const e = easeOut(next.t);
@@ -3811,110 +8589,205 @@ function advanceBallVisual(prev, dt, { possSide, pressure, homeFormation, awayFo
   return next;
 }
 
-function computeLivePlayers(formationKey, side, ball, possSide, animTick) {
-  const slots = FORMATIONS[formationKey].slots;
-  const hasBall = side === possSide;
-  const push = hasBall ? 0.32 : 0.16;
-  const blockX = (ball.px - 50) * push;
-  const blockY = (ball.py - 50) * push * 0.15;
+function computeLivePlayers(formationKey, side, ball, possSide, animTick, project = pitchToScreen, motionStore = null) {
+  const slots = FORMATIONS[resolveFormation(formationKey)].slots;
+  const teamSide = ball?.side ?? possSide;
+  const hasBall = side === teamSide;
+  const isPassPhase = ball && ["pass", "through", "safe", "contest"].includes(ball.phase) && ball.t < 1;
+  const positions = motionStore ? ensurePlayerMotion(motionStore, side, formationKey, slots) : null;
+  const fwd = side === "home" ? 1 : -1;
 
   return slots.map((slot, i) => {
-    const base = slotToPitch(slot, side);
-    let { px, py } = base;
-    px += blockX;
-    py += blockY;
+    const anchor = slotToPitch(slot, side);
+    const block = fmBlockShift(slot, ball, side, hasBall);
+    let targetPx = anchor.px + block.shiftX * (hasBall ? 0.28 : 0.22);
+    let targetPy = anchor.py + block.shiftY * (hasBall ? 0.14 : 0.11);
 
-    const dist = Math.hypot(px - ball.px, py - ball.py);
-    const isCarrier = hasBall && i === ball.carrier;
     const isGK = slot.pos === "GK";
+    const isPasser = hasBall && isPassPhase && ball.fromCarrier === i;
+    const isReceiver = hasBall && isPassPhase && ball.toCarrier === i;
+    const isCarrier = hasBall && i === ball.carrier && !isPassPhase;
 
     if (isGK) {
-      px = side === "home" ? 10 : 90;
-      py = clamp(ball.py * 0.6 + py * 0.4, 30, 70);
-      if ((side === "home" && ball.px < 25) || (side === "away" && ball.px > 75)) {
-        py += Math.sin(animTick * 0.1 + i) * 1.5;
+      targetPx = side === "home" ? 10 : 90;
+      targetPy = clamp(ball.py * 0.5 + anchor.py * 0.5 + block.shiftY * 0.08, 32, 68);
+      if ((side === "home" && ball.px < 28) || (side === "away" && ball.px > 72)) {
+        targetPy += Math.sin(animTick * 0.08 + i) * 0.9;
       }
     } else if (isCarrier) {
       if (ball.phase === "shot" && ball.highlightType) {
-        px = ball.fromPx + (side === "home" ? -2.5 : 2.5);
-        py = ball.fromPy;
+        targetPx = ball.fromPx + fwd * -2.4;
+        targetPy = ball.fromPy;
       } else {
-        px = ball.px + (side === "home" ? -2.8 : 2.8);
-        py = ball.py;
+        targetPx = ball.px + fwd * -2.6;
+        targetPy = ball.py;
       }
+    } else if (isPasser) {
+      targetPx = ball.fromPx + fwd * -2.0;
+      targetPy = ball.fromPy;
+    } else if (isReceiver) {
+      const lead = clamp(ball.t ?? 0, 0, 1);
+      targetPx = lerp(ball.fromPx, ball.toPx, 0.55 + lead * 0.4) + fwd * -1.6;
+      targetPy = lerp(ball.fromPy, ball.toPy, 0.55 + lead * 0.4);
     } else if (hasBall) {
-      const towardBall = 0.25;
-      px += (ball.px - px) * towardBall;
-      py += (ball.py - py) * towardBall;
-      const ahead = side === "home" ? 1.5 : -1.5;
-      px += ahead;
+      targetPx += (ball.px - targetPx) * 0.28;
+      targetPy += (ball.py - targetPy) * 0.22;
     } else {
-      px += (ball.px - px) * 0.14;
-      py += (ball.py - py) * 0.1;
+      targetPx += (ball.px - targetPx) * 0.12;
+      targetPy += (ball.py - targetPy) * 0.09;
     }
 
-    const screen = pitchToScreen(clamp(px, PLAY_MIN_PX, PLAY_MAX_PX), clamp(py, 8, 92));
-    const running = !isGK && (isCarrier || dist < 20);
+    const dist = Math.hypot(targetPx - ball.px, targetPy - ball.py);
+    const running = !isGK && (isCarrier || isReceiver || dist < 24);
+
+    let px = targetPx;
+    let py = targetPy;
+    let facing = side === "home" ? 1 : -1;
+    let vx = 0;
+    let vy = 0;
+
+    if (positions) {
+      const prev = positions[i];
+      const maxStep = fmMaxStep(slot, { isGK, isCarrier, isPasser, isReceiver, hasBall, running });
+      const next = advanceFmMotion(prev, targetPx, targetPy, maxStep);
+      px = next.px;
+      py = next.py;
+      vx = next.vx;
+      vy = next.vy;
+      if (Math.abs(vx) > 0.025) facing = vx > 0 ? 1 : -1;
+      else if (hasBall || isReceiver) facing = fwd;
+      positions[i] = { px, py, vx, vy };
+    }
+
+    px = clamp(px, PLAY_MIN_PX, PLAY_MAX_PX);
+    py = clamp(py, 8, 92);
+    const pos = project(px, py);
     const diving = isGK && ((side === "home" && ball.px < 22) || (side === "away" && ball.px > 78));
     return {
-      ...screen, pos: slot.pos, facing: side === "home" ? 1 : -1,
-      running, isCarrier, isGK, diving, idx: i, shirtNum: i + 1,
+      x: pos.x, y: pos.y, z: Math.round(pos.y * 10),
+      pos: slot.pos, facing,
+      running, isCarrier, isGK, diving, isPasser, isReceiver,
+      idx: i, shirtNum: i + 1,
     };
   });
 }
 
-function FMGoal({ side }) {
-  const x = side === "home" ? PITCH.left : PITCH.left + PITCH.width;
-  const yT = PITCH.top + PITCH.height * 0.3;
-  const yB = PITCH.top + PITCH.height * 0.7;
-  const gW = 3.2;
-  return (
-    <g>
-      <rect x={side === "home" ? x - gW : x} y={yT - 1} width={gW} height={yB - yT + 2}
-        fill="none" stroke="#fff" strokeWidth="0.4" opacity="0.9" />
-      {[0, 1, 2, 3].map((n) => (
-        <line key={n} x1={side === "home" ? x - gW * (n / 3) : x + gW * (n / 3)} y1={yT}
-          x2={side === "home" ? x - gW * (n / 3) : x + gW * (n / 3)} y2={yB}
-          stroke="rgba(255,255,255,0.25)" strokeWidth="0.15" />
-      ))}
-    </g>
-  );
-}
-
 function FMPlayerDot({ x, y, shirtColor, gkColor, num, isGK, isCarrier, isPasser, isReceiver, side }) {
   const fill = isGK ? gkColor : shirtColor;
-  const textCol = dotTextColor(fill);
-  const r = isGK ? 2.7 : 2.2;
-  const strokeCol = isCarrier ? "#fff" : isPasser ? "#ffe566" : isReceiver ? "#a8e6ff" : "rgba(255,255,255,0.9)";
-  const strokeW = isCarrier || isPasser || isReceiver ? 0.55 : 0.35;
+  const r = isGK ? LIVE_GK_R : LIVE_PLAYER_R;
+  const textCol = (0.299 * parseInt(fill.slice(1, 3), 16) + 0.587 * parseInt(fill.slice(3, 5), 16) + 0.114 * parseInt(fill.slice(5, 7), 16)) > 145 ? "#1a1a1a" : "#fff";
+  const strokeCol = isCarrier ? "#fff" : isPasser ? "#ffe566" : isReceiver ? "#a8e6ff" : "rgba(255,255,255,0.92)";
+  const strokeW = isCarrier || isPasser || isReceiver ? r * 0.38 : r * 0.24;
   return (
     <g>
-      <circle cx={x} cy={y} r={r + 0.55} fill="rgba(0,0,0,0.45)" />
+      <circle cx={x} cy={y} r={r * 1.4} fill="rgba(0,0,0,0.4)" />
       <circle cx={x} cy={y} r={r} fill={fill} stroke={strokeCol} strokeWidth={strokeW} />
-      {isPasser && (
-        <line x1={x} y1={y} x2={x + (side === "home" ? 2.8 : -2.8)} y2={y - 0.4}
-          stroke="#ffe566" strokeWidth="0.35" strokeLinecap="round" opacity="0.85" />
+      {isCarrier && <circle cx={x} cy={y} r={r * 1.5} fill="none" stroke="#fff" strokeWidth={r * 0.2} opacity="0.85" />}
+      {num != null && (
+        <text x={x} y={y + r * 0.38} textAnchor="middle" fontSize={r * 1.05} fontWeight="800"
+          fill={textCol} stroke="rgba(0,0,0,0.35)" strokeWidth={r * 0.06}
+          fontFamily="Arial,sans-serif">{num}</text>
       )}
-      <text x={x} y={y + 0.8} textAnchor="middle" fontSize="2.05" fontWeight="800"
-        fill={textCol} stroke={textCol === "#fff" ? "rgba(0,0,0,0.35)" : "none"} strokeWidth="0.15"
-        fontFamily="Arial,sans-serif">{num}</text>
     </g>
   );
 }
 
 function SoccerBall({ x, y, phase, spin = 0 }) {
+  const r = LIVE_BALL_R;
   const rot = spin + (phase === "shot" ? 220 : phase === "pass" || phase === "through" ? 140 : 60);
   return (
     <g transform={`translate(${x},${y}) rotate(${rot})`}>
-      <circle r="1.65" fill="#f8f8f2" stroke="#1c1c1c" strokeWidth="0.22" />
-      <polygon points="0,-0.75 0.71,-0.23 -0.44,0.61 0.44,0.61 -0.71,-0.23" fill="#111" />
-      <polygon points="0,0.42 -0.38,0.72 0.38,0.72" fill="#111" opacity="0.9" />
-      <polygon points="0,-0.42 0.55,0.05 -0.55,0.05" fill="#111" opacity="0.75" />
-      <polygon points="0.85,-0.55 1.15,-0.1 0.75,0.25" fill="#111" opacity="0.55" />
-      <polygon points="-0.85,-0.55 -1.15,-0.1 -0.75,0.25" fill="#111" opacity="0.55" />
-      <circle r="0.42" cx="0.75" cy="-0.65" fill="#fff" opacity="0.55" />
-      <circle r="0.18" cx="-0.55" cy="0.75" fill="#ddd" opacity="0.4" />
+      <circle r={r * 1.15} fill="rgba(0,0,0,0.25)" />
+      <circle r={r} fill="#f8f8f2" stroke="#1c1c1c" strokeWidth={r * 0.14} />
+      <circle r={r * 0.28} cx={r * 0.35} cy={-r * 0.35} fill="#fff" opacity="0.55" />
     </g>
+  );
+}
+
+const PITCH_PORTRAIT_AR = `${PITCH_REAL_M.width} / ${PITCH_REAL_M.length}`;
+const PITCH_LANDSCAPE_AR = `${PITCH_REAL_M.length} / ${PITCH_REAL_M.width}`;
+const PITCH_GRASS_STRIPES_PORTRAIT = `repeating-linear-gradient(90deg, ${C.pitch} 0%, ${C.pitch} 5.5%, #163526 5.5%, #163526 11%)`;
+const PITCH_GRASS_STRIPES_LANDSCAPE = `repeating-linear-gradient(0deg, ${C.pitch} 0%, ${C.pitch} 5.5%, #163526 5.5%, #163526 11%)`;
+const LIVE_PITCH_BG = PITCH_GRASS_STRIPES_LANDSCAPE;
+
+function PitchMarkingsSVG({ layout = "portrait", opacity = 0.42 }) {
+  const portrait = layout === "portrait";
+  const w = portrait ? PITCH_REAL_M.width : PITCH_REAL_M.length;
+  const h = portrait ? PITCH_REAL_M.length : PITCH_REAL_M.width;
+  const line = C.pitchLine;
+  const sw = 0.26;
+  const m = 1.15;
+  const cx = w / 2;
+  const cy = h / 2;
+  const penD = 16.5;
+  const penW = 40.32;
+  const goalD = 5.5;
+  const goalW = 18.32;
+  const cr = 9.15;
+  const px1 = (w - penW) / 2;
+  const gx1 = (w - goalW) / 2;
+
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none"
+      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", display: "block" }}>
+      <rect x={m} y={m} width={w - m * 2} height={h - m * 2} fill="none" stroke={line} strokeWidth={sw} opacity={opacity} />
+      {portrait ? (
+        <>
+          <line x1={m} y1={cy} x2={w - m} y2={cy} stroke={line} strokeWidth={sw} opacity={opacity} />
+          <rect x={px1} y={m} width={penW} height={penD} fill="none" stroke={line} strokeWidth={sw} opacity={opacity} />
+          <rect x={gx1} y={m} width={goalW} height={goalD} fill="none" stroke={line} strokeWidth={sw} opacity={opacity} />
+          <rect x={px1} y={h - m - penD} width={penW} height={penD} fill="none" stroke={line} strokeWidth={sw} opacity={opacity} />
+          <rect x={gx1} y={h - m - goalD} width={goalW} height={goalD} fill="none" stroke={line} strokeWidth={sw} opacity={opacity} />
+        </>
+      ) : (
+        <>
+          <line x1={cx} y1={m} x2={cx} y2={h - m} stroke={line} strokeWidth={sw} opacity={opacity} />
+          <rect x={m} y={px1} width={penD} height={penW} fill="none" stroke={line} strokeWidth={sw} opacity={opacity} />
+          <rect x={m} y={gx1} width={goalD} height={goalW} fill="none" stroke={line} strokeWidth={sw} opacity={opacity} />
+          <rect x={w - m - penD} y={px1} width={penD} height={penW} fill="none" stroke={line} strokeWidth={sw} opacity={opacity} />
+          <rect x={w - m - goalD} y={gx1} width={goalD} height={goalW} fill="none" stroke={line} strokeWidth={sw} opacity={opacity} />
+        </>
+      )}
+      <circle cx={cx} cy={cy} r={cr} fill="none" stroke={line} strokeWidth={sw} opacity={opacity} />
+      <circle cx={cx} cy={cy} r={0.35} fill={line} opacity={opacity * 0.85} />
+    </svg>
+  );
+}
+
+function LivePlayerDotHtml({ x, y, shirtColor, gkColor, num, isGK, isCarrier }) {
+  const fill = isGK ? gkColor : shirtColor;
+  const r = isGK ? LIVE_GK_R : LIVE_PLAYER_R;
+  const d = `${r * 2 * 0.92}%`;
+  const lum = 0.299 * parseInt(fill.slice(1, 3), 16) + 0.587 * parseInt(fill.slice(3, 5), 16) + 0.114 * parseInt(fill.slice(5, 7), 16);
+  const textCol = lum > 145 ? "#1a1a1a" : "#fff";
+  const strokeCol = isCarrier ? "#fff" : "rgba(255,255,255,0.92)";
+  const strokeW = isCarrier ? "2.5px" : "1.5px";
+  return (
+    <div style={{
+      position: "absolute", left: `${x}%`, top: `${y}%`, transform: "translate(-50%,-50%)",
+      width: d, aspectRatio: "1", borderRadius: "50%",
+      background: fill, border: `${strokeW} solid ${strokeCol}`,
+      boxShadow: isCarrier ? "0 0 0 2px rgba(255,255,255,.55), 0 2px 6px rgba(0,0,0,.45)" : "0 2px 5px rgba(0,0,0,.4)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: "clamp(7px, 42%, 13px)", fontWeight: 800, color: textCol,
+      fontFamily: "Arial,sans-serif", lineHeight: 1, zIndex: Math.round(y),
+    }}>
+      {num}
+    </div>
+  );
+}
+
+function LiveBallHtml({ x, y }) {
+  const d = `${LIVE_BALL_R * 2 * 0.95}%`;
+  return (
+    <div style={{
+      position: "absolute", left: `${x}%`, top: `${y}%`, transform: "translate(-50%,-50%)",
+      width: d, aspectRatio: "1", borderRadius: "50%",
+      background: "radial-gradient(circle at 35% 30%, #fff 0%, #f4f4ee 55%, #ddd 100%)",
+      border: "1.5px solid #1c1c1c",
+      boxShadow: "0 2px 5px rgba(0,0,0,.35)",
+      zIndex: 999,
+    }} />
   );
 }
 
@@ -3927,50 +8800,48 @@ function BroadcastPitch({ homeTeam, awayTeam, homeFormation, awayFormation, ball
     ...homeDots.map((d, i) => ({ ...d, team: homeTeam, side: "home", key: "h" + i })),
     ...awayDots.map((d, i) => ({ ...d, team: awayTeam, side: "away", key: "a" + i })),
   ].sort((a, b) => a.z - b.z);
-  const pl = PITCH.left;
-  const pt = PITCH.top;
-  const pw = PITCH.width;
-  const ph = PITCH.height;
-  const cx = pl + pw / 2;
-  const cy = pt + ph / 2;
+  const gf = GRASS_FRAME;
 
   return (
-    <div style={{ borderRadius: 12, overflow: "hidden", border: `2px solid ${C.steel}`, boxShadow: "0 8px 28px rgba(0,0,0,.45)" }}>
-      <svg viewBox="0 0 100 62" width="100%" style={{ display: "block", background: "#1a2840" }}>
-        <defs>
-          <pattern id="fmStripes" width="5" height="62" patternUnits="userSpaceOnUse">
-            <rect width="2.5" height="62" fill="#1a5c32" opacity="0.45" />
-          </pattern>
-        </defs>
-
-        {/* pitch grass */}
-        <rect x={pl} y={pt} width={pw} height={ph} fill="#2a7d42" />
-        <rect x={pl} y={pt} width={pw} height={ph} fill="url(#fmStripes)" />
-
-        {/* markings */}
-        <rect x={pl} y={pt} width={pw} height={ph} fill="none" stroke={C.pitchLine} strokeWidth="0.4" opacity="0.85" />
-        <line x1={cx} y1={pt} x2={cx} y2={pt + ph} stroke={C.pitchLine} strokeWidth="0.35" opacity="0.75" />
-        <circle cx={cx} cy={cy} r={6.5} fill="none" stroke={C.pitchLine} strokeWidth="0.3" opacity="0.7" />
-        <circle cx={cx} cy={cy} r="0.55" fill={C.pitchLine} opacity="0.8" />
-        {/* penalty areas */}
-        <rect x={pl} y={cy - 10} width={13} height={20} fill="none" stroke={C.pitchLine} strokeWidth="0.25" opacity="0.55" />
-        <rect x={pl + pw - 13} y={cy - 10} width={13} height={20} fill="none" stroke={C.pitchLine} strokeWidth="0.25" opacity="0.55" />
-        {/* goals on end lines */}
-        <FMGoal side="home" />
-        <FMGoal side="away" />
-
-        {/* players */}
-        {allPlayers.map((p) => (
-          <FMPlayerDot key={p.key} x={p.x} y={p.y}
-            shirtColor={teamShirtColor(p.team)}
-            gkColor={gkKitColor(p.team, p.side)}
-            num={p.shirtNum}
-            isGK={p.isGK} isCarrier={p.isCarrier} side={p.side} />
-        ))}
-
-        {/* ball — ลูกบอลจริง อยู่หน้าตัวผู้เล่นที่ครองบอล / พุ่งเข้าประตูตอนยิง */}
-        <SoccerBall x={ballScreen.x} y={ballScreen.y} phase={ballSim.phase} />
-      </svg>
+    <div style={{
+      borderRadius: 12, overflow: "hidden", border: `2px solid ${C.steel}`,
+      boxShadow: "0 8px 28px rgba(0,0,0,.45)", background: C.pitchDark,
+    }}>
+      <div style={{
+        position: "relative", width: "100%", aspectRatio: `${STADIUM_ASSETS.aspect}`,
+        background: LIVE_PITCH_BG,
+      }}>
+        {/* สนามรอบนอก — letterbox ด้านข้าง/บนล่างเป็นสีหญ้าเกม ไม่ขาว */}
+        <img
+          src={STADIUM_ASSETS.stadium}
+          alt=""
+          draggable={false}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none", userSelect: "none" }}
+        />
+        {/* หญ้า + เส้นสนาม + จุดผู้เล่น — สัดส่วน 105×68 ม. เต็ม cutout */}
+        <div style={{
+          position: "absolute",
+          left: `${gf.left}%`, top: `${gf.top}%`, width: `${gf.width}%`, height: `${gf.height}%`,
+          overflow: "hidden", borderRadius: "2.5% 2.5% 1.8% 1.8%",
+          background: LIVE_PITCH_BG,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <div style={{
+            position: "relative", width: "100%", maxHeight: "100%",
+            aspectRatio: PITCH_LANDSCAPE_AR, background: LIVE_PITCH_BG,
+          }}>
+            <PitchMarkingsSVG layout="landscape" />
+            {allPlayers.map((p) => (
+              <LivePlayerDotHtml key={p.key} x={p.x} y={p.y}
+                shirtColor={teamShirtColor(p.team)}
+                gkColor={gkKitColor(p.team, p.side)}
+                num={p.shirtNum}
+                isGK={p.isGK} isCarrier={p.isCarrier} />
+            ))}
+            <LiveBallHtml x={ballScreen.x} y={ballScreen.y} />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3997,12 +8868,12 @@ function SubPicker({ myXI, mySquad, bench, onSub, disabled }) {
       <div style={{ fontSize: 10, color: C.textDim, marginBottom: 4 }}>ตัวจริง (แตะเพื่อเลือกออก)</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
         {xiPlayers.map((p) => (
-          <button key={p.id} onClick={() => setOutId(p.id)} style={{ fontSize: 11, padding: "5px 8px", borderRadius: 6, border: `1px solid ${outId === p.id ? C.crimson : C.steel}`, background: outId === p.id ? "rgba(193,68,14,.2)" : "transparent", color: C.chalk, cursor: "pointer" }}>{p.name} ({p.position})</button>
+          <button key={p.id} onClick={() => setOutId(p.id)} style={{ fontSize: 11, padding: "5px 8px", borderRadius: 6, border: `1px solid ${outId === p.id ? C.crimson : C.steel}`, background: outId === p.id ? "rgba(193,68,14,.2)" : "transparent", color: C.chalk, cursor: "pointer" }}>{p.name} ({playerPosCode(p)})</button>
         ))}
       </div>
       {outId && (
         <>
-          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 4 }}>ตัวสำรอง ({POS_TH[mySquad.find((p) => p.id === outId)?.position]}) — แตะเพื่อส่งลง</div>
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 4 }}>ตัวสำรอง ({playerPosTH(mySquad.find((p) => p.id === outId))}) — แตะเพื่อส่งลง</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
             {bench.filter((p) => p.position === mySquad.find((pp) => pp.id === outId)?.position).map((p) => (
               <button key={p.id} disabled={disabled} onClick={() => onSub(outId, p.id)} style={{ fontSize: 11, padding: "5px 8px", borderRadius: 6, border: `1px solid ${C.good}`, background: "rgba(111,174,90,.15)", color: C.chalk, cursor: disabled ? "not-allowed" : "pointer" }}>{p.name} (เรต {p.rating})</button>
@@ -4016,13 +8887,102 @@ function SubPicker({ myXI, mySquad, bench, onSub, disabled }) {
 }
 
 /* ============================== TRAINING ============================== */
-function TrainingView({ trainingPlan, autoTraining, currentSlot, onSetDay, onToggleAuto, onAutoAssign, facilities, budget, onUpgradeFacility }) {
+/* ---------- บอร์ดซ้อมรายตำแหน่ง (สไตล์ Top Eleven) ---------- */
+function DrillCard({ drillId, onRemove }) {
+  const d = DRILLS[drillId];
+  if (!d) return null;
+  return (
+    <div style={{ position: "relative", flex: "0 0 auto", width: 84, borderRadius: 8, padding: "8px 5px 6px", background: "linear-gradient(160deg,#1d4a2a,#12331d)", border: "1px solid #2f6b3f", textAlign: "center" }}>
+      {onRemove && (
+        <button type="button" onClick={onRemove} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: 9, border: "1px solid #6b2c2c", background: "#3a1717", color: "#e08a8a", fontSize: 10, lineHeight: "15px", cursor: "pointer", padding: 0 }}>✕</button>
+      )}
+      <div style={{ fontSize: 20 }}>{d.icon}</div>
+      <div style={{ fontSize: 9.5, fontWeight: 700, color: "#dff0e2", marginTop: 3, lineHeight: 1.25, minHeight: 24 }}>{d.name}</div>
+      <div style={{ fontSize: 7.5, color: "#9fc7a8", marginTop: 1 }}>{d.attrs.map((a) => ATTR_TH[a]).join("·")}</div>
+      <div style={{ fontSize: 8.5, color: C.amber, marginTop: 2, fontFamily: MONO_FONT }}>-{d.cond}%</div>
+    </div>
+  );
+}
+function DrillBoard({ drillPlans, drillDoneDay, currentDay, squad, staff, onSetDrillPlan, onAutoDrills, onRunDrills }) {
+  const [pickerGroup, setPickerGroup] = useState(null);
+  return (
+    <Panel style={{ border: `1px solid ${C.good}` }}>
+      <SectionLabel style={{ color: C.good }} sub="จัดคิวท่าซ้อมแยกตามกลุ่มตำแหน่ง สูงสุด 6 ท่า/กลุ่ม · ซ้อมวันละ 1 เซสชัน (ไม่กดเอง = ซ้อมอัตโนมัติตอนจบวัน)">🏟️ บอร์ดซ้อมรายตำแหน่ง</SectionLabel>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {DRILL_GROUPS.map((g) => {
+          const plan = (drillPlans[g] || []).filter((id) => DRILLS[id]);
+          const cost = drillPlanCost(plan);
+          const doneToday = drillDoneDay[g] === currentDay;
+          const ready = (squad || []).filter((p) => p.position === g && p.injuryDays <= 0).length;
+          const coach = (staff || {})[g];
+          const pickerOpen = pickerGroup === g;
+          return (
+            <div key={g} style={{ borderRadius: 10, border: `1px solid ${C.steel}`, background: C.panel2, padding: "8px 8px 8px 0", display: "flex", alignItems: "stretch", gap: 8 }}>
+              <div style={{ flex: "0 0 54px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, borderRight: `1px solid ${C.steel}`, padding: "0 4px" }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#08150e", background: POS_COLOR[g], borderRadius: 6, padding: "3px 8px", fontFamily: MONO_FONT }}>{g}</div>
+                <div style={{ fontSize: 8.5, color: C.textDim, textAlign: "center" }}>{ready} คนพร้อม</div>
+                {coach && <div style={{ fontSize: 8.5, color: C.good }}>⚡ โค้ช</div>}
+              </div>
+              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingTop: 7, paddingBottom: 2 }}>
+                  {plan.map((id, idx) => (
+                    <DrillCard key={`${id}_${idx}`} drillId={id} onRemove={() => onSetDrillPlan(g, plan.filter((_, i) => i !== idx))} />
+                  ))}
+                  {plan.length < MAX_DRILLS_PER_GROUP && (
+                    <button type="button" onClick={() => setPickerGroup(pickerOpen ? null : g)} style={{ flex: "0 0 auto", width: 84, borderRadius: 8, border: `1.5px dashed ${pickerOpen ? C.good : C.steel}`, background: "transparent", color: pickerOpen ? C.good : C.textDim, cursor: "pointer", fontSize: 11, fontWeight: 700 }}>
+                      {pickerOpen ? "ปิด" : "+ เพิ่มท่า"}
+                    </button>
+                  )}
+                  {plan.length === 0 && (
+                    <button type="button" onClick={() => onAutoDrills(g)} style={{ flex: "0 0 auto", padding: "0 12px", borderRadius: 8, border: `1px solid ${C.purple}`, background: "transparent", color: C.purple, cursor: "pointer", fontSize: 10.5, fontWeight: 700 }}>ให้โค้ชจัดให้</button>
+                  )}
+                </div>
+                {pickerOpen && (
+                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap", padding: "6px 6px", borderRadius: 8, background: "rgba(0,0,0,.22)", border: `1px solid ${C.steel}` }}>
+                    {Object.entries(DRILLS).filter(([, d]) => d.groups.includes(g)).map(([id, d]) => (
+                      <button key={id} type="button" onClick={() => { onSetDrillPlan(g, [...plan, id]); if (plan.length + 1 >= MAX_DRILLS_PER_GROUP) setPickerGroup(null); }} style={{ fontSize: 9.5, padding: "4px 8px", borderRadius: 6, border: `1px solid #2f6b3f`, background: "#12331d", color: "#dff0e2", cursor: "pointer" }}>
+                        {d.icon} {d.name} <span style={{ color: C.amber }}>-{d.cond}%</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ flex: "0 0 92px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 5 }}>
+                <div style={{ fontSize: 8.5, color: C.textDim, textAlign: "center", lineHeight: 1.3 }}>คอนดิชัน<br /><b style={{ color: cost > 0 ? C.amber : C.textDim, fontFamily: MONO_FONT, fontSize: 11 }}>-{cost}%</b></div>
+                <button type="button" disabled={doneToday || plan.length === 0 || ready === 0} onClick={() => onRunDrills(g)} style={{
+                  fontSize: 10.5, fontWeight: 800, padding: "7px 4px", borderRadius: 7, border: "none", cursor: doneToday || plan.length === 0 || ready === 0 ? "default" : "pointer",
+                  background: doneToday ? "#22352a" : plan.length === 0 || ready === 0 ? "#2b332f" : C.good,
+                  color: doneToday ? C.good : plan.length === 0 || ready === 0 ? C.textDim : "#08150e",
+                }}>{doneToday ? "ซ้อมแล้ว ✓" : "ซ้อมเลย!"}</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 10, color: C.textDim, marginTop: 8, lineHeight: 1.5 }}>ทุกท่าบอกสเตตที่ได้ + แรงที่ใช้ · ⚡ = มีโค้ชสายนั้น ได้ผลซ้อมเพิ่ม · นักเตะเจ็บไม่ร่วมซ้อม · ซ้อมนอกเหนือจากปฏิทินฝึกทีม 10 วันด้านล่าง</div>
+    </Panel>
+  );
+}
+
+function TrainingView({
+  trainingPlan, autoTraining, currentSlot, onSetDay, onToggleAuto, onAutoAssign, facilities, budget, onUpgradeFacility,
+  squad, staff, individualFocus, onSetFocus, campCooldownDay, currentDay, onRunCamp,
+  drillPlans, drillDoneDay, onSetDrillPlan, onAutoDrills, onRunDrills,
+}) {
+  const focusSlots = (facilities || {}).techLab || 1;
+  const focusUsed = Object.keys(individualFocus || {}).length;
+  const campCost = trainingCampCost(facilities);
+  const campReady = currentDay >= (campCooldownDay || 0);
+  const campDaysLeft = campReady ? 0 : (campCooldownDay || 0) - currentDay;
+  const eligibleFocusPlayers = (squad || []).filter((p) => p.injuryDays <= 0).sort((a, b) => b.rating - a.rating);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <DrillBoard drillPlans={drillPlans || {}} drillDoneDay={drillDoneDay || {}} currentDay={currentDay}
+        squad={squad} staff={staff} onSetDrillPlan={onSetDrillPlan} onAutoDrills={onAutoDrills} onRunDrills={onRunDrills} />
       <Panel>
-        <SectionLabel>ศูนย์ฝึกสโมสร</SectionLabel>
+        <SectionLabel sub="ห้องพยาบาลย้ายไปแท็บ 🏥 ห้องพยาบาล (เมนูเพิ่มเติม) แล้ว">ศูนย์ฝึกสโมสร</SectionLabel>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {FACILITY_TYPES.map((type) => {
+          {FACILITY_TYPES.filter((type) => type !== "medical").map((type) => {
             const level = (facilities || {})[type] || 1;
             const cost = facilityUpgradeCost(level);
             const maxed = level >= 5;
@@ -4045,35 +9005,151 @@ function TrainingView({ trainingPlan, autoTraining, currentSlot, onSetDay, onTog
       <Panel style={{ border: `1px solid ${C.purple}` }}>
         <SectionLabel style={{ color: C.purple }}>โปรแกรมฝึก 10 วัน</SectionLabel>
         <div style={{ fontSize: 12, color: C.textDim, marginBottom: 10 }}>1 วันแข่ง ≈ 1 ช่องฝึกในรอบนี้ ถึงวันที่ 10 แล้ววนกลับมาวันที่ 1 ใหม่ วางแผนล่วงหน้าได้ว่าวันไหนพัก วันไหนซ้อมหนัก</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={onToggleAuto} style={{ ...btnStyle(autoTraining ? C.purple : C.steel, autoTraining ? "#fff" : C.chalk), flex: 1 }}>{autoTraining ? "ปิดออโต้ (จัดเอง)" : "เปิดให้โค้ชจัดอัตโนมัติ"}</button>
-          <button onClick={onAutoAssign} style={{ ...btnStyle(C.steel, C.chalk), flex: 1 }}>สุ่มโปรแกรมใหม่</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={onToggleAuto} style={{ ...btnStyle(autoTraining ? C.purple : C.steel, autoTraining ? "#fff" : C.chalk), flex: 1, minWidth: 140 }}>{autoTraining ? "ปิดออโต้ (จัดเอง)" : "เปิดให้โค้ชจัดอัตโนมัติ"}</button>
+          <button type="button" onClick={onAutoAssign} style={{ ...btnStyle(C.purple, "#fff"), flex: 1, minWidth: 140 }}>จัดโปรแกรมใหม่</button>
         </div>
       </Panel>
       <Panel>
         <SectionLabel>ปฏิทินฝึกซ้อม</SectionLabel>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
-          {trainingPlan.map((type, idx) => (
-            <button key={idx} onClick={() => { if (!autoTraining) onSetDay(idx, TRAINING_TYPES[(TRAINING_TYPES.indexOf(type) + 1) % TRAINING_TYPES.length]); }} style={{
-              textAlign: "left", padding: "10px 12px", borderRadius: 10, cursor: autoTraining ? "default" : "pointer",
-              border: `2px solid ${idx === currentSlot ? C.amber : C.steel}`, background: idx === currentSlot ? "rgba(224,164,88,.12)" : C.panel2,
-            }}>
-              <div style={{ fontSize: 10, color: C.textDim }}>วันที่ {idx + 1} {idx === currentSlot && "· วันนี้"}</div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: TRAINING_COLOR[type], marginTop: 2 }}>{TRAINING_TH[type]}</div>
-            </button>
-          ))}
+          {trainingPlan.map((type, idx) => {
+            const synergySpecs = Object.entries(COACH_TRAINING_SYNERGY[type] || {}).filter(([spec]) => staff && staff[spec]);
+            return (
+              <button key={idx} onClick={() => { if (!autoTraining) onSetDay(idx, TRAINING_TYPES[(TRAINING_TYPES.indexOf(type) + 1) % TRAINING_TYPES.length]); }} style={{
+                textAlign: "left", padding: "10px 12px", borderRadius: 10, cursor: autoTraining ? "default" : "pointer",
+                border: `2px solid ${idx === currentSlot ? C.amber : C.steel}`, background: idx === currentSlot ? "rgba(224,164,88,.12)" : C.panel2,
+              }}>
+                <div style={{ fontSize: 10, color: C.textDim }}>วันที่ {idx + 1} {idx === currentSlot && "· วันนี้"}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: TRAINING_COLOR[type], marginTop: 2 }}>{TRAINING_TH[type]}</div>
+                {synergySpecs.length > 0 && (
+                  <div style={{ fontSize: 9, color: C.good, marginTop: 2 }}>⚡ ตรงสาย {synergySpecs.map(([spec]) => STAFF_TH[spec]).join(", ")}</div>
+                )}
+              </button>
+            );
+          })}
         </div>
-        {!autoTraining && <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 10 }}>แตะการ์ดเพื่อวนเปลี่ยนประเภทการฝึกของวันนั้น</div>}
+        {!autoTraining && <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 10 }}>แตะการ์ดเพื่อวนเปลี่ยนประเภทการฝึกของวันนั้น · ⚡ = ตรงสายโค้ชที่มี ได้ผลฝึกเพิ่มขึ้น</div>}
       </Panel>
       <Panel>
         <SectionLabel>ผลของแต่ละประเภท</SectionLabel>
         <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 11.5, color: C.textDim }}>
           <div><b style={{ color: TRAINING_COLOR.REST }}>พักฟื้น</b> — ฟื้นสตามินาเพิ่ม ไม่เสียพลังงาน มูดดีขึ้นเล็กน้อย</div>
-          <div><b style={{ color: TRAINING_COLOR.FITNESS }}>ฟิตเนส</b> — เพิ่มความเร็ว/พละกำลัง/ความคล่องตัว</div>
-          <div><b style={{ color: TRAINING_COLOR.SHOOTING }}>ซ้อมยิงประตู</b> — เพิ่มยิงประตู/เลี้ยงบอล/ความนิ่ง</div>
-          <div><b style={{ color: TRAINING_COLOR.DEFENDING }}>ซ้อมเกมรับ</b> — เพิ่มการตัดสินใจ/โหม่ง/วิสัยทัศน์</div>
-          <div><b style={{ color: TRAINING_COLOR.TACKLING }}>ซ้อมสกัด/ปะทะ</b> — เพิ่มปะทะ-สกัด/พละกำลัง/ความมุ่งมั่น</div>
-          <div>ทุกประเภท (ยกเว้นพักฟื้น) ใช้สตามินาเพิ่มเล็กน้อย</div>
+          <div><b style={{ color: TRAINING_COLOR.FITNESS }}>ฟิตเนส</b> — เพิ่มความเร็ว/พละกำลัง/ความคล่องตัว · ตรงสายโค้ชฟิตเนส</div>
+          <div><b style={{ color: TRAINING_COLOR.SHOOTING }}>ซ้อมยิงประตู</b> — เพิ่มยิงประตู/เลี้ยงบอล/ความนิ่ง · ตรงสายโค้ชกองหน้า</div>
+          <div><b style={{ color: TRAINING_COLOR.DEFENDING }}>ซ้อมเกมรับ</b> — เพิ่มการตัดสินใจ/โหม่ง/วิสัยทัศน์ · ตรงสายโค้ช GK/กองหลัง</div>
+          <div><b style={{ color: TRAINING_COLOR.TACKLING }}>ซ้อมสกัด/ปะทะ</b> — เพิ่มปะทะ-สกัด/พละกำลัง/ความมุ่งมั่น · ตรงสายโค้ชกองหลัง/กองกลาง</div>
+          <div>ทุกประเภท (ยกเว้นพักฟื้น) ใช้สตามินาเพิ่มเล็กน้อย · อาจมีเหตุการณ์สุ่มเกิดขึ้นระหว่างฝึกได้</div>
+        </div>
+      </Panel>
+      {onSetFocus && (
+        <Panel style={{ border: `1px solid ${C.blue}` }}>
+          <SectionLabel style={{ color: C.blue }} sub={`ใช้ช่อง ${focusUsed}/${focusSlots} · ปลดล็อกช่องเพิ่มโดยอัปเกรดเทคโนโลยีฝึกซ้อม`}>🎯 โฟกัสฝึกรายบุคคล</SectionLabel>
+          <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8, lineHeight: 1.5 }}>เลือกหมวดฝึกพิเศษให้นักเตะรายคน ได้ผลเพิ่มทุกวันโดยไม่ต้องรอตารางทีม</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
+            {eligibleFocusPlayers.map((p) => {
+              const current = (individualFocus || {})[p.id];
+              return (
+                <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderTop: `1px solid ${C.steel}` }}>
+                  <div style={{ flex: 1, fontSize: 12, fontWeight: current ? 700 : 500 }}>{p.name} <span style={{ color: C.textDim, fontSize: 10 }}>{playerPosCode(p)}</span></div>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {INDIVIDUAL_FOCUS_TYPES.map((ft) => (
+                      <button key={ft} type="button" onClick={() => onSetFocus(p.id, ft)} style={{
+                        fontSize: 9, padding: "3px 6px", borderRadius: 5, cursor: "pointer",
+                        border: `1px solid ${current === ft ? TRAINING_COLOR[ft] : C.steel}`,
+                        background: current === ft ? TRAINING_COLOR[ft] : "transparent",
+                        color: current === ft ? "#08150e" : C.textDim, fontWeight: current === ft ? 700 : 500,
+                      }}>{TRAINING_TH[ft]}</button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
+      {onRunCamp && (
+        <Panel style={{ border: `1px solid ${C.gold}` }}>
+          <SectionLabel style={{ color: C.gold }} sub={`คูลดาวน์ ${TRAINING_CAMP_COOLDOWN_DAYS} วัน`}>🏕️ แคมป์ฝึกพิเศษ</SectionLabel>
+          <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8, lineHeight: 1.5 }}>ทีมชุดใหญ่ทั้งหมดได้พัฒนาการทันที + สตามินาเต็ม + มูดพุ่ง เหมาะใช้ก่อนช่วงลีกสำคัญ</div>
+          {campReady ? (
+            <button disabled={budget < campCost} onClick={onRunCamp} style={{ ...btnStyle(budget >= campCost ? C.gold : "#2b332f", budget >= campCost ? "#0a1210" : C.textDim), width: "100%", cursor: budget >= campCost ? "pointer" : "not-allowed" }}>
+              จัดแคมป์ · {formatMoney(campCost)}
+            </button>
+          ) : (
+            <div style={{ fontSize: 11, color: C.textDim, textAlign: "center", padding: "8px 0" }}>พักฟื้นระบบอีก {campDaysLeft} วัน</div>
+          )}
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+/* ============================== MEDICAL ROOM ============================== */
+function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, onUpgradeFacility, onHireCoach, onHireCard }) {
+  const injured = squad.filter((p) => p.injuryDays > 0).sort((a, b) => b.injuryDays - a.injuryDays);
+  const packCount = inventory?.injury_pack || 0;
+  const doctor = career.staff?.[career.userTeamId]?.PHYSIO;
+  const physio = career.staff?.[career.userTeamId]?.PHYSIOTHERAPIST;
+  const medicalLevel = (career.facilities || {}).medical || 1;
+  const medicalCost = facilityUpgradeCost(medicalLevel);
+  const medicalMaxed = medicalLevel >= 5;
+  const medicalCards = (career.staffCardBag || []).filter((c) => c.type === "DOCTOR");
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel accent={injured.length > 0 ? C.crimson : C.good}>
+        <SectionLabel sub={`${injured.length} คนบาดเจ็บ · ${packCount} ชุดปฐมพยาบาลในกระเป๋า`}>🏥 ห้องพยาบาล</SectionLabel>
+        {injured.length === 0 ? (
+          <div style={{ fontSize: 12, color: C.textDim }}>ไม่มีนักเตะบาดเจ็บตอนนี้ ✅</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {injured.map((p) => (
+              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderTop: `1px solid ${C.steel}` }}>
+                <RatingBadge value={p.rating} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name}</div>
+                  <div style={{ fontSize: 11, color: C.crimson, fontFamily: MONO_FONT }}>บาดเจ็บอีก {p.injuryDays} วัน</div>
+                </div>
+                <button type="button" disabled={packCount <= 0} onClick={() => onUseItemFromBag("injury_pack", p.id)} style={{ fontSize: 10, padding: "6px 10px", borderRadius: 6, border: "none", fontWeight: 700, background: packCount > 0 ? C.good : "#2b332f", color: packCount > 0 ? "#08150e" : C.textDim, cursor: packCount > 0 ? "pointer" : "not-allowed" }}>
+                  ใช้ 🩹
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {packCount === 0 && <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 8 }}>ไม่มีชุดปฐมพยาบาล — ไปซื้อที่ร้านค้า (10 เหรียญ · ซื้อได้วันละ 5 ครั้ง)</div>}
+      </Panel>
+
+      {medicalCards.length > 0 && (
+        <Panel style={{ border: `1px solid ${C.blue}` }}>
+          <SectionLabel style={{ color: C.blue }} sub={`มี ${medicalCards.length} ใบในกระเป๋า — กด "จ้าง" เพื่อติดตั้งทันที${medicalCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดหมอ/นักกายภาพที่สุ่มได้</SectionLabel>
+          <div style={CARD_LIST_SCROLL}>
+            {medicalCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireCard} {...staffCardLockInfo(career, card)} />)}
+          </div>
+        </Panel>
+      )}
+
+      <Panel>
+        <SectionLabel sub="หมอลดโอกาส/ความรุนแรงบาดเจ็บ · นักกายภาพเร่งพักฟื้นหลังบาดเจ็บ">ทีมแพทย์ — ผู้สมัครรายสัปดาห์</SectionLabel>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <StaffOfferCard spec="PHYSIO" co={doctor} offer={career.coachOffers ? career.coachOffers.PHYSIO : null} locked={isStaffRoleLocked(doctor, career.season)} budget={budget} onHire={onHireCoach} />
+          <StaffOfferCard spec="PHYSIOTHERAPIST" co={physio} offer={career.coachOffers ? career.coachOffers.PHYSIOTHERAPIST : null} locked={isStaffRoleLocked(physio, career.season)} budget={budget} onHire={onHireCoach} />
+        </div>
+      </Panel>
+
+      <Panel>
+        <SectionLabel>{FACILITY_TH.medical} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>Lv.{medicalLevel}</span></SectionLabel>
+        <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 8 }}>{FACILITY_DESC.medical}</div>
+        <MiniBar value={(medicalLevel / 5) * 100} color={C.amber} />
+        <div style={{ marginTop: 10 }}>
+          {medicalMaxed ? (
+            <span style={{ fontSize: 11, color: C.gold }}>อัปเกรดสูงสุดแล้ว</span>
+          ) : (
+            <button disabled={budget < medicalCost} onClick={() => onUpgradeFacility("medical")} style={{ fontSize: 11, padding: "7px 12px", borderRadius: 6, border: "none", background: budget >= medicalCost ? C.good : "#2b332f", color: budget >= medicalCost ? "#08150e" : C.textDim, cursor: budget >= medicalCost ? "pointer" : "not-allowed", fontWeight: 700 }}>
+              อัปเกรด {formatMoney(medicalCost)}
+            </button>
+          )}
         </div>
       </Panel>
     </div>
@@ -4081,24 +9157,38 @@ function TrainingView({ trainingPlan, autoTraining, currentSlot, onSetDay, onTog
 }
 
 /* ============================== YOUTH ACADEMY ============================== */
-function AcademyView({ career, budget, onHireScout, onRerollScout, onHireAcademyManager, onRerollAcademyManager, onSignProspect, onLoanOut, onSellAcademy, onPromote }) {
+function AcademyView({ career, budget, onHireScout, onHireScoutCard, onHireAcademyManager, onSignProspect, onLoanOut, onSellAcademy, onPromote }) {
+  const scoutCards = (career?.staffCardBag || []).filter((c) => c.type === "SCOUT");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Panel>
-        <SectionLabel>แมวมอง</SectionLabel>
-        {career.scout ? (
-          <div style={{ fontSize: 12.5, fontFamily: MONO_FONT, color: C.textDim }}>{career.scout.name} · เกรด {career.scout.grade}/5 · ค่าเหนื่อย {formatMoney(career.scout.weeklyWage)}/วัน</div>
-        ) : career.scoutOffer ? (
+        <SectionLabel sub="แยกจากแมวมองทีมชุดใหญ่ในแท็บตลาด">แมวมองเยาวชน</SectionLabel>
+        {career.youthScout ? (
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>{career.scoutOffer.name} (เกรด {career.scoutOffer.grade}/5)</div>
-            <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, margin: "4px 0 10px" }}>ค่าแรกเข้า {formatMoney(career.scoutOffer.signingCost)} · ค่าเหนื่อย {formatMoney(career.scoutOffer.weeklyWage)}/วัน</div>
+            <div style={{ fontSize: 12.5, fontFamily: MONO_FONT, color: C.textDim }}>{career.youthScout.name} · เกรด {career.youthScout.grade}/5 · ค่าเหนื่อย {formatMoney(career.youthScout.weeklyWage)}/วัน</div>
+            {isStaffRoleLocked(career.youthScout, career.season) && (
+              <div style={{ fontSize: 10, color: C.textDim, marginTop: 4 }}>🔒 เปลี่ยนแมวมองคนนี้ได้ตอนขึ้นฤดูกาลหน้า</div>
+            )}
+          </div>
+        ) : career.youthScoutOffer ? (
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{career.youthScoutOffer.name} (เกรด {career.youthScoutOffer.grade}/5)</div>
+            <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, margin: "4px 0 10px" }}>ค่าแรกเข้า {formatMoney(career.youthScoutOffer.signingCost)} · ค่าเหนื่อย {formatMoney(career.youthScoutOffer.weeklyWage)}/วัน</div>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={onHireScout} style={{ ...btnStyle(C.good, "#08150e"), flex: 1 }}>จ้าง</button>
-              <button disabled={(career.scoutRerollCount || 0) >= 5} onClick={onRerollScout} style={{ ...btnStyle((career.scoutRerollCount || 0) >= 5 ? "#2b332f" : C.steel, (career.scoutRerollCount || 0) >= 5 ? C.textDim : C.chalk), flex: 1 }}>สุ่มใหม่ ({5 - (career.scoutRerollCount || 0)} เหลือวันนี้)</button>
             </div>
           </div>
         ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
       </Panel>
+
+      {scoutCards.length > 0 && (
+        <Panel style={{ border: `1px solid ${C.blue}` }}>
+          <SectionLabel style={{ color: C.blue }} sub={`มี ${scoutCards.length} ใบในกระเป๋า — ติดตั้งได้ทั้งแมวมองชุดใหญ่/เยาวชน${scoutCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดแมวมองที่สุ่มได้</SectionLabel>
+          <div style={CARD_LIST_SCROLL}>
+            {scoutCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireScoutCard} {...staffCardLockInfo(career, card)} />)}
+          </div>
+        </Panel>
+      )}
 
       <Panel>
         <SectionLabel>ผจก.อคาเดมี</SectionLabel>
@@ -4114,22 +9204,23 @@ function AcademyView({ career, budget, onHireScout, onRerollScout, onHireAcademy
             <div style={{ marginBottom: 10 }}><RadarStats stats={career.academyManagerOffer.stats} /></div>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={onHireAcademyManager} style={{ ...btnStyle(C.purple, "#fff"), flex: 1 }}>แต่งตั้ง</button>
-              <button disabled={(career.academyManagerRerollCount || 0) >= 5} onClick={onRerollAcademyManager} style={{ ...btnStyle((career.academyManagerRerollCount || 0) >= 5 ? "#2b332f" : C.steel, (career.academyManagerRerollCount || 0) >= 5 ? C.textDim : C.chalk), flex: 1 }}>สุ่มใหม่ ({5 - (career.academyManagerRerollCount || 0)} เหลือวันนี้)</button>
             </div>
           </div>
         ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
       </Panel>
 
       <Panel>
-        <SectionLabel>ดาวรุ่งที่แมวมองพบ ({career.youthProspects.length})</SectionLabel>
-        {career.youthProspects.length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>ยังไม่มี — จ้างแมวมองเพื่อเริ่มค้นหา</div>}
+        <SectionLabel>ดาวรุ่งที่แมวมองเยาวชนพบ ({career.youthProspects.length})</SectionLabel>
+        {career.youthProspects.length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>ยังไม่มี — จ้างแมวมองเยาวชนเพื่อเริ่มค้นหา</div>}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {career.youthProspects.map((p) => (
             <div key={p.prospectId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: `1px solid ${C.steel}` }}>
               <RatingBadge value={p.rating} />
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name} <span style={{ fontSize: 10, color: POS_COLOR[p.position] }}>{POS_TH[p.position]}</span></div>
-                <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT }}>อายุ {p.age} · ศักยภาพ {bandOf(p.potential)}</div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name} <span style={{ fontSize: 10, color: playerPosColor(p) }}>{playerPosTH(p)}</span>
+                  {p.wonderkid && <span style={{ fontSize: 9, color: C.purple, marginLeft: 4 }}>🌟</span>}
+                </div>
+                <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT }}>อายุ {p.age} · ศักยภาพ {bandOf(p.potential)}{p.hype ? ` · ฮายป์ ${p.hype}` : ""}</div>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 12, color: C.amber, fontFamily: MONO_FONT }}>{formatMoney(p.signingCost)}</div>
@@ -4151,7 +9242,7 @@ function AcademyView({ career, budget, onHireScout, onRerollScout, onHireAcademy
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <RatingBadge value={p.rating} />
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name} <span style={{ fontSize: 10, color: POS_COLOR[p.position] }}>{POS_TH[p.position]}</span></div>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name} <span style={{ fontSize: 10, color: playerPosColor(p) }}>{playerPosTH(p)}</span></div>
                     <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT }}>อายุ {p.age} · ศักยภาพ {bandOf(p.potential)} · {formatMoney(p.value)}</div>
                     {onLoan && <div style={{ fontSize: 10.5, color: C.amber, marginTop: 2 }}>📤 ยืมตัวอยู่ที่ {onLoan.toTeamName} (เหลือ {onLoan.daysLeft} วัน)</div>}
                   </div>
@@ -4220,26 +9311,525 @@ function SettingsView({ career, onReset, onEnterOnline }) {
   );
 }
 
-/* ============================== BOTTOM NAV ============================== */
-function BottomNav({ tab, setTab, marketOpen }) {
+/* ============================== SHOP ============================== */
+function ShopView({ sockerCoins, inventory, shopBuyCount, onPurchasePack, onBuyItemToBag }) {
+  const injuryItem = SHOP_ITEMS[0];
+  const canAffordInjury = sockerCoins >= injuryItem.coinCost;
+  const canBuyToday = shopBuyCount < SHOP_DAILY_BUY_LIMIT;
+  const packInBag = inventory?.injury_pack || 0;
+  const buysLeft = SHOP_DAILY_BUY_LIMIT - shopBuyCount;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel accent={C.gold}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <SectionLabel>ยอด Socker Coin</SectionLabel>
+            <div style={{ fontFamily: MONO_FONT, fontSize: 28, fontWeight: 800, color: C.gold }}>🪙 {sockerCoins}</div>
+          </div>
+          <div style={{ fontSize: 10, color: C.textDim, textAlign: "right", maxWidth: 140, lineHeight: 1.5 }}>
+            เหรียญพรีเมียม<br />ใช้ซื้อไอเทมในเกม
+          </div>
+        </div>
+      </Panel>
+
+      <Panel>
+        <SectionLabel sub="ชำระเงินจริง — เวอร์ชันทดลองกดซื้อได้ทันที">ซื้อ Socker Coin</SectionLabel>
+        <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10, lineHeight: 1.55 }}>
+          ระบบชำระเงินจริง (บัตร/พร้อมเพย์) จะเชื่อมในเวอร์ชันเปิดตัว — ตอนนี้กดเพื่อทดสอบในเกม
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {COIN_PACKAGES.map((pack) => (
+            <button
+              key={pack.id}
+              type="button"
+              onClick={() => onPurchasePack(pack.id)}
+              style={{
+                textAlign: "left", padding: "12px 10px", borderRadius: 8, cursor: "pointer",
+                background: "rgba(212,175,55,.08)", border: `1px solid ${C.gold}`, color: C.chalk,
+              }}
+            >
+              {pack.tag && <div style={{ fontSize: 9, color: C.gold, fontWeight: 700, marginBottom: 4 }}>{pack.tag}</div>}
+              <div style={{ fontFamily: MONO_FONT, fontSize: 16, fontWeight: 800, color: C.gold }}>🪙 {pack.coins}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, marginTop: 4 }}>{pack.priceLabel}</div>
+            </button>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel accent={C.blue}>
+        <SectionLabel sub={`ราคา ${injuryItem.coinCost} เหรียญ · ซื้อได้วันละ ${SHOP_DAILY_BUY_LIMIT} ครั้ง`}>ไอเทมในเกม</SectionLabel>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
+          <div style={{ fontSize: 36 }}>{injuryItem.icon}</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>{injuryItem.name}</div>
+            <div style={{ fontSize: 11.5, color: C.textDim, marginTop: 4, lineHeight: 1.55 }}>{injuryItem.desc}</div>
+            <div style={{ fontSize: 11, color: C.blue, marginTop: 8 }}>ในกระเป๋า: <b>{packInBag}</b> ชิ้น · ซื้อได้อีก <b>{buysLeft}</b> ครั้งวันนี้</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={!canAffordInjury || !canBuyToday}
+          onClick={() => onBuyItemToBag("injury_pack")}
+          style={{
+            ...btnStyle(canAffordInjury && canBuyToday ? C.good : "#2b332f", canAffordInjury && canBuyToday ? "#08150e" : C.textDim),
+            width: "100%", cursor: canAffordInjury && canBuyToday ? "pointer" : "not-allowed",
+          }}
+        >
+          {!canBuyToday ? "ซื้อครบโควต้าวันนี้แล้ว" : !canAffordInjury ? `เหรียญไม่พอ (ต้องการ ${injuryItem.coinCost})` : `ซื้อเข้ากระเป๋า 🪙${injuryItem.coinCost}`}
+        </button>
+        <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 10, lineHeight: 1.55 }}>
+          ใช้ไอเทมได้ที่ <b style={{ color: C.chalk }}>ตลาด → จัดการทีม → กระเป๋าไอเทม</b>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+/* ============================== STAFF CARDS (GACHA) ============================== */
+function StaffCardTile({ card, compact, onHire, locked, fee, afford }) {
+  const sub = card.type === "COACH" || card.type === "DOCTOR"
+    ? STAFF_TH[card.specialty]
+    : card.type === "SCOUT"
+      ? `ถนัด ${POS_TH[card.specialtyPos]}`
+      : card.preferredFormation;
+  const statLine = staffCardStatLine(card);
+  const canAfford = afford !== false;
+  return (
+    <div style={{
+      padding: compact ? "6px 8px" : "8px 10px", borderRadius: 8,
+      background: C.panel2, border: `1px solid ${starColor(card.stars)}`,
+      display: "flex", alignItems: "center", gap: 8,
+    }}>
+      <div style={{ fontSize: compact ? 16 : 20, width: 28, textAlign: "center" }}>{STAFF_CARD_TYPE_ICON[card.type]}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: compact ? 11 : 12, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{card.name}</div>
+        <div style={{ fontSize: 9.5, color: C.textDim, fontFamily: MONO_FONT }}>{STAFF_CARD_TYPE_TH[card.type]} · {sub}</div>
+        {statLine && <div style={{ fontSize: 9.5, color: C.amber, fontFamily: MONO_FONT, marginTop: 1 }}>{statLine}</div>}
+        {fee > 0 && <div style={{ fontSize: 9, color: canAfford ? C.textDim : C.crimson, fontFamily: MONO_FONT, marginTop: 1 }}>ค่าปรับเลิกจ้างคนเดิม {formatMoney(fee)}{!canAfford ? " · งบไม่พอ" : ""}</div>}
+        <StarGlyphs count={card.stars} size={compact ? 8 : 9} />
+      </div>
+      {onHire && (
+        locked ? (
+          <div style={{ fontSize: 8.5, color: C.textDim, textAlign: "center", flexShrink: 0, lineHeight: 1.3, padding: "3px 4px" }}>🔒 ล็อก<br />ฤดูกาลนี้</div>
+        ) : (
+          <button type="button" disabled={!canAfford} onClick={() => onHire(card.cardId)} style={{ ...btnStyle(canAfford ? C.good : "#2b332f", canAfford ? "#08150e" : C.textDim), width: "auto", padding: "5px 8px", fontSize: 9.5, flexShrink: 0, cursor: canAfford ? "pointer" : "not-allowed" }}>จ้าง</button>
+        )
+      )}
+    </div>
+  );
+}
+
+function MergeResultModal({ report, onClose }) {
+  if (!report) return null;
+  const ok = report.attempts.filter((a) => a.success).length;
+  const fail = report.attempts.length - ok;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: C.panel, border: `1px solid ${C.purple}`, borderRadius: 10, padding: 16, maxWidth: 380, width: "100%", maxHeight: "80vh", overflowY: "auto" }}>
+        <SectionLabel style={{ color: C.purple }} sub={report.auto ? "รวมอัตโนมัติ" : "รวมด้วยตัวเอง"}>✨ ผลการรวมการ์ด</SectionLabel>
+        <div style={{ fontSize: 11.5, fontFamily: MONO_FONT, color: C.textDim, marginBottom: 10 }}>
+          รวมทั้งหมด {report.attempts.length} ชุด · <span style={{ color: C.good }}>สำเร็จ {ok}</span> · <span style={{ color: C.crimson }}>ไม่สำเร็จ {fail}</span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {report.attempts.map((a, i) => (
+            <div key={i} style={{ padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${a.success ? C.good : C.steel}` }}>
+              <div style={{ fontSize: 11, fontFamily: MONO_FONT, color: C.textDim, marginBottom: a.card ? 6 : 0 }}>
+                {STAFF_CARD_TYPE_ICON[a.type]} {STAFF_CARD_TYPE_TH[a.type]} {a.stars}★ ×{MERGE_CARD_COUNT} → {a.success
+                  ? <span style={{ color: C.good, fontWeight: 700 }}>สำเร็จ! ได้ {a.stars + 1}★</span>
+                  : <span style={{ color: C.crimson }}>ไม่สำเร็จ (โอกาส {Math.round(a.chance * 100)}%)</span>}
+              </div>
+              {a.card && <StaffCardTile card={a.card} compact />}
+            </div>
+          ))}
+        </div>
+        <button type="button" onClick={onClose} style={{ ...btnStyle(C.purple, "#fff"), width: "100%", marginTop: 12 }}>ปิด</button>
+      </div>
+    </div>
+  );
+}
+
+function ManagerHireConfirmModal({ name, stars, preferredFormation, weeklyWage, signingCost, terminationFee, daysLeft, currentName, budget, onConfirm, onCancel }) {
+  const totalCost = (signingCost || 0) + (terminationFee || 0);
+  const canAfford = totalCost === 0 || budget >= totalCost;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: C.panel, border: `1px solid ${C.gold}`, borderRadius: 10, padding: 16, maxWidth: 360, width: "100%" }}>
+        <SectionLabel style={{ color: C.gold }}>ยืนยันแต่งตั้งผจก.</SectionLabel>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>{name} {stars ? <StarGlyphs count={stars} size={9} /> : null}</div>
+        <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, marginBottom: 10 }}>
+          ถนัด {preferredFormation} · ค่าเหนื่อย {formatMoney(weeklyWage)}/วัน
+          {signingCost > 0 ? ` · ค่าแต่งตั้ง ${formatMoney(signingCost)}` : ""}
+        </div>
+        {currentName && terminationFee > 0 && (
+          <div style={{ fontSize: 11, color: C.crimson, marginBottom: 8, lineHeight: 1.55 }}>
+            ⚠️ {currentName} ยังติดสัญญาเหลือ {daysLeft} วัน — ค่าปรับ {formatMoney(terminationFee)}
+          </div>
+        )}
+        {totalCost > 0 && (
+          <div style={{ fontSize: 11, color: C.amber, fontFamily: MONO_FONT, marginBottom: 10 }}>
+            รวมจ่าย {formatMoney(totalCost)}
+          </div>
+        )}
+        {!canAfford && totalCost > 0 && (
+          <div style={{ fontSize: 11, color: C.crimson, marginBottom: 10 }}>งบไม่พอ</div>
+        )}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" onClick={onCancel} style={{ ...fmBtnGhost(), flex: 1 }}>ยกเลิก</button>
+          <button type="button" disabled={!canAfford} onClick={onConfirm} style={{ ...btnStyle(canAfford ? C.purple : "#2b332f", canAfford ? "#fff" : C.textDim), flex: 1 }}>ยืนยัน</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StaffCardsView({ career, onPull, onMerge, onHire, onAutoMerge, onToggleAutoTier }) {
+  const [sub, setSub] = useState("draw");
+  const tickets = career.staffDrawTickets || 0;
+  const freeLeft = career.staffFreeDrawsLeft || 0;
+  const bag = career.staffCardBag || [];
+  const groups = groupStaffCards(bag);
+  const bagIds = new Set(bag.map((c) => c.cardId));
+  // Only show cards from the last pull that are still unused (not hired/merged away) so the list reflects the bag.
+  const lastPull = (career.lastStaffPull || []).filter((c) => bagIds.has(c.cardId));
+  const canPull = freeLeft > 0 || tickets > 0;
+  const bagByType = STAFF_CARD_TYPES.map((type) => ({
+    type,
+    groups: groups.filter((g) => g.type === type),
+    total: bag.filter((c) => c.type === type).length,
+  }));
+
+  const subTabs = [
+    { id: "draw", label: "เปิดการ์ด", icon: "🎴" },
+    { id: "bag", label: "กระเป๋า", icon: "🎒" },
+    { id: "merge", label: "รวมการ์ด", icon: "✨" },
+  ];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel style={{ border: `1px solid ${C.amber}` }}>
+        <SectionLabel style={{ color: C.amber }} sub={`${CARDS_PER_STAFF_PULL} ใบ/ครั้ง · จบลีกอันดับ 1–5 ได้ตั๋วเพิ่ม`}>การ์ดสตาฟ</SectionLabel>
+        <div style={{ display: "flex", gap: 12, fontSize: 11.5, fontFamily: MONO_FONT, color: C.textDim }}>
+          <span>ฟรีวันนี้ <b style={{ color: C.good }}>{freeLeft}</b>/{DAILY_FREE_STAFF_DRAWS}</span>
+          <span>ตั๋ว <b style={{ color: C.amber }}>{tickets}</b></span>
+          <span>กระเป๋า <b style={{ color: C.chalk }}>{bag.length}</b></span>
+        </div>
+      </Panel>
+
+      <div style={{ display: "flex", gap: 6 }}>
+        {subTabs.map((t) => {
+          const active = sub === t.id;
+          return (
+            <button key={t.id} type="button" onClick={() => setSub(t.id)} style={{
+              flex: 1, padding: "9px 4px", borderRadius: 8, cursor: "pointer", fontSize: 10.5, fontWeight: 700,
+              background: active ? "rgba(224,164,88,.15)" : C.panel2,
+              border: `2px solid ${active ? C.amber : C.steel}`,
+              color: active ? C.amber : C.textDim,
+            }}>
+              <div style={{ fontSize: 14 }}>{t.icon}</div>{t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {sub === "draw" && (
+        <Panel>
+          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
+            เปิดครั้งละ {CARDS_PER_STAFF_PULL} ใบ · ใช้สิทธิ์ฟรีก่อน แล้วค่อยใช้ตั๋ว · ยังซื้อตั๋วเติมไม่ได้
+          </div>
+          <button type="button" disabled={!canPull} onClick={onPull} style={{ ...btnStyle(canPull ? C.amber : "#2b332f", canPull ? "#0b2318" : C.textDim), width: "100%" }}>
+            {canPull ? `เปิดการ์ด ${CARDS_PER_STAFF_PULL} ใบ` : "ไม่มีสิทธิ์เปิดวันนี้"}
+          </button>
+          {lastPull.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <SectionLabel sub={`ล่าสุด · ยังไม่ได้ใช้${lastPull.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>ผลการเปิด</SectionLabel>
+              <div style={{ ...CARD_LIST_SCROLL, gap: 6 }}>
+                {lastPull.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHire} {...staffCardLockInfo(career, card)} />)}
+              </div>
+            </div>
+          )}
+        </Panel>
+      )}
+
+      {sub === "bag" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {bagByType.map(({ type, groups: typeGroups, total }) => (
+            <Panel key={type}>
+              <SectionLabel sub={`${total} ใบ`}>{STAFF_CARD_TYPE_ICON[type]} {STAFF_CARD_TYPE_TH[type]}</SectionLabel>
+              {typeGroups.length === 0 ? (
+                <div style={{ fontSize: 11.5, color: C.textDim }}>ยังไม่มีการ์ด</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {typeGroups.map((g) => (
+                    <div key={`${g.type}_${g.stars}`}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                        <StarGlyphs count={g.stars} size={9} />
+                        <span style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT }}>×{g.count}</span>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {g.cards.slice(0, 3).map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHire} {...staffCardLockInfo(career, card)} />)}
+                        {g.count > 3 && <div style={{ fontSize: 10, color: C.textDim }}>+ อีก {g.count - 3} ใบ</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Panel>
+          ))}
+        </div>
+      )}
+
+      {sub === "merge" && (
+        <>
+          <Panel style={{ border: `1px solid ${C.purple}` }}>
+            <SectionLabel style={{ color: C.purple }} sub="เปิดสวิตช์ tier ที่อยากให้รวมเองหลังเปิดการ์ดทุกครั้ง — 5★-7★ ต้องกดรวมเองเท่านั้น">🤖 รวมการ์ดอัตโนมัติ</SectionLabel>
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              {[1, 2, 3, 4].map((s) => {
+                const on = !!(career.autoMergeTiers || {})[s];
+                return (
+                  <button key={s} type="button" onClick={() => onToggleAutoTier(s)} style={{
+                    flex: 1, padding: "8px 4px", borderRadius: 8, cursor: "pointer", fontSize: 10.5, fontWeight: 700,
+                    border: `2px solid ${on ? C.purple : C.steel}`,
+                    background: on ? "rgba(157,111,224,.15)" : C.panel2,
+                    color: on ? C.purple : C.textDim,
+                  }}>{s}★→{s + 1}★<div style={{ fontSize: 8.5, fontWeight: 400, marginTop: 2 }}>{on ? "เปิด ✓" : "ปิด"}</div></button>
+                );
+              })}
+            </div>
+            <button type="button" onClick={onAutoMerge} style={{ ...btnStyle(C.purple, "#fff"), width: "100%" }}>✨ รวมอัตโนมัติตอนนี้ (ทุกชุดที่ครบใน tier ที่เปิด)</button>
+            <div style={{ fontSize: 9.5, color: C.textDim, marginTop: 6 }}>ระบบจะรวมซ้ำจนไม่เหลือชุดครบ {MERGE_CARD_COUNT} ใบ แล้วสรุปผลทั้งหมดบนหน้าจอ</div>
+          </Panel>
+
+          <Panel>
+            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
+              ใช้การ์ดประเภทเดียวกัน ดาวเดียวกัน <b style={{ color: C.chalk }}>{MERGE_CARD_COUNT} ใบ</b> รวมกัน — ลุ้นเลื่อน 1 ดาว (ไม่ 100%) · 7★ รวมต่อไม่ได้
+            </div>
+            {groups.filter((g) => g.count >= MERGE_CARD_COUNT && g.stars < 7).length === 0 ? (
+              <div style={{ fontSize: 12, color: C.textDim }}>ยังไม่มีชุดที่รวมได้ (ต้องมีครบ {MERGE_CARD_COUNT} ใบ)</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {groups.filter((g) => g.count >= MERGE_CARD_COUNT && g.stars < 7).map((g) => (
+                  <div key={`${g.type}_${g.stars}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700 }}>{STAFF_CARD_TYPE_TH[g.type]} {g.stars}★ → {g.stars + 1}★</div>
+                      <div style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT }}>มี {g.count} ใบ · โอกาส {Math.round(mergeSuccessChance(g.stars) * 100)}%</div>
+                    </div>
+                    <button type="button" onClick={() => onMerge(g.type, g.stars)} style={{ ...btnStyle(C.purple, "#fff"), width: "auto", padding: "7px 12px", fontSize: 10.5 }}>รวม</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ============================== CLUB PROFILE ============================== */
+function ProfileView({ career, uTeam, standings }) {
+  const history = career.seasonHistory || [];
+  const trophies = career.trophyCabinet || [];
+  const posNow = standings.findIndex((s) => s.team.id === uTeam.id) + 1;
+  const rowNow = standings.find((s) => s.team.id === uTeam.id);
+  const mgr = uTeam.manager;
+
+  // all-time aggregates (จบไปแล้ว + ฤดูกาลปัจจุบัน)
+  const agg = history.reduce((a, h) => ({
+    w: a.w + h.w, d: a.d + h.d, l: a.l + h.l, gf: a.gf + h.gf, ga: a.ga + h.ga,
+  }), { w: rowNow?.w ?? 0, d: rowNow?.d ?? 0, l: rowNow?.l ?? 0, gf: rowNow?.gf ?? 0, ga: rowNow?.ga ?? 0 });
+  const bestFinish = history.length
+    ? history.reduce((best, h) => {
+        if (!best) return h;
+        if (h.division < best.division) return h;
+        if (h.division === best.division && h.pos < best.pos) return h;
+        return best;
+      }, null)
+    : null;
+
+  // group trophies by type
+  const trophyGroups = Object.keys(TROPHY_DEFS)
+    .map((id) => ({ id, def: TROPHY_DEFS[id], items: trophies.filter((t) => t.id === id) }))
+    .filter((g) => g.items.length > 0);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel accent={C.gold}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <ClubBadge team={uTeam} size={52} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 800, fontFamily: DISPLAY_FONT }}>{uTeam.name}</div>
+            <div style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT }}>
+              ฤดูกาลที่ {career.season} · {uTeam.division === 0 ? "Master League" : "Challenger League"} · อันดับ #{posNow || "-"}
+            </div>
+            {mgr && <div style={{ fontSize: 10.5, color: C.purple, marginTop: 2 }}>ผจก. {mgr.name}{mgr.cardStars ? ` (${mgr.cardStars}★)` : ""}</div>}
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginTop: 12 }}>
+          {[
+            ["ถ้วยรางวัล", trophies.length, C.gold],
+            ["ฤดูกาลที่เล่น", career.season, C.chalk],
+            ["แฟนบอล", (career.fanBase || 0).toLocaleString(), C.amber],
+            ["งบ", formatMoney(career.budget), C.good],
+          ].map(([label, val, color]) => (
+            <div key={label} style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}`, textAlign: "center" }}>
+              <div style={{ fontSize: 8.5, color: C.textDim }}>{label}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color, fontFamily: MONO_FONT, marginTop: 2 }}>{val}</div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel style={{ border: `1px solid ${C.gold}` }}>
+        <SectionLabel style={{ color: C.gold }} sub={trophies.length ? `${trophies.length} ใบ` : undefined}>🏆 ตู้โชว์ถ้วยรางวัล</SectionLabel>
+        {trophyGroups.length === 0 ? (
+          <div style={{ fontSize: 11.5, color: C.textDim }}>ยังไม่มีถ้วยรางวัล — คว้าแชมป์ลีก, Socker Cup หรือ Champ Master เพื่อสะสม</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {trophyGroups.map(({ id, def, items }) => (
+              <div key={id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${def.color}44` }}>
+                <div style={{ fontSize: 22, width: 32, textAlign: "center" }}>{def.icon}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: def.color }}>{def.label} {items.length > 1 ? `×${items.length}` : ""}</div>
+                  <div style={{ fontSize: 9.5, color: C.textDim, fontFamily: MONO_FONT }}>ฤดูกาล {items.map((t) => t.season).join(", ")}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+
+      <Panel>
+        <SectionLabel sub="รวมทุกฤดูกาล (นับฤดูกาลปัจจุบันด้วย)">สถิติตลอดกาล</SectionLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+          {[
+            ["ชนะ", agg.w, C.good], ["เสมอ", agg.d, C.amber], ["แพ้", agg.l, C.crimson],
+            ["ยิงได้", agg.gf, C.chalk], ["เสีย", agg.ga, C.textDim], ["ผลต่าง", (agg.gf - agg.ga > 0 ? "+" : "") + (agg.gf - agg.ga), agg.gf - agg.ga >= 0 ? C.good : C.crimson],
+          ].map(([label, val, color]) => (
+            <div key={label} style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}`, textAlign: "center" }}>
+              <div style={{ fontSize: 8.5, color: C.textDim }}>{label}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color, fontFamily: MONO_FONT }}>{val}</div>
+            </div>
+          ))}
+        </div>
+        {bestFinish && (
+          <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 8 }}>
+            ผลงานดีที่สุด: อันดับ {bestFinish.pos} {bestFinish.division === 0 ? "Master" : "Challenger"} League (ฤดูกาล {bestFinish.season})
+          </div>
+        )}
+      </Panel>
+
+      <Panel style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: 14, paddingBottom: 0 }}><SectionLabel sub={history.length ? `${history.length} ฤดูกาล` : undefined}>📜 สถิติฤดูกาลที่ผ่านมา</SectionLabel></div>
+        {history.length === 0 ? (
+          <div style={{ fontSize: 11.5, color: C.textDim, padding: "0 14px 14px" }}>ยังไม่มีฤดูกาลที่จบ — ข้อมูลจะบันทึกอัตโนมัติเมื่อจบแต่ละฤดูกาล</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
+            <thead><tr style={{ color: C.textDim, textAlign: "left" }}>
+              <th style={{ padding: "6px 8px" }}>ซีซัน</th><th style={{ padding: "6px 4px" }}>ลีก</th>
+              <th style={{ padding: "6px 4px", textAlign: "center" }}>อันดับ</th>
+              <th style={{ padding: "6px 4px", textAlign: "center" }}>W-D-L</th>
+              <th style={{ padding: "6px 4px", textAlign: "center" }}>GF-GA</th>
+              <th style={{ padding: "6px 4px", textAlign: "center" }}>Pts</th>
+              <th style={{ padding: "6px 8px" }}>ดาวซัลโว</th>
+            </tr></thead>
+            <tbody style={{ fontFamily: MONO_FONT }}>
+              {[...history].reverse().map((h) => (
+                <tr key={h.season} style={{ borderTop: `1px solid ${C.steel}`, background: h.pos === 1 ? "rgba(212,175,55,.08)" : "transparent" }}>
+                  <td style={{ padding: "5px 8px" }}>S{h.season}{h.trophies?.length ? " 🏆" : ""}</td>
+                  <td style={{ padding: "5px 4px", fontSize: 9.5 }}>{h.division === 0 ? "Master" : "Chall."}</td>
+                  <td style={{ textAlign: "center", color: h.pos <= 3 ? C.gold : C.chalk, fontWeight: h.pos === 1 ? 700 : 400 }}>#{h.pos}</td>
+                  <td style={{ textAlign: "center" }}>{h.w}-{h.d}-{h.l}</td>
+                  <td style={{ textAlign: "center" }}>{h.gf}-{h.ga}</td>
+                  <td style={{ textAlign: "center", fontWeight: 700 }}>{h.pts}</td>
+                  <td style={{ padding: "5px 8px", fontSize: 9.5, fontFamily: "'Segoe UI', sans-serif" }}>{h.topScorerName ? `${h.topScorerName.split(" ")[1] || h.topScorerName} (${h.topScorerGoals})` : "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+/* ============================== MORE MENU ============================== */
+function MoreView({ setTab, marketOpen }) {
   const items = [
-    { id: "dashboard", label: "หน้าหลัก", icon: "🏟" },
-    { id: "squad", label: "นักเตะ", icon: "👕" },
-    { id: "tactics", label: "แทคติก", icon: "📋" },
-    { id: "training", label: "ฝึกซ้อม", icon: "🏋️" },
-    { id: "academy", label: "อคาเดมี", icon: "🌱" },
-    { id: "table", label: "ตาราง", icon: "📊" },
-    { id: "market", label: "ตลาด", icon: marketOpen ? "🟢" : "💱" },
-    { id: "settings", label: "ตั้งค่า", icon: "⚙" },
+    { id: "profile", label: "โปรไฟล์สโมสร", desc: "ถ้วยรางวัล · สถิติทุกฤดูกาล", icon: "🏆" },
+    { id: "club", label: "สโมสร", desc: "แฟนบอล · สปอนเซอร์ · การเงิน", icon: "🏟️" },
+    { id: "staffcards", label: "การ์ดสตาฟ", desc: "สุ่ม · กระเป๋า · รวมดาว", icon: "🎴" },
+    { id: "coach", label: "ห้องโค้ช", desc: "ปรับ/เปลี่ยนโค้ชทุกตำแหน่ง", icon: "🧑‍🏫" },
+    { id: "medical", label: "ห้องพยาบาล", desc: "บาดเจ็บ · หมอ/นักกายภาพ", icon: "🏥" },
+    { id: "shop", label: "ร้านค้า", desc: "Socker Coin + ไอเทม", icon: "🛒" },
+    { id: "table", label: "ตารางลีกเต็ม", desc: "โปรแกรม + คะแนนทุกทีม", icon: "📊" },
+    { id: "training", label: "ฝึกซ้อม", desc: "แผนฝึก + อัปเกรดสนาม", icon: "🏋️" },
+    { id: "academy", label: "อคาเดมี", desc: "ดาวรุ่ง + แมวมองเยาวชน", icon: "🌱" },
+    { id: "settings", label: "ตั้งค่า", desc: "บันทึก · รีเซ็ต · ออนไลน์", icon: "⚙" },
   ];
   return (
-    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: `linear-gradient(0deg, ${C.panel2}, ${C.panel2}ee)`, backdropFilter: "blur(6px)", borderTop: `1px solid ${C.steel}`, display: "flex", overflowX: "auto", zIndex: 20, boxShadow: "0 -2px 10px rgba(0,0,0,.3)" }}>
-      {items.map((it) => (
-        <button key={it.id} onClick={() => setTab(it.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, background: "transparent", border: "none", color: tab === it.id ? C.amber : C.textDim, cursor: "pointer", padding: "7px 10px", minWidth: 62, flexShrink: 0 }}>
-          <span style={{ fontSize: 17 }}>{it.icon}</span>
-          <span style={{ fontSize: 9, whiteSpace: "nowrap" }}>{it.label}</span>
-        </button>
-      ))}
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Panel>
+        <SectionLabel>เมนูเพิ่มเติม</SectionLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {items.map((it) => (
+            <button key={it.id} type="button" onClick={() => setTab(it.id)} style={{
+              textAlign: "left", padding: "12px 10px", borderRadius: 8, cursor: "pointer",
+              background: C.panel2, border: `1px solid ${C.steel}`, color: C.chalk,
+            }}>
+              <div style={{ fontSize: 18, marginBottom: 4 }}>{it.icon}</div>
+              <div style={{ fontSize: 12, fontWeight: 700 }}>{it.label}</div>
+              <div style={{ fontSize: 9, color: C.textDim, marginTop: 2 }}>{it.desc}</div>
+            </button>
+          ))}
+        </div>
+      </Panel>
+      {marketOpen && (
+        <div style={{ fontSize: 10, color: C.good, textAlign: "center" }}>🟢 ตลาดซื้อขายเปิดอยู่</div>
+      )}
+      <div style={{ fontSize: 9, color: C.textDim, textAlign: "center", fontFamily: MONO_FONT, opacity: 0.7 }}>
+        v{GAME_VERSION} · save {SAVE_VERSION}
+      </div>
     </div>
+  );
+}
+
+/* ============================== BOTTOM NAV (FM Mobile) ============================== */
+function BottomNav({ tab, setTab, marketOpen, marketSub, setMarketSub }) {
+  const items = [
+    { id: "dashboard", label: "หน้าหลัก", icon: "⌂" },
+    { id: "manager", label: "ผจก.", icon: "◆" },
+    { id: "squad", label: "ทีม", icon: "👕" },
+    { id: "tactics", label: "แทคติก", icon: "☰" },
+    { id: "market", label: "ตลาด", icon: marketOpen ? "●" : "¤", dot: marketOpen },
+    { id: "more", label: "เพิ่มเติม", icon: "⋯", active: ["table", "training", "academy", "settings", "shop", "staffcards", "coach", "medical", "club", "profile"].includes(tab) },
+  ];
+  return (
+    <nav style={{
+      position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 20,
+      background: C.pitch, borderTop: `1px solid ${C.fmBorder}`,
+      display: "flex", justifyContent: "space-around", padding: "4px 0 max(4px, env(safe-area-inset-bottom))",
+    }}>
+      {items.map((it) => {
+        const active = tab === it.id || it.active;
+        return (
+          <button key={it.id} type="button" onClick={() => {
+            if (it.id === "market") {
+              setTab("market");
+              if (tab !== "market") setMarketSub("trade");
+            } else {
+              setTab(it.id);
+            }
+          }} style={{
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+            background: "transparent", border: "none", cursor: "pointer", padding: "6px 8px", minWidth: 52, flex: 1,
+            color: active ? C.amber : C.textDim,
+          }}>
+            <span style={{ fontSize: 16, lineHeight: 1, color: it.dot ? C.good : undefined }}>{it.icon}</span>
+            <span style={{ fontSize: 9, fontWeight: active ? 700 : 500, fontFamily: FM_FONT }}>{it.label}</span>
+            {active && <span style={{ width: 4, height: 4, borderRadius: 2, background: C.amber }} />}
+          </button>
+        );
+      })}
+    </nav>
   );
 }

@@ -10,6 +10,7 @@ import {
   createShardWithUserClub,
 } from "@siam/game-engine";
 import { prisma } from "../db.js";
+import { reclaimInactiveLegends } from "./legendService.js";
 
 function parseManager(json) {
   if (!json) return null;
@@ -330,6 +331,8 @@ export async function runDayTickAll() {
   const results = [];
   for (const { id } of shards) {
     results.push(await runDayTickForShard(id));
+    const reclaim = await reclaimInactiveLegends(id);
+    if (reclaim.reclaimed) results[results.length - 1].legendsReclaimed = reclaim.reclaimed;
   }
   return results;
 }

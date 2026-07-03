@@ -7,3 +7,6 @@ build/
 .DS_Store
 server/prisma/dev.db
 server/prisma/dev.db-journal
+server/dev.db
+server/dev.db-journal
+cloudflared-config.yml

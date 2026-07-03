@@ -1,0 +1,161 @@
+================================================================================
+  THE SOCKER MANAGER — คู่มือ Home Server (คอมเป็น API ฟรี)
+================================================================================
+
+เป้าหมาย: หน้าเกมอยู่ Vercel (ฟรี) + API รันบนคอมคุณ + เปิดให้คนนอกเข้าผ่าน Cloudflare Tunnel
+ระบบ live match ไม่เกี่ยวกับเอกสารนี้ — Claude Code ทำแยก
+
+--------------------------------------------------------------------------------
+ ภาพรวม
+--------------------------------------------------------------------------------
+
+  ผู้เล่น → www.thesockermanager.com (Vercel)
+                ↓ VITE_API_URL
+           api.thesockermanager.com (Cloudflare Tunnel ฟรี)
+                ↓
+           คอมคุณ :3001 (Express + SQLite)
+
+  ค่าใช้จ่าย: ~ฟรี + ค่าไฟ (ถ้าเปิดคอม 24/7)
+  พอมีบริจาค: ย้าย API ไป Render ตาม DEPLOY.txt — เปลี่ยนแค่ VITE_API_URL
+
+--------------------------------------------------------------------------------
+ ไฟล์ที่ใช้
+--------------------------------------------------------------------------------
+
+  Start-Home-Server.bat   เปิด API production (port 3001)
+  Start-Home-Tunnel.bat   เปิด Cloudflare Tunnel (ต้องติดตั้ง cloudflared)
+  Run-Game-Cron.bat       จำลองวันในลีก (day-tick) — ใช้กับ Task Scheduler
+  Run-Game-Cron.bat stake-tick   แข่ง Stake League (ถ้าใช้)
+  server/.env             ตั้งค่า secret, CORS, Supabase
+  server/dev.db           ฐานข้อมูล SQLite — BACKUP เป็นประจำ!
+
+--------------------------------------------------------------------------------
+ ขั้นที่ 1 — ตั้งค่า API บนคอม
+--------------------------------------------------------------------------------
+
+  1. ดับเบิลคลิก Start-Home-Server.bat
+     (ครั้งแรกจะ copy server/.env จาก .env.home-server.example)
+
+  2. เปิด server/.env แล้วแก้:
+     - CRON_SECRET = ค่าสุ่มยาวๆ (อย่างน้อย 32 ตัวอักษร)
+     - CORS_ORIGINS = URL หน้าเกมบน Vercel
+
+  3. ทดสอบในเบราว์เซอร์: http://localhost:3001/health
+     ต้องเห็น {"ok":true}
+
+  4. เล่น dev ในเครื่อง: Play-Game.bat (client + API พร้อมกัน)
+
+--------------------------------------------------------------------------------
+ ขั้นที่ 2 — Cloudflare Tunnel (ให้คนนอกเรียก API ได้)
+--------------------------------------------------------------------------------
+
+  1. ติดตั้ง cloudflared:
+       winget install Cloudflare.cloudflared
+
+  2. Login Cloudflare (โดเมนต้องอยู่ใน Cloudflare):
+       cloudflared tunnel login
+
+  3. สร้าง tunnel:
+       cloudflared tunnel create the-socker-manager
+
+  4. ผูก DNS (ตัวอย่าง subdomain api):
+       cloudflared tunnel route dns the-socker-manager api.thesockermanager.com
+
+  5. คัดลอก cloudflared-config.example.yml → cloudflared-config.yml
+     แก้ credentials-file ให้ชี้ไฟล์ .json ที่ได้จากขั้น 3
+
+  6. เปิด 2 หน้าต่างค้างไว้:
+       หน้าต่าง A: Start-Home-Server.bat
+       หน้าต่าง B: Start-Home-Tunnel.bat
+
+  7. ทดสอบ: https://api.thesockermanager.com/health
+
+  ทางลัดทดสอบ (ไม่ต้องมีโดเมน): cloudflared tunnel --url http://localhost:3001
+  จะได้ URL ชั่วคราวแบบ trycloudflare.com
+
+--------------------------------------------------------------------------------
+ ขั้นที่ 3 — ชี้ Vercel มาที่ API บ้าน
+--------------------------------------------------------------------------------
+
+  1. Vercel → Project → Settings → Environment Variables
+     VITE_API_URL = https://api.thesockermanager.com
+
+  (ถ้าใช้ Supabase Auth เพิ่ม)
+     VITE_SUPABASE_URL = ...
+     VITE_SUPABASE_ANON_KEY = ...
+
+  2. Redeploy หน้าเว็บ
+
+  3. เปิด www.thesockermanager.com → โหมดออนไลน์ควรเรียก API ที่คอมคุณ
+
+--------------------------------------------------------------------------------
+ ขั้นที่ 4 — Cron เกมเดินวัน (แทน Render cron)
+--------------------------------------------------------------------------------
+
+  API มี stake-tick ใน process ทุก 30 วิอยู่แล้ว
+  day-tick ต้องตั้ง Task Scheduler:
+
+  A) เปิด Task Scheduler → Create Task
+     - Trigger: ทุก 1 ชั่วโมง
+     - Action: Start a program
+       Program: C:\...\Made your club\Run-Game-Cron.bat
+       Arguments: day-tick
+       Start in: C:\...\Made your club
+
+  B) (ทางเลือก) Stake ทุก 10 นาที:
+       Arguments: stake-tick
+
+  C) ทดสอบมือ:
+       Run-Game-Cron.bat day-tick
+       Run-Game-Cron.bat stake-tick
+       Run-Game-Cron.bat all
+
+--------------------------------------------------------------------------------
+ Auth — เลือก 1 แบบ
+--------------------------------------------------------------------------------
+
+  แบบ A — Dev auth (ทดสอบเร็ว)
+    ไม่ใส่ SUPABASE_* ใน server/.env
+    ลงทะเบียนผ่าน API /api/auth/dev-register
+
+  แบบ B — Supabase Free (แนะนำถ้าเปิดให้คนจริง)
+    server/.env: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
+    Vercel: VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
+
+--------------------------------------------------------------------------------
+ Backup & ความปลอดภัย
+--------------------------------------------------------------------------------
+
+  - สำรอง server/dev.db ทุกวัน ( copy ไป OneDrive / USB )
+  - อย่า commit server/.env ขึ้น Git
+  - ปิดคอม = เกมออนไลน์หยุด (sandbox ในเบราว์เซอร์ยังเล่นได้)
+  - Windows: ตั้ง Power Plan ไม่ให้ sleep ขณะเป็น server
+
+--------------------------------------------------------------------------------
+ พอมีบริจาค — ย้ายไป cloud
+--------------------------------------------------------------------------------
+
+  1. สร้าง Render จาก render.yaml (ดู DEPLOY.txt)
+  2. ย้าย DB: SQLite → Supabase PostgreSQL (หรือใช้ Supabase ตั้งแต่แรก)
+  3. Vercel เปลี่ยน VITE_API_URL → https://xxx.onrender.com
+  4. ปิด Start-Home-Server + Tunnel บนคอม
+
+  โค้ดเกมไม่ต้องเขียนใหม่ — เปลี่ยน env อย่างเดียว
+
+--------------------------------------------------------------------------------
+ แก้ปัญหา
+--------------------------------------------------------------------------------
+
+  CORS error บน Vercel
+    → เพิ่ม URL หน้าเว็บใน CORS_ORIGINS ใน server/.env แล้ว restart API
+
+  /health ไม่ขึ้น
+    → ตรวจ Start-Home-Server.bat ยังเปิดอยู่, port 3001 ไม่ถูกโปรแกรมอื่นจอง
+
+  Tunnel ไม่ทำงาน
+    → cloudflared tunnel login ใหม่, ตรวจ cloudflared-config.yml
+
+  Cron 403 Forbidden
+    → CRON_SECRET ใน server/.env ต้องตรงกับที่ Run-Game-Cron.bat ใช้
+
+================================================================================
