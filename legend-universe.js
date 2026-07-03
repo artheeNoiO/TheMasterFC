@@ -167,7 +167,7 @@ export const LEGEND_PLAYERS = [
   { legendId: "sakala", name: "Bukayo Sakala", position: "MF", rating: 86, potential: 91, age: 23, teamKey: "biggun", leagueId: "england", acquireCost: 36_000_000 },
   { legendId: "haalande", name: "Erling Haalande", position: "FW", rating: 92, potential: 95, age: 24, teamKey: "mooncity", leagueId: "england", acquireCost: 50_000_000 },
   { legendId: "debruynez", name: "Kevin De Bruynez", position: "MF", rating: 89, potential: 89, age: 33, teamKey: "mooncity", leagueId: "england", acquireCost: 30_000_000 },
-  { legendId: "sonheung", name: "Son Heung-Mini", position: "FW", rating: 84, potential: 84, age: 32, teamKey: "lilywhite", leagueId: "england", acquireCost: 24_000_000 },
+  { legendId: "sonheung", name: "Son Heung-Min", nationality: "KR", position: "FW", rating: 84, potential: 84, age: 32, teamKey: "lilywhite", leagueId: "england", acquireCost: 24_000_000 },
   { legendId: "isakz", name: "Alexander Isakz", position: "FW", rating: 83, potential: 88, age: 25, teamKey: "magpie", leagueId: "england", acquireCost: 28_000_000 },
   // Spain
   { legendId: "mbappee", name: "Kylian Mbappee", position: "FW", rating: 92, potential: 95, age: 26, teamKey: "whobear", leagueId: "spain", acquireCost: 52_000_000 },
@@ -192,9 +192,9 @@ export const LEGEND_PLAYERS = [
   { legendId: "neymarj", name: "Neymar Jr.", position: "FW", rating: 84, potential: 84, age: 33, teamKey: "hilal", leagueId: "saudi", acquireCost: 22_000_000 },
   { legendId: "benzema", name: "Karim Benzemaa", position: "FW", rating: 86, potential: 86, age: 37, teamKey: "ittihad", leagueId: "saudi", acquireCost: 20_000_000 },
   // Thailand
-  { legendId: "chanathip", name: "ชนาธิป สรงกรานต์", position: "MF", rating: 78, potential: 80, age: 31, teamKey: "buriram", leagueId: "thailand", acquireCost: 12_000_000 },
-  { legendId: "supachai", name: "ศุภชัย ใจเด็ด", position: "FW", rating: 76, potential: 82, age: 26, teamKey: "muangthong", leagueId: "thailand", acquireCost: 10_000_000 },
-  { legendId: "teerasil", name: "ธีรศิลป์ แดงดา", position: "FW", rating: 77, potential: 78, age: 31, teamKey: "port", leagueId: "thailand", acquireCost: 11_000_000 },
+  { legendId: "chanathip", name: "Chanathip Songkran", nationality: "TH", position: "MF", rating: 78, potential: 80, age: 31, teamKey: "buriram", leagueId: "thailand", acquireCost: 12_000_000 },
+  { legendId: "supachai", name: "Supachai Jaided", nationality: "TH", position: "FW", rating: 76, potential: 82, age: 26, teamKey: "muangthong", leagueId: "thailand", acquireCost: 10_000_000 },
+  { legendId: "teerasil", name: "Teerasil Dangda", nationality: "TH", position: "FW", rating: 77, potential: 78, age: 31, teamKey: "port", leagueId: "thailand", acquireCost: 11_000_000 },
 ];
 
 export function getLeagueTeams(leagueId) {
@@ -207,6 +207,15 @@ export function getLegendsForLeague(leagueId) {
 
 export function getLegendById(legendId) {
   return LEGEND_PLAYERS.find((p) => p.legendId === legendId);
+}
+
+const LEAGUE_DEFAULT_NAT = {
+  england: "EN", spain: "ES", france: "FR", germany: "DE", portugal: "PT", saudi: "SA", thailand: "TH",
+};
+
+export function legendNationality(def) {
+  if (!def) return "EN";
+  return def.nationality || LEAGUE_DEFAULT_NAT[def.leagueId] || "EN";
 }
 
 export function getLegendsForTeam(leagueId, teamKey) {

@@ -37,3 +37,18 @@ export function getPlayerStarProfile(p) {
   const isWonderkid = age <= 23 && (potential - rating) >= 10 && potStars >= 5;
   return { current, potential: potStars, isWonderkid, rating, potential };
 }
+
+/** ตัวคูณค่าเหนื่อยรายวันตามดาว — 1–4★ จ่ายต่ำ, 6–7★ ใกล้เต็ม */
+export const STAR_WAGE_MULT = {
+  1: 0.28,
+  2: 0.38,
+  3: 0.48,
+  4: 0.60,
+  5: 0.82,
+  6: 1.0,
+  7: 1.12,
+};
+
+export function starWageMultiplier(rating) {
+  return STAR_WAGE_MULT[starsFromRating(rating)] ?? 1;
+}

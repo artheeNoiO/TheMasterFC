@@ -8,6 +8,28 @@ Game release version (`GAME_VERSION`) lives in `game-version.js`. Save migration
 
 _(nothing yet)_
 
+## 0.9.1 (2026-07-03)
+
+**GAME_VERSION:** `0.9.1` · **SAVE_VERSION:** `8` (migrations v6–v8 on load)
+
+### New
+- **สัญชาตินักเตะ** — แสดงใต้ชื่อในแท็บทีม · ชื่อไทย romanized (เช่น Teetawat) · legends อัปเดตสัญชาติ
+- **ภาษาไทย / English** — สลับใน Settings (Nav, Squad, Settings, ป้ายนักเตะ)
+- **`player-nationalities.js` + `game-i18n.js`** — แหล่งข้อมูลสัญชาติและ UI strings
+
+### Changed — เศรษฐกิจ & ค่าเหนื่อย
+- ลดค่าเหนื่อยรายวัน (mult 2.0) · **1–4★ จ่ายต่ำ** · ตัวสำรอง 55% / โรตейชัน 78%
+- สปอนเซอร์ + merch + รายได้แมตช์สูงขึ้น
+- วันพักฟื้นจริง — งดซ้อมรายตำแหน่ง · ตัวจริงหลังแข่งพักอัตโนมัติ
+
+### Changed — UI สควอด
+- ตำแหน่ง (ST/MC/…) หน้าค่า OVR · สัญชาติใต้ชื่อ · เอา badge สัญชาติซ้ำออก
+
+### Save migrations
+- **v6** — nationality + Latin names
+- **v7** — economy rebalance
+- **v8** — star-tier wages
+
 ## 0.9.0-stable — baseline (2026-07-03)
 
 **เวอร์ชันหลัก + แช่ (production & rollback baseline).**

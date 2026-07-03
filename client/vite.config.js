@@ -23,6 +23,8 @@ export default defineConfig({
       "@tracker": path.resolve(root, "../tracker-pitch.jsx"),
       "@worldcup": path.resolve(root, "../world-cup-event.js"),
       "@roadmap": path.resolve(root, "../features-roadmap.js"),
+      "@nat": path.resolve(root, "../player-nationalities.js"),
+      "@i18n": path.resolve(root, "../game-i18n.js"),
     },
   },
 });

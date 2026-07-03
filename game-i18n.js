@@ -1,0 +1,98 @@
+/** UI strings — Thai / English */
+
+export const UI_LANGS = [
+  { id: "th", label: "ไทย" },
+  { id: "en", label: "English" },
+];
+
+const STRINGS = {
+  th: {
+    "settings.language": "ภาษาในเกม",
+    "settings.languageHint": "ชื่อนักเตะแสดงเป็นตัวอักษรอังกฤษเสมอ · สัญชาติแสดงตามภาษาที่เลือก",
+    "settings.careerInfo": "ข้อมูลอาชีพ",
+    "settings.sandboxVsOnline": "โลกจำลอง vs ออนไลน์",
+    "settings.newCareer": "เริ่มอาชีพใหม่",
+    "settings.newCareerWarn": "การเริ่มใหม่จะลบข้อมูลอาชีพปัจจุบันทั้งหมด",
+    "settings.resetBtn": "ล้างข้อมูล / เริ่มอาชีพใหม่",
+    "settings.confirmDelete": "ยืนยันลบ",
+    "settings.cancel": "ยกเลิก",
+    "nav.dashboard": "หน้าหลัก",
+    "nav.manager": "ผจก.",
+    "nav.squad": "ทีม",
+    "nav.tactics": "แทคติก",
+    "nav.market": "ตลาด",
+    "nav.more": "เพิ่มเติม",
+    "squad.members": "สมาชิกทีม",
+    "squad.people": "คน",
+    "squad.fit": "พร้อมเล่น",
+    "squad.injured": "บาดเจ็บ",
+    "squad.xi": "ตัวจริง",
+    "squad.bench": "ตัวสำรองสูงสุด",
+    "squad.subsPerMatch": "เปลี่ยนได้",
+    "squad.perMatch": "นัด",
+    "squad.cannotPlay": "ยังลงแข่งไม่ได้",
+    "player.nationality": "สัญชาติ",
+    "player.age": "อายุ",
+    "player.altPos": "รอง",
+    "player.xiBadge": "ตัวจริง",
+    "player.injuredBadge": "เจ็บ",
+    "player.days": "วัน",
+    "player.contract": "สัญญา",
+    "player.expired": "หมดอายุ",
+    "player.sell": "ขาย",
+    "player.renew": "ต่อสัญญา",
+    "player.legend": "LEGEND",
+    "mode.sandbox": "โลกจำลอง",
+    "mode.online": "ออนไลน์",
+    "mode.sandboxFull": "โลกจำลอง (ซิงเกิล)",
+  },
+  en: {
+    "settings.language": "Game language",
+    "settings.languageHint": "Player names always use Latin letters · nationality label follows language",
+    "settings.careerInfo": "Career info",
+    "settings.sandboxVsOnline": "Sandbox vs online",
+    "settings.newCareer": "Start new career",
+    "settings.newCareerWarn": "This will delete your current career save",
+    "settings.resetBtn": "Reset / new career",
+    "settings.confirmDelete": "Confirm delete",
+    "settings.cancel": "Cancel",
+    "nav.dashboard": "Home",
+    "nav.manager": "Mgr",
+    "nav.squad": "Squad",
+    "nav.tactics": "Tactics",
+    "nav.market": "Market",
+    "nav.more": "More",
+    "squad.members": "Squad size",
+    "squad.people": "",
+    "squad.fit": "Available",
+    "squad.injured": "Injured",
+    "squad.xi": "Starting XI",
+    "squad.bench": "Bench max",
+    "squad.subsPerMatch": "Subs per match",
+    "squad.perMatch": "",
+    "squad.cannotPlay": "Cannot field a team yet",
+    "player.nationality": "Nationality",
+    "player.age": "Age",
+    "player.altPos": "Alt",
+    "player.xiBadge": "XI",
+    "player.injuredBadge": "Inj",
+    "player.days": "d",
+    "player.contract": "Contract",
+    "player.expired": "Expired",
+    "player.sell": "Sell",
+    "player.renew": "Renew",
+    "player.legend": "LEGEND",
+    "mode.sandbox": "Sandbox",
+    "mode.online": "Online",
+    "mode.sandboxFull": "Sandbox (offline)",
+  },
+};
+
+export function t(lang, key) {
+  const L = lang === "en" ? "en" : "th";
+  return STRINGS[L][key] ?? STRINGS.th[key] ?? key;
+}
+
+export function resolveUiLang(profile) {
+  return profile?.uiLang === "en" ? "en" : "th";
+}

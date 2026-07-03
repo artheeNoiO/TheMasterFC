@@ -1,4 +1,5 @@
 import { getLegendsForTeam, LEGEND_PLAYERS, LEGEND_TEAMS } from "../../../legend-universe.js";
+import { starWageMultiplier } from "../../../player-stars.js";
 import { genPlayer, genSquad, clamp, rand } from "./players.js";
 import { bumpAttrs, recomputeDerived } from "./players.js";
 
@@ -27,7 +28,7 @@ export function buildLegendPlayer(def, teamId, homeTeamId, startDay, wageFn) {
   forcePlayerRating(p, def.rating);
   p.potential = def.potential;
   p.value = def.acquireCost;
-  p.wage = wageFn ? wageFn(p.rating) : Math.round((p.rating * p.rating * 5.5) / 100) * 100;
+  p.wage = wageFn ? wageFn(p.rating) : Math.max(100, Math.round(((p.rating * p.rating * 2) / 100) * starWageMultiplier(p.rating) / 100) * 100);
   p.legendLeagueId = def.leagueId;
   p.lastOwnerActivityDay = startDay || 1;
   return p;
