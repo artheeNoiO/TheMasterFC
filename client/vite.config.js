@@ -29,6 +29,7 @@ export default defineConfig({
       "@staffguide": path.resolve(root, "../staff-guide.js"),
       "@coach": path.resolve(root, "../coach-system.js"),
       "@training": path.resolve(root, "../training-system.js"),
+      "@feedback": path.resolve(root, "../feedback-board.jsx"),
     },
   },
 });

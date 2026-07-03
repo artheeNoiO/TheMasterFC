@@ -6,7 +6,7 @@ import {
   getRosterForTeam, hasFullRosterLeague, ROSTER_STATS, getRosterForLeague,
 } from "@legend";
 import { starsFromRating, getPlayerStarProfile, STAR_LABEL_TH, STAR_MAX, starWageMultiplier } from "@stars";
-import { GAME_NAME, GAME_TAGLINE, GAME_VERSION, SAVE_VERSION, FEATURES, STARTING_BUDGET } from "@version";
+import { GAME_NAME, GAME_TAGLINE, GAME_VERSION, SAVE_VERSION, FEATURES, STARTING_BUDGET, GAME_DISCORD_URL, GAME_DISCORD_LABEL, GAME_DISCORD_HINT } from "@version";
 import {
   genPlayerName, pickNationalityForTeam, pickNationality, getNationality,
   formatNationality, ensurePlayerNationality, resolvePlayerNationality,
@@ -41,6 +41,7 @@ import {
   slotToPitchAmbient,
 } from "./live-pitch-ambient.js";
 import "./fc-ui-theme.css";
+import FeedbackBoard from "@feedback";
 
 /* ============================== DESIGN TOKENS (match landing / themasterfc.com) ============================== */
 const C = {
@@ -5792,6 +5793,9 @@ export default function App({ onMigrateToServer } = {}) {
           />
         )}
         {tab === "settings" && <SettingsView career={career} onReset={resetCareer} onEnterOnline={enterOnlineMode} uiLang={uiLang} onSetUiLang={setUiLang} />}
+        {tab === "feedback" && (
+          <FeedbackView uiLang={uiLang} />
+        )}
       </div>
 
       <BottomNav tab={tab} setTab={setTab} marketOpen={marketOpen} marketSub={marketSub} setMarketSub={setMarketSub} uiLang={uiLang} />
@@ -11083,6 +11087,18 @@ function SettingsView({ career, onReset, onEnterOnline, uiLang = "th", onSetUiLa
           ))}
         </div>
       </Panel>
+      <Panel accent={C.blue}>
+        <SectionLabel>Discord · Feedback</SectionLabel>
+        <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10, lineHeight: 1.55 }}>{GAME_DISCORD_HINT}</div>
+        <a
+          href={GAME_DISCORD_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ ...btnStyle("#5865F2", "#fff"), display: "inline-block", textDecoration: "none", textAlign: "center" }}
+        >
+          {GAME_DISCORD_LABEL}
+        </a>
+      </Panel>
       <Panel>
         <SectionLabel>{t(uiLang, "settings.careerInfo")}</SectionLabel>
         <div style={{ fontSize: 12.5, color: C.textDim, lineHeight: 1.8, fontFamily: MONO_FONT }}>
@@ -12020,6 +12036,24 @@ function ProfileView({ career, uTeam, standings }) {
   );
 }
 
+/* ============================== FEEDBACK ============================== */
+function FeedbackView({ uiLang = "th" }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel accent={C.blue}>
+        <SectionLabel>{uiLang === "en" ? "Player feedback" : "Feedback จากผู้เล่น"}</SectionLabel>
+        <FeedbackBoard
+          variant="game"
+          title={uiLang === "en" ? "Tell us what you think" : "บอกเราว่าชอบ / ไม่ชอบอะไร"}
+          subtitle={uiLang === "en"
+            ? "Comments are shared with the dev team. Join Discord for live chat."
+            : "ความคิดเห็นถูกแชร์กับทีมพัฒนา — เข้า Discord คุยสดได้"}
+        />
+      </Panel>
+    </div>
+  );
+}
+
 /* ============================== MORE MENU ============================== */
 function MoreView({ setTab, marketOpen }) {
   const items = [
@@ -12034,6 +12068,7 @@ function MoreView({ setTab, marketOpen }) {
     { id: "training", label: "ฝึกซ้อม", desc: "แผนฝึก + อัปเกรดสนาม", icon: "🏋️" },
     { id: "academy", label: "อคาเดมี", desc: "ดาวรุ่ง + แมวมองเยาวชน", icon: "🌱" },
     { id: "settings", label: "ตั้งค่า", desc: "บันทึก · รีเซ็ต · ออนไลน์", icon: "⚙" },
+    { id: "feedback", label: "Feedback", desc: "เขียนความคิดเห็น · Like/Dislike", icon: "💬" },
   ];
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -12070,7 +12105,7 @@ function BottomNav({ tab, setTab, marketOpen, marketSub, setMarketSub, uiLang = 
     { id: "squad", label: t(uiLang, "nav.squad"), icon: "👕" },
     { id: "tactics", label: t(uiLang, "nav.tactics"), icon: "☰" },
     { id: "market", label: t(uiLang, "nav.market"), icon: marketOpen ? "●" : "¤", dot: marketOpen },
-    { id: "more", label: t(uiLang, "nav.more"), icon: "⋯", active: ["table", "training", "academy", "settings", "shop", "staffcards", "coach", "medical", "club", "profile"].includes(tab) },
+    { id: "more", label: t(uiLang, "nav.more"), icon: "⋯", active: ["table", "training", "academy", "settings", "shop", "staffcards", "coach", "medical", "club", "profile", "feedback"].includes(tab) },
   ];
   return (
     <nav className="fc-bottom-nav">

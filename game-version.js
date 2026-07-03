@@ -20,10 +20,16 @@ export const GAME_API_URL = "https://api.themasterfc.com";
 export const GAME_DONATE_URL = "";
 export const GAME_DONATE_LABEL = "Support development";
 
+/** Community Discord — feedback & playtest chat */
+export const GAME_DISCORD_URL = "https://discord.gg/arEP4BPFb";
+export const GAME_DISCORD_LABEL = "Join Discord";
+export const GAME_DISCORD_HINT =
+  "เล่นแล้วชอบหรือไม่ชอบอะไร — เขียน feedback ได้ที่นี่หรือใน Discord ทีมอ่านทุกข้อความ";
+
 /** Premium / event currency label (Socker Coins in-game may map here later) */
 export const MASTER_COIN_LABEL = "Master Coin";
 
-export const GAME_VERSION = "0.9.3";
+export const GAME_VERSION = "0.9.4";
 
 /** Frozen baseline tag — same as GAME_VERSION after a stable release */
 export const STABLE_VERSION = "0.9.0";

@@ -7,6 +7,7 @@ import leagueRoutes from "./routes/leagues.js";
 import cronRoutes from "./routes/cron.js";
 import legendRoutes from "./routes/legends.js";
 import stakeRoutes from "./routes/stake.js";
+import feedbackRoutes from "./routes/feedback.js";
 import { runStakeTick } from "./services/stakeService.js";
 
 const app = express();
@@ -30,6 +31,7 @@ app.use("/api/leagues", leagueRoutes);
 app.use("/api/cron", cronRoutes);
 app.use("/api/legends", legendRoutes);
 app.use("/api/stake", stakeRoutes);
+app.use("/api/feedback", feedbackRoutes);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

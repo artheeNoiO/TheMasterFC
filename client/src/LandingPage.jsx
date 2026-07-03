@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 import {
   GAME_NAME, GAME_NAME_SHORT, GAME_SITE_URL, GAME_TAGLINE, GAME_VERSION,
   GAME_DONATE_URL, GAME_DONATE_LABEL, MASTER_COIN_LABEL,
+  GAME_DISCORD_URL, GAME_DISCORD_LABEL, GAME_DISCORD_HINT,
 } from "@version";
 import {
   WORLD_CUP_EVENT_NAME,
@@ -17,6 +18,7 @@ import {
   TIER_C_REJECTED,
 } from "@roadmap";
 import "./LandingPage.css";
+import FeedbackBoard from "@feedback";
 
 const LOGO = "/branding/master-logo.png";
 const BG = "/branding/login-bg.png";
@@ -26,6 +28,7 @@ const NAV = [
   { id: "systems", label: "Systems" },
   { id: "worldcup", label: "World Cup" },
   { id: "roadmap", label: "Roadmap" },
+  { id: "feedback", label: "Feedback" },
   { id: "donate", label: "Donate" },
 ];
 
@@ -145,6 +148,17 @@ export default function LandingPage({ onPlay }) {
         </button>
       </header>
 
+      <a
+        href={GAME_DISCORD_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="landing-discord-float"
+        title={GAME_DISCORD_HINT}
+      >
+        <span aria-hidden>💬</span>
+        Discord
+      </a>
+
       <main className="landing-hero">
         <div className="landing-hero-inner">
           <span className="landing-eyebrow">Playtest · Free on browser</span>
@@ -168,6 +182,13 @@ export default function LandingPage({ onPlay }) {
             </button>
           </div>
           <p className="landing-hint">ไม่ต้องสมัคร · เปิดแล้วเล่นได้ทันที · โหมดหลักคือ Online League</p>
+
+          <div className="landing-hero-discord">
+            <p>{GAME_DISCORD_HINT}</p>
+            <a href={GAME_DISCORD_URL} target="_blank" rel="noopener noreferrer" className="landing-discord-btn landing-discord-btn--hero">
+              {GAME_DISCORD_LABEL}
+            </a>
+          </div>
         </div>
       </main>
 
@@ -284,6 +305,16 @@ export default function LandingPage({ onPlay }) {
         </div>
       </section>
 
+      <section className="landing-section landing-feedback-section" id="feedback">
+        <div className="landing-section-head">
+          <h2>Feedback &amp; Community</h2>
+          <p>เล่นแล้วบอกเราได้ — ชอบ ไม่ชอบ หรืออยากให้ปรับอะไร</p>
+        </div>
+        <div className="landing-feedback-wrap">
+          <FeedbackBoard variant="landing" />
+        </div>
+      </section>
+
       <section className="landing-section landing-donate" id="donate">
         <div className="landing-donate-inner">
           <div className="landing-section-head">
@@ -328,6 +359,8 @@ export default function LandingPage({ onPlay }) {
           <a href={GAME_SITE_URL}>{GAME_SITE_URL.replace("https://", "")}</a>
           {" · "}
           <a href={`${GAME_SITE_URL}/play`}>Play game</a>
+          {" · "}
+          <a href={GAME_DISCORD_URL} target="_blank" rel="noopener noreferrer">Discord</a>
         </p>
         <p className="landing-footer-ver">v{GAME_VERSION} · © {new Date().getFullYear()}</p>
       </footer>
