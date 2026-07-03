@@ -1,8 +1,26 @@
 # HANDOFF — The Socker Manager (เดิม siam-manager-online / "Made your club")
 
-**อัปเดตล่าสุด:** 2026-07-03 (รอบดึก) | โดย: Claude
+**อัปเดตล่าสุด:** 2026-07-03 | **Baseline:** `v0.8.0-stable` (commit `e21e096`)
 
-## โปรเจคนี้คืออะไร
+## Baseline & Patch workflow (2026-07-03)
+
+| รายการ | ค่า |
+|--------|-----|
+| **GAME_VERSION** | `0.8.0` |
+| **SAVE_VERSION** | `5` — **patch ทั่วไปอย่า bump** |
+| **Git tag** | `v0.8.0-stable` |
+| **ย้อนกลับ** | `git checkout v0.8.0-stable` |
+
+**Patch ทดลอง (Qwen / Codey):**
+1. `git checkout -b patch/qwen-XXX` จาก `master`
+2. แก้ตาม brief → bump `GAME_VERSION` → `0.8.1-qwen.N`
+3. `npm run build -w client` ผ่าน + ทดเล่น
+4. Claude Director → `VERDICT: PASS|FAIL`
+5. PASS → merge · FAIL → ทิ้ง branch หรือ `git reset --hard v0.8.0-stable`
+
+**Owner งาน:** logic/live หนัก → Claude/Cursor · patch เล็ก → Codey (Qwen3/OpenRouter)
+
+---
 เกมจัดการทีมฟุตบอลภาษาไทย เดิมเป็นโปรโตไทป์ single-file React (`football-manager.jsx`, ~540KB) รันฝั่ง client ล้วน
 กำลังพอร์ตเป็นเวอร์ชันออนไลน์ (สเปคเต็ม: `siam-manager-online-spec.md`): npm workspaces — `client/` (Vite React), `server/` (Express+Prisma), `packages/game-engine/`
 
@@ -25,8 +43,7 @@
 - **ผู้ตัดสิน**: วิ่งตามบอลมีหน่วง, ใบเหลือง/แดง (16% ของฟาวล์, 2 เหลือง=แดง) โชว์ emoji เหนือหัว + banner + สถิติ, เสียงนกหวีดสังเคราะห์ WebAudio ทุกฟาวล์ (`playWhistle`, เคารพ mute)
 - **การไหลของสกอร์**: React tick ตัดสินผลช็อต+นับสกอร์ทันที (กัน edge จบครึ่ง) แต่ GOAL flash เด้งตอนบอลถึงตาข่ายจริงผ่าน `pendingEvents` — ช็อตที่เกิดในซีน (โหม่งเตะมุม/ฟรีคิก, `counted:false`) React นับสถิติ+สกอร์ตอน resolve ใน rAF drain
 - **ไฟล์กำพร้า (ไม่มีใคร import แล้ว ลบได้ถ้าต้องการ):** `GoalHighlightOverlay.jsx`, `goal-highlight-scenarios.js`
-- compile ผ่านหมด (Vite 200: `pass-simulator.js`, `live-pitch-ambient.js`, `tracker-pitch.jsx`, `football-manager.jsx`) — **ยังไม่ได้เห็นผลจริงในเบราว์เซอร์ รอ user เล่นทดสอบ**
-- Git: diff ค้างเยอะมาก ยังไม่ commit เลยนับจาก 2 commit แรก / CHANGELOG ล่าสุด 0.5.4 (ยังไม่มี entry ของงานรีแฟคเตอร์นี้)
+- compile ผ่านหมด — **แช่ baseline แล้ว:** tag `v0.8.0-stable`, commit `e21e096`, CHANGELOG มี entry baseline
 
 ## สถานะล่าสุด (รอบดึก 2026-07-03 — บั๊กฟิกซ์ + ฟีเจอร์ A-D อนุมัติล่วงหน้าทั้งชุด)
 User สั่ง "เริ่มทำให้หมดเลย ทำไปทีละจุด A > D" แล้วออกไปข้างนอก — ทำครบทั้ง 4 ข้อ ไม่ได้หยุดถามระหว่างทำ (ตามที่อนุมัติไว้ล่วงหน้า) ทุกข้อ **ยืนยันด้วยบอท puppeteer จริง** (เปิดเกมจริงใน Edge headless, คลิกจริง, จับ error/พิกัด/นาฬิกา) ไม่ใช่แค่อ่านโค้ด:
@@ -43,7 +60,7 @@ User สั่ง "เริ่มทำให้หมดเลย ทำไป
 ## ทำต่อ (Next steps)
 0. **บั๊ก React duplicate-key warning — ยังไม่จบ 100%:** เกิดตอนความเร็ว 6x + เตะมุม/ฟาวล์ถี่ (0 ครั้งที่ 1x, 36-70 ครั้ง/6วิ ที่ 6x) ไล่ด้วย 3 วิธี (manual stack capture, CDP `Runtime.consoleAPICalled` พร้อม callFrames, เช็คทุกจุดที่มี `key=` ในทั้ง `football-manager.jsx`+`tracker-pitch.jsx`) ยังหาบรรทัดต้นตอไม่เจอ เพราะ React ล้าง component stack ทิ้งไปตอนถึงจุด reconciler ที่ log warning แล้ว (เห็นแต่ react-dom internals) — **เพิ่ม defensive dedup ใน `TrackerPlayerDots`** (`tracker-pitch.jsx`) กรอง key ซ้ำก่อน render กันเผื่อไว้ แต่ **ไม่ได้ทำให้ warning หายไป** (ยังเห็น 36 ครั้ง/6วิที่ 6x เท่าเดิม) แปลว่าตัวที่ซ้ำจริงไม่ใช่ `livePlayers`/dot ของนักเตะ แต่เป็น list อื่นที่ยังไม่เจอ — ยืนยันแล้วว่าจำนวนจุดบนสนามจริงคงที่ 23 เสมอ ไม่มีอะไรเพี้ยนที่เห็นได้ (แค่ warning ไม่ใช่ error/crash) ถ้าจะไล่ต่อ: **ต้องเปิด Chrome DevTools จริงเล่นที่ 6x แล้วดู React DevTools "highlight updates" หรือ component stack ที่ browser แสดงในคอนโซลจริง** (headless เก็บได้แค่ raw stack ไม่มีชื่อ component)
 1. **User ทดสอบด้วยตาจริง** ทั้ง 4 ข้อ A-D + บั๊กฟิกซ์ทั้งหมด — โดยเฉพาะ (D) ที่เพิ่งขยับป้าย/ผจก./ผู้ช่วยผู้ตัดสินให้ห่างกันแล้ว (ยืนยันด้วย screenshot ว่าอ่านง่ายขึ้นชัดเจน) ควรดูอีกทีว่าพอดีหรือยังอยากขยับเพิ่ม
-2. commit งานค้างเป็นก้อนตามฟีเจอร์ + เพิ่ม CHANGELOG entry เมื่อนิ่ง (ยังไม่ commit อะไรเลยนับจาก session ก่อนหน้า)
+2. ~~commit งานค้าง~~ ✅ baseline `v0.8.0-stable` แล้ว — patch ต่อบน branch `patch/qwen-*`
 3. ใบแดงยังไม่มีผลเกมจริง (ไม่ตัดเหลือ 10 คน) — ต้องแก้ `buildMatchContext`/`expectedGoalsFull` ถ้าจะเอา
 4. เดินหน้าสเปค online ต่อ (`siam-manager-online-spec.md`) — ตรวจ parity `server/src/services/gameService.js` กับ client logic
 
