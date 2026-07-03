@@ -15,7 +15,8 @@
     "build": "npm run build -w packages/game-engine && npm run build -w server && npm run build -w client",
     "db:generate": "npm run db:generate -w server",
     "db:push": "npm run db:push -w server",
-    "db:studio": "npm run db:studio -w server"
+    "db:studio": "npm run db:studio -w server",
+    "roster:generate": "node scripts/generate-master-rosters.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

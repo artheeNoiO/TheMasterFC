@@ -63,6 +63,12 @@ const STRINGS = {
     "club.extraStaffSub": "ผู้ช่วย · Analyst · Director · หัวหน้าแพทย์ — มีผลในเกม",
     "club.extraStaffCards": "การ์ดในกระเป๋า — กดจ้างเพื่อติดตั้ง",
     "club.vacant": "ว่าง",
+    "staff.guideTab": "คู่มือ",
+    "staff.guideTitle": "คู่มือ Team Staff",
+    "staff.guideSub": "บัพแต่ละตำแหน่งมีผลกับทีมอย่างไร · ยิ่งดาว/เกรดสูงยิ่งแรง",
+    "staff.guideHired": "จ้างแล้ว",
+    "staff.guideWhere": "จ้างที่",
+    "staff.guideEffects": "ผลในเกม",
   },
   en: {
     "settings.language": "Game language",
@@ -121,6 +127,12 @@ const STRINGS = {
     "club.extraStaffSub": "Assistant · Analyst · Director · Head medical — in-game effects",
     "club.extraStaffCards": "Cards in bag — hire to install",
     "club.vacant": "Vacant",
+    "staff.guideTab": "Guide",
+    "staff.guideTitle": "Team Staff Guide",
+    "staff.guideSub": "What each role does in-game · higher stars/grade = stronger",
+    "staff.guideHired": "Hired",
+    "staff.guideWhere": "Hire at",
+    "staff.guideEffects": "In-game effects",
   },
 };
 

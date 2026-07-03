@@ -33,6 +33,7 @@ export const LEAGUE_NAT_WEIGHTS = {
   spain: { ES: 55, BR: 12, AR: 10, FR: 8, PT: 6, EN: 4, DE: 3, NG: 2 },
   france: { FR: 48, EN: 8, ES: 8, PT: 10, BR: 10, DE: 6, NG: 6, AR: 4 },
   germany: { DE: 50, EN: 8, FR: 8, ES: 6, BR: 8, PT: 6, NG: 6, NL: 4, IT: 4 },
+  italy: { IT: 52, BR: 10, AR: 8, FR: 8, ES: 6, EN: 4, DE: 4, NG: 4, PT: 4 },
   portugal: { PT: 55, BR: 18, ES: 8, FR: 6, EN: 5, NG: 4, DE: 4 },
   saudi: { SA: 35, BR: 18, EN: 8, FR: 8, ES: 8, PT: 8, NG: 6, AR: 5, DE: 4 },
 };

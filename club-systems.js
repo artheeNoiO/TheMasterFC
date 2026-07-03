@@ -18,8 +18,8 @@ export const EXTRA_STAFF_EFFECTS = {
     en: "Post-match morale · faster tactic familiarity · player development",
   },
   ANALYST: {
-    th: "รายงานก่อนเกมละเอียด · ส่งแผนลงสนาม · ประกบตัวอันตราย",
-    en: "Richer pre-match report · match prep · opposition marking",
+    th: "รายงานก่อนเกมละเอียด · ส่งแผนลงสนาม · ประกบตัวอันตราย · แนะนำการฝึกรายคน",
+    en: "Richer pre-match report · match prep · opposition marking · training recommendations",
   },
   DIRECTOR: {
     th: "ซื้อถูกลง · ขายแพงขึ้น · แมวมองเจอของดีขึ้น",
@@ -160,6 +160,7 @@ export function staffSupportBonuses(c, teamId) {
     hasAnalyst: Boolean(st.ANALYST),
     hasDirector: Boolean(st.DIRECTOR),
     hasHeadMedical: Boolean(headMedStaff),
+    analystName: st.ANALYST?.name || null,
   };
 }
 

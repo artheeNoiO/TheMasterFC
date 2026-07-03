@@ -544,6 +544,58 @@ function advanceFreekick(s, dt) {
   // phase "shot": shotSeq เดินเรื่องแทน
 }
 
+/* ============================ จุดโทษ ============================ */
+
+/** จุดโทษ: ไม่มีกำแพง วางบอล 11 หน่วยหน้าประตู → ยิง (สโลว์โม+เส้นปะ) → ทุกคนกลับตำแหน่ง */
+export function startPenaltyScene(state, attackSide) {
+  const s = state;
+  if (!s || s.shotSeq || s.setPiece || s.celebration || s.restart) return s;
+  const fwd = attackSide === "home" ? 1 : -1;
+  const goalPx = attackSide === "home" ? 100 : 0;
+  const defSide = attackSide === "home" ? "away" : "home";
+  const slots = attackSide === "home" ? s.homeSlots : s.awaySlots;
+
+  const spot = { px: goalPx - fwd * 11, py: 50 };
+
+  let takerIdx = slots.findIndex((sl) => sl.pos === "FW");
+  if (takerIdx < 0) takerIdx = slots.findIndex((sl) => sl.pos === "MF");
+  if (takerIdx < 0) takerIdx = 5;
+
+  s.possSide = attackSide;
+  s.pendingPass = null;
+  s.ball.phase = "dribble";
+  s.ball.t = 1;
+  s.setPiece = {
+    type: "penalty", phase: "setup", t: 0,
+    attackSide, defSide, fwd, goalPx, spot, takerIdx,
+  };
+  return s;
+}
+
+function advancePenalty(s, dt) {
+  const sp = s.setPiece;
+  const b = s.ball;
+  sp.t += dt;
+  if (sp.phase === "setup") {
+    // บอลถูกวางที่จุดโทษ นักเตะเดินมายืนเตรียมยิง (ไม่มีกำแพง)
+    rollBallToward(b, sp.spot.px, sp.spot.py, dt, 6);
+    b.fromPx = b.toPx = b.px;
+    b.fromPy = b.toPy = b.py;
+    b.airHeight = 0;
+    if (sp.t >= 2.2) {
+      sp.phase = "shot";
+      setCarrier(s, sp.takerIdx);
+      const roll = Math.random();
+      const outcome = roll < 0.76 ? "goal" : roll < 0.92 ? "save" : "post";
+      const keepSp = sp;
+      s.setPiece = null;
+      beginAmbientShot(s, { shotSide: sp.attackSide, outcome, counted: false, aimTime: 0.4 });
+      s.setPiece = keepSp; // นักเตะยืนค้างจนช็อตจบ (resolveShotSeq เคลียร์ setPiece ให้)
+    }
+  }
+  // phase "shot": shotSeq เดินเรื่องแทน
+}
+
 /* ============================ main advance ============================ */
 
 /** อัปเดต ambient + pass simulator — ครอบครองบอลภายใน engine ไม่สลับทุก tick */
@@ -559,6 +611,8 @@ export function advanceAmbientPitch(state, dt, { pressure = 0, homeSlots, awaySl
     advanceCorner(s, dt);
   } else if (s.setPiece?.type === "freekick") {
     advanceFreekick(s, dt);
+  } else if (s.setPiece?.type === "penalty") {
+    advancePenalty(s, dt);
   } else if (s.celebration) {
     advanceCelebration(s, dt);
   } else if (s.restart) {

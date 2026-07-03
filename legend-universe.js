@@ -1,11 +1,28 @@
 /**
  * Legend Universe — ทีม/นักเตะอิงโลกจริง (ชื่อล้อเลียน parody)
- * ซูเปอร์สตาร์: ตัวเดียวต่อ legendId ต่อเซิร์ฟเวอร์ (ออนไลน์)
+ * 8 ลีก legend: roster ครบ ~23 คน/ทีม จาก roster-database
+ * ซูเปอร์สตาร์ (rating สูง): ตัวเดียวต่อ legendId ต่อเซิร์ฟเวอร์ (ออนไลน์)
  */
+
+import {
+  ROSTER_PLAYERS,
+  LEGEND_PLAYERS as ROSTER_LEGEND_PLAYERS,
+  getRosterForTeam,
+  getRosterForLeague,
+  hasFullRosterLeague,
+  isBigFiveLeague,
+  ROSTER_STATS,
+} from "./roster-database/index.js";
+
+export {
+  ROSTER_PLAYERS, ROSTER_STATS, getRosterForTeam, getRosterForLeague,
+  hasFullRosterLeague, isBigFiveLeague,
+};
 
 export const LEGEND_LEAGUES = [
   { id: "england", name: "ลีกอังกฤษ", emoji: "🏴", region: "อังกฤษ" },
   { id: "spain", name: "ลาลีกา", emoji: "🇪🇸", region: "สเปน" },
+  { id: "italy", name: "เซเรียอา", emoji: "🇮🇹", region: "อิตาลี" },
   { id: "france", name: "ลีกฝรั่งเศส", emoji: "🇫🇷", region: "ฝรั่งเศส" },
   { id: "germany", name: "บุนเดสลีกา", emoji: "🇩🇪", region: "เยอรมัน" },
   { id: "portugal", name: "ลีกโปรตุเกส", emoji: "🇵🇹", region: "โปรตุเกส" },
@@ -96,6 +113,24 @@ export const LEGEND_TEAMS = {
     { key: "bochum", name: "โบคุม", short: "BOC", color: "#005ca9", tier: 3, formation: "4-4-2" },
     { key: "koln", name: "โคโลญจน์", short: "KOE", color: "#ed1c24", tier: 4, formation: "4-2-3-1" },
   ],
+  italy: [
+    { key: "neroazz", name: "ดำน้ำเงิน อินเตอร์", short: "INT", color: "#010e80", tier: 9, formation: "3-5-2" },
+    { key: "rossoneri", name: "แดงดำ มิลาน", short: "MIL", color: "#fb090b", tier: 8, formation: "4-2-3-1" },
+    { key: "biancon", name: "ขาวดำ ยูเว", short: "JUV", color: "#ffffff", tier: 7, formation: "3-5-2" },
+    { key: "azzurro", name: "ฟ้าขาว นาโปลี", short: "NAP", color: "#12a0d7", tier: 8, formation: "4-3-3" },
+    { key: "giallor", name: "เหลืองแดง โรoma", short: "ROM", color: "#8e1f2f", tier: 7, formation: "4-3-3" },
+    { key: "biancoce", name: "ฟ้าขาว ลาซio", short: "LAZ", color: "#87d8f7", tier: 7, formation: "4-3-3" },
+    { key: "oroblu", name: "น้ำเงินดำ อatalanta", short: "ATA", color: "#1e71b8", tier: 7, formation: "3-4-2-1" },
+    { key: "viola", name: "ม่วง ฟio", short: "FIO", color: "#482d8c", tier: 6, formation: "4-2-3-1" },
+    { key: "rossoblu", name: "แดงน้ำเงิn โbologna", short: "BOL", color: "#1a2958", tier: 6, formation: "4-2-3-1" },
+    { key: "granata", name: "แกranata ทorino", short: "TOR", color: "#8b0015", tier: 5, formation: "3-5-2" },
+    { key: "verona", name: "hellas เวrโนa", short: "VER", color: "#003082", tier: 4, formation: "3-4-2-1" },
+    { key: "friuli", name: "Udinese", short: "UDI", color: "#000000", tier: 5, formation: "3-5-2" },
+    { key: "grifone", name: "Grifone เจนoa", short: "GEN", color: "#8b0000", tier: 4, formation: "4-3-3" },
+    { key: "cagliari", name: "Cagliari", short: "CAG", color: "#00205b", tier: 4, formation: "4-3-3" },
+    { key: "empoli", name: "Empoli", short: "EMP", color: "#0066cc", tier: 4, formation: "4-3-3" },
+    { key: "lecce", name: "Lecce", short: "LEC", color: "#f6c304", tier: 4, formation: "4-3-3" },
+  ],
   portugal: [
     { key: "porto", name: "มังกรน้ำเงิน ปอร์โต้", short: "POR", color: "#003893", tier: 8, formation: "4-3-3" },
     { key: "benfica", name: "นกอินทรี เบนฟิกา", short: "BEN", color: "#e30613", tier: 8, formation: "4-3-3" },
@@ -152,50 +187,8 @@ export const LEGEND_TEAMS = {
   ],
 };
 
-/**
- * @type {Array<{legendId:string,name:string,position:string,rating:number,potential:number,age:number,teamKey:string,leagueId:string,acquireCost:number}>}
- */
-export const LEGEND_PLAYERS = [
-  // England
-  { legendId: "ronalde", name: "Christo Ronalde", position: "FW", rating: 88, potential: 88, age: 39, teamKey: "reddog", leagueId: "england", acquireCost: 28_000_000 },
-  { legendId: "brunoze", name: "Brunoze Fernandezz", position: "MF", rating: 86, potential: 87, age: 30, teamKey: "reddog", leagueId: "england", acquireCost: 32_000_000 },
-  { legendId: "rashferd", name: "Marcus Rashferd", position: "FW", rating: 82, potential: 85, age: 27, teamKey: "reddog", leagueId: "england", acquireCost: 22_000_000 },
-  { legendId: "salaza", name: "Mohamad Salaza", position: "FW", rating: 90, potential: 90, age: 32, teamKey: "duckred", leagueId: "england", acquireCost: 38_000_000 },
-  { legendId: "manyor", name: "Erling Manyor", position: "FW", rating: 91, potential: 94, age: 24, teamKey: "duckred", leagueId: "england", acquireCost: 45_000_000 },
-  { legendId: "vandyke", name: "Virgil Van Dyke", position: "DF", rating: 87, potential: 87, age: 33, teamKey: "duckred", leagueId: "england", acquireCost: 26_000_000 },
-  { legendId: "palmerz", name: "Cole Palmerz", position: "MF", rating: 84, potential: 90, age: 22, teamKey: "hoiblue", leagueId: "england", acquireCost: 35_000_000 },
-  { legendId: "sakala", name: "Bukayo Sakala", position: "MF", rating: 86, potential: 91, age: 23, teamKey: "biggun", leagueId: "england", acquireCost: 36_000_000 },
-  { legendId: "haalande", name: "Erling Haalande", position: "FW", rating: 92, potential: 95, age: 24, teamKey: "mooncity", leagueId: "england", acquireCost: 50_000_000 },
-  { legendId: "debruynez", name: "Kevin De Bruynez", position: "MF", rating: 89, potential: 89, age: 33, teamKey: "mooncity", leagueId: "england", acquireCost: 30_000_000 },
-  { legendId: "sonheung", name: "Son Heung-Min", nationality: "KR", position: "FW", rating: 84, potential: 84, age: 32, teamKey: "lilywhite", leagueId: "england", acquireCost: 24_000_000 },
-  { legendId: "isakz", name: "Alexander Isakz", position: "FW", rating: 83, potential: 88, age: 25, teamKey: "magpie", leagueId: "england", acquireCost: 28_000_000 },
-  // Spain
-  { legendId: "mbappee", name: "Kylian Mbappee", position: "FW", rating: 92, potential: 95, age: 26, teamKey: "whobear", leagueId: "spain", acquireCost: 52_000_000 },
-  { legendId: "vinijr", name: "Viniciuz Jr.", position: "FW", rating: 89, potential: 93, age: 24, teamKey: "whobear", leagueId: "spain", acquireCost: 42_000_000 },
-  { legendId: "bellinge", name: "Jude Bellinge", position: "MF", rating: 88, potential: 94, age: 21, teamKey: "whobear", leagueId: "spain", acquireCost: 40_000_000 },
-  { legendId: "yamala", name: "Lamine Yamala", position: "FW", rating: 82, potential: 95, age: 17, teamKey: "barbeat", leagueId: "spain", acquireCost: 38_000_000 },
-  { legendId: "lewand", name: "Robert Lewandowsk", position: "FW", rating: 87, potential: 87, age: 36, teamKey: "barbeat", leagueId: "spain", acquireCost: 22_000_000 },
-  { legendId: "griez", name: "Antoine Griezman", position: "FW", rating: 85, potential: 85, age: 33, teamKey: "rojiblanco", leagueId: "spain", acquireCost: 24_000_000 },
-  // France
-  { legendId: "dembele", name: "Ousmane Dembelez", position: "FW", rating: 86, potential: 89, age: 27, teamKey: "parblue", leagueId: "france", acquireCost: 34_000_000 },
-  { legendId: "vitinha", name: "Vitinhaa", position: "MF", rating: 84, potential: 88, age: 24, teamKey: "parblue", leagueId: "france", acquireCost: 30_000_000 },
-  { legendId: "lacaz", name: "Alexandre Lacazette", position: "FW", rating: 82, potential: 82, age: 33, teamKey: "ol", leagueId: "france", acquireCost: 18_000_000 },
-  // Germany
-  { legendId: "kanebay", name: "Harry Kane-Bay", position: "FW", rating: 90, potential: 90, age: 31, teamKey: "bayern", leagueId: "germany", acquireCost: 40_000_000 },
-  { legendId: "musiala", name: "Jamal Musiala", position: "MF", rating: 87, potential: 93, age: 21, teamKey: "bayern", leagueId: "germany", acquireCost: 38_000_000 },
-  { legendId: "sancho", name: "Jadon Sancho", position: "FW", rating: 81, potential: 86, age: 25, teamKey: "dort", leagueId: "germany", acquireCost: 22_000_000 },
-  // Portugal
-  { legendId: "ronaldinhop", name: "Cristo Ronaldinhop", position: "FW", rating: 85, potential: 85, age: 39, teamKey: "sporting", leagueId: "portugal", acquireCost: 20_000_000 },
-  { legendId: "diogo", name: "Diogo Jota", position: "FW", rating: 83, potential: 85, age: 27, teamKey: "porto", leagueId: "portugal", acquireCost: 26_000_000 },
-  // Saudi
-  { legendId: "ronaldos", name: "Cristo Ronaldos", position: "FW", rating: 87, potential: 87, age: 39, teamKey: "nassr", leagueId: "saudi", acquireCost: 25_000_000 },
-  { legendId: "neymarj", name: "Neymar Jr.", position: "FW", rating: 84, potential: 84, age: 33, teamKey: "hilal", leagueId: "saudi", acquireCost: 22_000_000 },
-  { legendId: "benzema", name: "Karim Benzemaa", position: "FW", rating: 86, potential: 86, age: 37, teamKey: "ittihad", leagueId: "saudi", acquireCost: 20_000_000 },
-  // Thailand
-  { legendId: "chanathip", name: "Chanathip Songkran", nationality: "TH", position: "MF", rating: 78, potential: 80, age: 31, teamKey: "buriram", leagueId: "thailand", acquireCost: 12_000_000 },
-  { legendId: "supachai", name: "Supachai Jaided", nationality: "TH", position: "FW", rating: 76, potential: 82, age: 26, teamKey: "muangthong", leagueId: "thailand", acquireCost: 10_000_000 },
-  { legendId: "teerasil", name: "Teerasil Dangda", nationality: "TH", position: "FW", rating: 77, potential: 78, age: 31, teamKey: "port", leagueId: "thailand", acquireCost: 11_000_000 },
-];
+/** ~2,944 นักเตะ · 8 ลีก · ~252 ซูเปอร์สตาร์ */
+export const LEGEND_PLAYERS = ROSTER_LEGEND_PLAYERS;
 
 export function getLeagueTeams(leagueId) {
   return LEGEND_TEAMS[leagueId] || [];
@@ -210,7 +203,7 @@ export function getLegendById(legendId) {
 }
 
 const LEAGUE_DEFAULT_NAT = {
-  england: "EN", spain: "ES", france: "FR", germany: "DE", portugal: "PT", saudi: "SA", thailand: "TH",
+  england: "EN", spain: "ES", italy: "IT", france: "FR", germany: "DE", portugal: "PT", saudi: "SA", thailand: "TH",
 };
 
 export function legendNationality(def) {

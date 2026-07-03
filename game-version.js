@@ -23,7 +23,7 @@ export const GAME_DONATE_LABEL = "Support development";
 /** Premium / event currency label (Socker Coins in-game may map here later) */
 export const MASTER_COIN_LABEL = "Master Coin";
 
-export const GAME_VERSION = "0.9.2";
+export const GAME_VERSION = "0.9.3";
 
 /** Frozen baseline tag — same as GAME_VERSION after a stable release */
 export const STABLE_VERSION = "0.9.0";
@@ -33,7 +33,7 @@ export const STABLE_TAG = "v0.9.0-stable";
 export const STARTING_BUDGET = 10_000_000;
 
 /** Integer — increments when save migrations are required */
-export const SAVE_VERSION = 9;
+export const SAVE_VERSION = 11;
 
 /**
  * UI / feature gates keyed off save version (applied after migrateCareerSave).
@@ -49,6 +49,8 @@ export const FEATURES = {
   economyBalanceV3: SAVE_VERSION >= 7,
   economyStarWages: SAVE_VERSION >= 8,
   clubSystems: SAVE_VERSION >= 9,
+  /** Full real-world rosters for Big 5 master leagues */
+  fullRosterDB: SAVE_VERSION >= 11,
 };
 
 /** Human-readable migration notes (mirrors CHANGELOG save entries) */
@@ -62,4 +64,6 @@ export const SAVE_MIGRATION_NOTES = {
   7: "Economy v3 — lower daily wages, reserve wage discount, higher sponsor/merch/match income",
   8: "Star-tier wages — 1–4★ players paid much less than 5–7★",
   9: "Club systems — stadium upgrades, board satisfaction, extra staff bonuses",
+  10: "Training reports + Analyst training recommendations",
+  11: "Full rosters — ~23 players/team, all 8 legend leagues (~2,944 players)",
 };

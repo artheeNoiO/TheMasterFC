@@ -1,9 +1,15 @@
-import { getLegendsForTeam, LEGEND_PLAYERS, LEGEND_TEAMS } from "../../../legend-universe.js";
+import {
+  getLegendsForTeam, LEGEND_PLAYERS, LEGEND_TEAMS,
+  getRosterForTeam, hasFullRosterLeague, legendNationality,
+} from "../../../legend-universe.js";
 import { starWageMultiplier } from "../../../player-stars.js";
 import { genPlayer, genSquad, clamp, rand } from "./players.js";
 import { bumpAttrs, recomputeDerived } from "./players.js";
 
-export { LEGEND_LEAGUES, LEGEND_PLAYERS, LEGEND_TEAMS, getLegendsForTeam, getLegendById, getLeagueTeams } from "../../../legend-universe.js";
+export {
+  LEGEND_LEAGUES, LEGEND_PLAYERS, LEGEND_TEAMS, ROSTER_PLAYERS,
+  getLegendsForTeam, getLegendById, getLeagueTeams, getRosterForTeam, hasFullRosterLeague, isBigFiveLeague,
+} from "../../../legend-universe.js";
 
 export function forcePlayerRating(p, targetRating) {
   const diff = targetRating - p.rating;
@@ -17,29 +23,53 @@ export function forcePlayerRating(p, targetRating) {
   }
 }
 
-export function buildLegendPlayer(def, teamId, homeTeamId, startDay, wageFn) {
+function defaultWage(rating, wageFn) {
+  return wageFn
+    ? wageFn(rating)
+    : Math.max(100, Math.round(((rating * rating * 2) / 100) * starWageMultiplier(rating) / 100) * 100);
+}
+
+export function buildRosterPlayer(def, teamId, homeTeamId, startDay, wageFn) {
   const tier = clamp(Math.floor((def.rating - 50) / 3), 0, 12);
+  const nat = legendNationality(def);
   const p = genPlayer(def.position, tier, teamId, def.age, startDay);
-  p.id = `leg_${def.legendId}`;
-  p.legendId = def.legendId;
-  p.isLegend = true;
+  p.nationality = nat;
+  const rid = def.rosterId || def.legendId;
+  p.id = def.isLegend ? `leg_${rid}` : `ros_${rid}`;
+  p.rosterId = rid;
+  if (def.isLegend) {
+    p.legendId = rid;
+    p.isLegend = true;
+    p.value = def.acquireCost;
+  } else {
+    p.isLegend = false;
+    const ageMult = def.age <= 23 ? 1.35 : def.age <= 28 ? 1.05 : def.age <= 31 ? 0.65 : 0.35;
+    p.value = Math.round((def.rating * def.rating * 380 * ageMult) / 1000) * 1000;
+  }
   p.homeTeamId = homeTeamId;
   p.name = def.name;
   forcePlayerRating(p, def.rating);
   p.potential = def.potential;
-  p.value = def.acquireCost;
-  p.wage = wageFn ? wageFn(p.rating) : Math.max(100, Math.round(((p.rating * p.rating * 2) / 100) * starWageMultiplier(p.rating) / 100) * 100);
+  p.wage = defaultWage(p.rating, wageFn);
   p.legendLeagueId = def.leagueId;
   p.lastOwnerActivityDay = startDay || 1;
   return p;
 }
 
+export function buildLegendPlayer(def, teamId, homeTeamId, startDay, wageFn) {
+  return buildRosterPlayer({ ...def, isLegend: true, rosterId: def.legendId || def.rosterId }, teamId, homeTeamId, startDay, wageFn);
+}
+
 export function buildLegendSquadForTeam(teamId, leagueId, teamKey, tier, startDay, wageFn) {
+  if (hasFullRosterLeague(leagueId)) {
+    const roster = getRosterForTeam(leagueId, teamKey);
+    if (roster.length) return roster.map((def) => buildRosterPlayer(def, teamId, teamId, startDay, wageFn));
+  }
   const squad = genSquad(teamId, tier);
   const legends = getLegendsForTeam(leagueId, teamKey);
   legends.forEach((leg) => {
     const legP = buildLegendPlayer(leg, teamId, teamId, startDay, wageFn);
-    const idx = squad.findIndex((p) => p.position === leg.position && !p.isLegend);
+    const idx = squad.findIndex((pl) => pl.position === leg.position && !pl.isLegend);
     if (idx >= 0) squad[idx] = legP;
     else squad.push(legP);
   });

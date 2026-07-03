@@ -26,6 +26,9 @@ export default defineConfig({
       "@nat": path.resolve(root, "../player-nationalities.js"),
       "@i18n": path.resolve(root, "../game-i18n.js"),
       "@club": path.resolve(root, "../club-systems.js"),
+      "@staffguide": path.resolve(root, "../staff-guide.js"),
+      "@coach": path.resolve(root, "../coach-system.js"),
+      "@training": path.resolve(root, "../training-system.js"),
     },
   },
 });

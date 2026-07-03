@@ -3,6 +3,7 @@ import {
   LEGEND_LEAGUES, LEGEND_TEAMS, LEGEND_PLAYERS, LEGEND_INACTIVE_DAYS,
   LEGEND_ACQUIRE_MIN_TEAM_VALUE, canBidForLegend,
   getLegendsForTeam, getLegendById, legendNationality,
+  getRosterForTeam, hasFullRosterLeague, ROSTER_STATS, getRosterForLeague,
 } from "@legend";
 import { starsFromRating, getPlayerStarProfile, STAR_LABEL_TH, STAR_MAX, starWageMultiplier } from "@stars";
 import { GAME_NAME, GAME_TAGLINE, GAME_VERSION, SAVE_VERSION, FEATURES, STARTING_BUDGET } from "@version";
@@ -18,12 +19,25 @@ import {
   refreshBoardAfterUserMatch, processBoardSeasonEnd,
   headMedicalTeamBuff, dailyMedicalRecoveryDays, headMedicalRehabStaminaBonus, headMedicalLongInjuryClear,
 } from "@club";
+import {
+  staffGuideCategories, staffGuideRolesByCategory,
+  isStaffGuideRoleHired, isStaffGuideSpecialHired,
+} from "@staffguide";
+import {
+  buildCoachProfile, ensureCoachProfile, coachDailyAttrBump, coachSynergyExtraBump,
+  coachDrillMult, coachFitnessStaminaPerDay, coachTrainingMoraleTick,
+  coachImpactSummary, coachCardStatRows, COACH_SPECIALTY_DEF, COACHING_STYLES,
+} from "@coach";
+import {
+  snapshotPlayerAttrs, computePlayerAttrDeltas, appendTrainingReport, buildTrainingDayReport,
+  buildSquadTrainingRecommendations, suggestDrillPlanForGroup, formatDeltaSummary,
+} from "@training";
 import { useStadiumCrowd, isCrowdMuted, setCrowdMuted } from "@crowd";
 import { TrackerMatchView, pitchToWide, V0PitchSVG, TrackerPlayerDots } from "@tracker";
 import { ClubBadge, LOGO_ICONS, shadeColor } from "./club-badge.jsx";
 import {
   createAmbientPitchState, advanceAmbientPitch, ambientAsBallSim,
-  computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene,
+  computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene, startPenaltyScene,
   slotToPitchAmbient,
 } from "./live-pitch-ambient.js";
 import "./fc-ui-theme.css";
@@ -425,6 +439,7 @@ function genPlayer(position, tier, teamId, forcedAge, startDay, opts = {}) {
   const p = {
     id: uid("pl"), name: genPlayerName(nationality), nationality, position: group, pos: dpos, altPos: rollAltPositions(dpos),
     age, attrs, morale: rand(62, 92), teamId, stamina: 100, injuryDays: 0, appearHistory: [], careerGoals: 0, seasonGoals: 0, careerApps: 0, role: "balanced",
+    seasonYellows: 0, suspendedMatches: 0,
   };
   recomputeDerived(p);
   const ageMult = age <= 23 ? 1.35 : age <= 28 ? 1.05 : age <= 31 ? 0.65 : 0.35;
@@ -448,26 +463,51 @@ function forcePlayerRating(p, targetRating) {
   }
 }
 
-function buildLegendPlayer(def, teamId, homeTeamId, startDay) {
+function buildRosterPlayer(def, teamId, homeTeamId, startDay) {
   const tier = clamp(Math.floor((def.rating - 50) / 3), 0, 12);
   const nat = legendNationality(def);
   const p = genPlayer(def.position, tier, teamId, def.age, startDay, { nationality: nat, leagueId: def.leagueId });
-  p.id = `leg_${def.legendId}`;
-  p.legendId = def.legendId;
-  p.isLegend = true;
+  const rid = def.rosterId || def.legendId;
+  p.id = def.isLegend ? `leg_${rid}` : `ros_${rid}`;
+  p.rosterId = rid;
+  if (def.isLegend) {
+    p.legendId = rid;
+    p.isLegend = true;
+    p.value = def.acquireCost;
+  } else {
+    p.isLegend = false;
+    const ageMult = def.age <= 23 ? 1.35 : def.age <= 28 ? 1.05 : def.age <= 31 ? 0.65 : 0.35;
+    p.value = Math.round((def.rating * def.rating * 380 * ageMult) / 1000) * 1000;
+  }
   p.homeTeamId = homeTeamId;
   p.name = def.name;
   p.nationality = nat;
   forcePlayerRating(p, def.rating);
   p.potential = def.potential;
-  p.value = def.acquireCost;
   p.wage = computePlayerWage(p.rating);
   p.legendLeagueId = def.leagueId;
   p.lastOwnerActivityDay = startDay || 1;
   return p;
 }
 
-function buildLegendSquadForTeam(teamId, leagueId, teamKey, tier, startDay) {
+function buildLegendPlayer(def, teamId, homeTeamId, startDay) {
+  return buildRosterPlayer({ ...def, isLegend: true, rosterId: def.legendId || def.rosterId }, teamId, homeTeamId, startDay);
+}
+
+function buildLegendSquadForTeam(teamId, leagueId, teamKey, tier, startDay, legendOwnership = null) {
+  if (hasFullRosterLeague(leagueId)) {
+    const roster = getRosterForTeam(leagueId, teamKey);
+    if (roster.length) {
+      return roster
+        .filter((def) => {
+          if (!def.isLegend || !legendOwnership) return true;
+          const rid = def.rosterId || def.legendId;
+          const owner = legendOwnership[rid];
+          return !owner || owner === teamId;
+        })
+        .map((def) => buildRosterPlayer(def, teamId, teamId, startDay));
+    }
+  }
   const squad = genSquad(teamId, tier, startDay, { leagueId, teams: [{ id: teamId, legendTeamKey: teamKey }] });
   getLegendsForTeam(leagueId, teamKey).forEach((leg) => {
     const legP = buildLegendPlayer(leg, teamId, teamId, startDay);
@@ -476,6 +516,38 @@ function buildLegendSquadForTeam(teamId, leagueId, teamKey, tier, startDay) {
     else squad.push(legP);
   });
   return squad;
+}
+
+function refreshFullRosterMasterLeagues(c) {
+  const leagueId = c.legendLeagueId;
+  if (!hasFullRosterLeague(leagueId)) return c;
+  const masterTeams = (c.teams || []).filter((t) => t.division === 0 && t.legendTeamKey);
+  if (!masterTeams.length) return c;
+  const masterIds = new Set(masterTeams.map((t) => t.id));
+  const awayLegends = {};
+  (c.players || []).forEach((p) => {
+    if (!p.isLegend || !p.legendId) return;
+    const def = getLegendById(p.legendId);
+    if (!def || def.leagueId !== leagueId) return;
+    const home = masterTeams.find((t) => t.legendTeamKey === def.teamKey);
+    if (home && p.teamId !== home.id) awayLegends[p.legendId] = p;
+  });
+  c.players = (c.players || []).filter((p) => !masterIds.has(p.teamId));
+  const ownership = { ...(c.legendOwnership || {}) };
+  masterTeams.forEach((t) => {
+    c.players.push(...buildLegendSquadForTeam(t.id, leagueId, t.legendTeamKey, t.tier, c.day || 1, ownership));
+  });
+  Object.values(awayLegends).forEach((p) => {
+    if (!c.players.some((x) => x.id === p.id)) c.players.push(p);
+  });
+  c.legendOwnership = initLegendOwnership(leagueId, c.teams, c.players);
+  Object.entries(awayLegends).forEach(([legendId, p]) => { c.legendOwnership[legendId] = p.teamId; });
+  (c.teams || []).forEach((t) => {
+    c.lineups[t.id] = getBestXI(c.players.filter((p) => p.teamId === t.id), t.formation);
+  });
+  c.fullRosterDB = true;
+  c.log = [`📋 อัปเดต roster Master · ${legendLeagueLabel(leagueId)} (~23 คน/ทีม · ${ROSTER_STATS?.total?.toLocaleString() || "2,944"} นักเตะ)`, ...(c.log || [])];
+  return c;
 }
 
 function createLegendMasterTeams(leagueId, startDay) {
@@ -517,7 +589,7 @@ function installLegendMasterLeague(c, leagueId) {
   c.players = c.players.filter((p) => keepIds.has(p.teamId) && !p.isLegend);
   const masterTeams = createLegendMasterTeams(leagueId, c.day || 1);
   masterTeams.forEach((t) => {
-    c.players.push(...buildLegendSquadForTeam(t.id, leagueId, t.legendTeamKey, t.tier, c.day || 1));
+    c.players.push(...buildLegendSquadForTeam(t.id, leagueId, t.legendTeamKey, t.tier, c.day || 1, c.legendOwnership));
   });
   c.teams = [...masterTeams, ...challengerTeams, userTeam];
   c.legendLeagueId = leagueId;
@@ -590,11 +662,12 @@ function genCoach(fixedSpecialty) {
   const specialty = fixedSpecialty || choice(STAFF_SPECS);
   const grade = rand(1, 5);
   const boost = Math.round((0.15 + grade * 0.12) * 100) / 100;
-  return {
-    id: uid("co"), name: choice(COACH_FIRST) + " " + choice(LAST_NAMES), specialty, grade, boost,
+  return ensureCoachProfile({
+    id: uid("co"), name: choice(COACH_FIRST) + " " + choice(LAST_NAMES),
     signingCost: Math.round((grade * 150000 + rand(0, 50000)) / 1000) * 1000,
     weeklyWage: scaleStaffDailyWage(grade * 8000 + rand(0, 3000)),
-  };
+    ...buildCoachProfile(specialty, grade, grade, boost),
+  }, specialty);
 }
 
 function genManager(scaleDown) {
@@ -634,7 +707,8 @@ const STAFF_CARD_TYPE_TH = {
   ASSISTANT: "ผู้ช่วยผจก.", ANALYST: "Data Analyst", DIRECTOR: "Sporting Director", HEAD_MEDICAL: "หัวหน้าแพทย์",
 };
 /* กล่องลิสต์การ์ดสตาฟในห้องต่างๆ — โชว์ราว 3 แถวแล้วเลื่อนขึ้นลงดูที่เหลือ */
-const CARD_LIST_SCROLL = { display: "flex", flexDirection: "column", gap: 8, maxHeight: 240, overflowY: "auto", paddingRight: 2 };
+const CARD_LIST_SCROLL = { display: "flex", flexDirection: "column", gap: 8, maxHeight: 240, paddingRight: 2 };
+const DRAG_SCROLL_SKIP = "button, a, input, textarea, select, [data-no-drag-scroll], .staff-pack-card";
 const STAFF_CARD_TYPE_ICON = {
   MANAGER: "◆", COACH: "🧢", SCOUT: "🔭", DOCTOR: "🩺",
   ASSISTANT: "📋", ANALYST: "📊", DIRECTOR: "🤝", HEAD_MEDICAL: "⚕️",
@@ -666,7 +740,8 @@ function pickStaffPortrait(type, specialty, stars) {
   else if (type === "COACH" && stars >= 7) folder = "COACH_7STAR";
   const pool = STAFF_PORTRAIT_POOLS[folder];
   if (!pool || !pool.length) return null;
-  return `/staff-portraits/${folder}/${choice(pool)}`;
+  const file = choice(pool);
+  return `/staff-portraits/${folder}/${encodeURIComponent(file)}`;
 }
 const STARTING_STAFF_TICKETS = 20;
 const DAILY_FREE_STAFF_DRAWS = 5;
@@ -732,9 +807,7 @@ function buildStaffCardPayload(type, stars) {
     const grade = starsToStaffGrade(stars);
     const boost = Math.round((0.1 + grade * 0.14) * 100) / 100;
     return {
-      specialty,
-      grade,
-      boost,
+      ...buildCoachProfile(specialty, stars, grade, boost),
       signingCost: Math.round((grade * 120000 + stars * 25000) / 1000) * 1000,
       weeklyWage: scaleStaffDailyWage(grade * 7000 + stars * 1500),
     };
@@ -893,12 +966,15 @@ function staffCardToManager(card) {
 }
 
 function staffCardToCoach(card) {
-  return {
+  const base = ensureCoachProfile({
     id: uid("co"), name: card.name, specialty: card.specialty,
     grade: card.grade, boost: card.boost,
+    technique: card.technique, motivation: card.motivation, drillSkill: card.drillSkill,
+    coachingStyle: card.coachingStyle, focusAttrs: card.focusAttrs,
     signingCost: 0, weeklyWage: card.weeklyWage,
     cardStars: card.stars,
-  };
+  }, card.specialty);
+  return base;
 }
 
 function staffCardStatLine(card, lang = "th") {
@@ -913,6 +989,11 @@ function staffCardStatLine(card, lang = "th") {
     return fx ? (lang === "en" ? fx.en : fx.th) : `เกรด ${card.grade}/7 · โบนัส +${card.boost}`;
   }
   if (card.type === "COACH" || card.type === "DOCTOR") {
+    if (card.type === "COACH") {
+      const c = ensureCoachProfile({ ...card }, card.specialty);
+      const style = COACHING_STYLES[c.coachingStyle];
+      return `${style?.th || "โค้ช"} · เทคนิค ${c.technique} · ฝึก ~${Math.round(coachDailyAttrBump(c) * 1000) / 10}%/วัน`;
+    }
     return `เกรด ${card.grade}/7 · โบนัส +${card.boost}`;
   }
   if (card.type === "SCOUT") {
@@ -1104,6 +1185,38 @@ const SHOP_ITEMS = [
     icon: "🩹",
     coinCost: 10,
   },
+  {
+    id: "morale_boost",
+    name: "บูสต์ขวัญกำลังใจ",
+    desc: "เพิ่มขวัญกำลังใจนักเตะ 1 คน +15 (เก็บในกระเป๋า ใช้ที่แท็บทีม)",
+    icon: "😊",
+    coinCost: 8,
+    instant: false,
+  },
+  {
+    id: "staff_ticket",
+    name: "ตั๋วเปิดซองการ์ดสตาฟ",
+    desc: "ได้ตั๋วเปิดการ์ดสตาฟทันที 1 ใบ",
+    icon: "🎫",
+    coinCost: 15,
+    instant: true,
+  },
+  {
+    id: "camp_skip",
+    name: "บัตรข้ามคูลดาวน์แคมป์ซ้อม",
+    desc: "รีเซ็ตคูลดาวน์แคมป์ซ้อมทันที จัดแคมป์ได้เลย",
+    icon: "⏩",
+    coinCost: 20,
+    instant: true,
+  },
+  {
+    id: "termination_waiver",
+    name: "บัตรยกเว้นค่าปรับเลิกจ้างสตาฟ",
+    desc: "ยกเว้นค่าปรับเลิกจ้างสตาฟตอนจ้างจากการ์ดครั้งถัดไป (ใช้ได้ 1 ครั้ง)",
+    icon: "📜",
+    coinCost: 25,
+    instant: true,
+  },
 ];
 function shopBuyCountToday(profile) {
   const today = new Date().toDateString();
@@ -1269,7 +1382,7 @@ function applyDrillSession(c, group, opts = {}) {
   if (!uSquad.length) return null;
   const facMult = 1 + (((c.facilities || {}).training || 1) - 1) * 0.15;
   const coach = (c.staff[c.userTeamId] || {})[group];
-  const coachMult = coach ? 1 + coach.boost * 0.4 : 1;
+  const coachMult = coachDrillMult(coach);
   const totalCost = drillPlanCost(plan);
   uSquad.forEach((p) => {
     plan.forEach((id) => {
@@ -1721,6 +1834,18 @@ function migrateSaveV8ToV9(c) {
   return c;
 }
 
+/** v10 — training reports + Analyst training recommendations */
+function migrateSaveV9ToV10(c) {
+  if (!c.trainingReports) c.trainingReports = [];
+  return c;
+}
+
+/** v11 — full master league rosters (8 legend leagues) */
+function migrateSaveV10ToV11(c) {
+  if (c.fullRosterDB) return c;
+  return refreshFullRosterMasterLeagues(c);
+}
+
 const SAVE_MIGRATIONS = [
   migrateSaveV0ToV1,
   migrateSaveV1ToV2,
@@ -1731,6 +1856,8 @@ const SAVE_MIGRATIONS = [
   migrateSaveV6ToV7,
   migrateSaveV7ToV8,
   migrateSaveV8ToV9,
+  migrateSaveV9ToV10,
+  migrateSaveV10ToV11,
 ];
 
 function normalizeCareerSave(c) {
@@ -1756,6 +1883,11 @@ function normalizeCareerSave(c) {
   if (c.trainingCampCooldownDay == null) c.trainingCampCooldownDay = 0;
   if (!c.drillPlans) c.drillPlans = defaultDrillPlans();
   if (!c.drillDoneDay) c.drillDoneDay = {};
+  // เซฟเก่าก่อนมีระบบใบเหลืองสะสม/แบน — เติม default ย้อนหลังให้ครบ
+  (c.players || []).forEach((p) => {
+    if (p.seasonYellows == null) p.seasonYellows = 0;
+    if (p.suspendedMatches == null) p.suspendedMatches = 0;
+  });
   // ตำแหน่งละเอียดแบบ FM — แจกให้นักเตะทุกคนในเซฟเก่าที่ยังไม่มี (จากสเตตเด่น)
   (c.players || []).forEach(ensureDetailedPos);
   (c.academyPlayers || []).forEach(ensureDetailedPos);
@@ -1794,8 +1926,17 @@ function normalizeCareerSave(c) {
     }
   });
   ensureStaffCardFields(c); // เซฟเก่าก่อนมีระบบภาพเหมือนการ์ดสตาฟ — เติม portrait ย้อนหลังให้ครบทุกใบ
+  Object.values(c.staff || {}).forEach((teamStaff) => {
+    ["GK", "DF", "MF", "FW", "FITNESS"].forEach((spec) => {
+      if (teamStaff[spec]) ensureCoachProfile(teamStaff[spec], spec);
+    });
+  });
+  (c.staffCardBag || []).forEach((card) => {
+    if (card.type === "COACH") ensureCoachProfile(card, card.specialty);
+  });
   if (c.stadiumLevel == null) c.stadiumLevel = 1;
   if (!c.board && uT) initBoard(c, uT);
+  if (!c.trainingReports) c.trainingReports = [];
   return c;
 }
 
@@ -2159,6 +2300,7 @@ function buildSuggestedPrep(weaknesses, managerProfile, keyThreats) {
   };
   if (mp.tactics >= 62 && keyThreats?.[0]) prep.markPlayerId = keyThreats[0].id;
   else if (mp.tactics >= 48 && mp.stars >= 3 && keyThreats?.[0]) prep.markPlayerId = keyThreats[0].id;
+  else if ((mp.markMult ?? 1) >= 1.08 && keyThreats?.[0]) prep.markPlayerId = keyThreats[0].id;
   return prep;
 }
 
@@ -2428,7 +2570,7 @@ function buildMatchScoutReport(career, uTeam, opponent, uSquad, oppSquad, xi, is
   let oppCtx = buildMatchContext(opponent, oppAvail, oppXI, uTeam.formation, !isHome, opponent.chemistry);
   const managerPlan = enrichedManagerPlan(career, uTeam);
   userCtx = applyMatchPrepToContext(userCtx, prep, { team: uTeam, squad: uAvail, xiIds: filledXI, familiarityMult });
-  oppCtx = applyOppositionMarkToContext(oppCtx, prep.markPlayerId, oppAvail, oppXI, managerPlan.tactics);
+  oppCtx = applyOppositionMarkToContext(oppCtx, prep.markPlayerId, oppAvail, oppXI, managerPlan.markMult);
 
   const { xgHome, xgAway } = expectedGoalsFull(isHome ? userCtx : oppCtx, isHome ? oppCtx : userCtx);
   const xgUs = isHome ? xgHome : xgAway;
@@ -2439,10 +2581,13 @@ function buildMatchScoutReport(career, uTeam, opponent, uSquad, oppSquad, xi, is
   const usRaw = teamAttackDefense(uAvail, filledXI);
   const oppRaw = teamAttackDefense(oppAvail, oppXI);
   const keyThreats = oppAvail.filter((p) => oppXI.includes(p.id)).sort((a, b) => b.rating - a.rating).slice(0, 3);
+  const oppRosterStars = [...oppAvail].sort((a, b) => b.rating - a.rating).slice(0, 5);
   const oppStandings = standingsForDivision(career, opponent.division);
   const oppPos = oppStandings.findIndex((s) => s.team.id === opponent.id) + 1;
 
-  const weaknesses = detectScoutWeaknesses(uAvail, filledXI, oppAvail, oppXI, oppRaw, usRaw, managerPlan.insight);
+  const staffBonuses = staffSupportBonuses(career, uTeam.id);
+  const scoutInsight = managerPlan.insight + (staffBonuses.scoutInsightBonus || 0);
+  const weaknesses = detectScoutWeaknesses(uAvail, filledXI, oppAvail, oppXI, oppRaw, usRaw, scoutInsight);
   const advice = getManagerMatchAdvice(uTeam, uAvail, filledXI, opponent, oppSquad, isHome);
   const winChance = clamp(50 + (xgUs - xgThem) * 14 + (isHome ? 4 : -4) + (mm - 1) * 40, 12, 88);
   const slotAssign = userSlotAssignMap(career);
@@ -2464,7 +2609,7 @@ function buildMatchScoutReport(career, uTeam, opponent, uSquad, oppSquad, xi, is
     avgStamina: Math.round(usRaw.avgStamina),
     oppAvgStamina: Math.round(oppRaw.avgStamina),
     xgUs, xgThem, matchupLabel, winChance,
-    keyThreats, weaknesses: weaknesses.slice(0, 2),
+    keyThreats, oppRosterStars, weaknesses: weaknesses.slice(0, 2),
     userForm: getTeamFormStrip(career, uTeam.id, uTeam.division),
     oppForm: getTeamFormStrip(career, opponent.id, opponent.division),
     oppPos, oppFormation: opponent.formation, userFormation: uTeam.formation,
@@ -2617,16 +2762,18 @@ function updateTacticFamiliarity(c, formation, manager) {
 }
 
 /* ============================== OPPOSITION INSTRUCTIONS (mark player) ============================== */
-/** ลดพลังรุกของคู่แข่งลงเมื่อล็อกประกบตัวอันตรายของเขา ยิ่งเป็นตัวหลักยิ่งลดเยอะ */
-function applyOppositionMarkToContext(ctx, markPlayerId, squad, xiIds, tacticsSkill = 50) {
+/** ลดพลังรุกของคู่แข่งเมื่อประกบตัวอันตราย — markMult จากผจก.+Analyst (0.55–1.35) */
+function applyOppositionMarkToContext(ctx, markPlayerId, squad, xiIds, markMult = 1) {
   if (!markPlayerId || !xiIds || !xiIds.includes(markPlayerId)) return ctx;
   const xi = squad.filter((p) => xiIds.includes(p.id));
   const marked = xi.find((p) => p.id === markPlayerId);
   if (!marked) return ctx;
   const avgAtk = xi.length ? xi.reduce((s, p) => s + p.attack, 0) / xi.length : marked.attack;
   const importance = clamp((marked.attack - avgAtk) / 40, 0, 0.15);
-  const skillMult = clamp(0.55 + (tacticsSkill ?? 50) / 130, 0.55, 1.2);
-  const reduction = clamp((0.05 + importance) * skillMult, 0.03, 0.18);
+  const skillMult = markMult > 3
+    ? clamp(0.55 + markMult / 130, 0.55, 1.2)
+    : clamp(markMult, 0.55, 1.35);
+  const reduction = clamp((0.05 + importance) * skillMult, 0.03, 0.22);
   return { ...ctx, effAttack: ctx.effAttack * (1 - reduction) };
 }
 
@@ -3130,6 +3277,7 @@ function createNewCareer(customClub) {
     individualFocus: {}, trainingCampCooldownDay: 0,
     // บอร์ดซ้อมรายตำแหน่ง — คิวท่าซ้อมต่อกลุ่มตำแหน่ง + วันล่าสุดที่กดซ้อมเอง
     drillPlans: defaultDrillPlans(), drillDoneDay: {},
+    trainingReports: [],
     // youth academy + market scout (separate)
     marketScout: null, marketScoutOffer: genScout(),
     youthScout: null, youthScoutOffer: genScout(),
@@ -3182,6 +3330,73 @@ function SectionLabel({ children, style, sub }) {
     </div>
   );
 }
+
+/** เลื่อนแนวน/แนวตั้งโดยไม่โชว์ scrollbar — ลากเมาส์หรือใช้ลูกกลิ้ง */
+function DragScroll({ children, axis = "x", style, className = "", wheelOnly = false, ...rest }) {
+  const ref = useRef(null);
+  const dragRef = useRef(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e) => {
+      if (axis === "x" && el.scrollWidth > el.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        el.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [axis]);
+
+  const scrollClass = axis === "y" ? "fc-scroll-y" : "fc-scroll-x";
+  const cls = [scrollClass, "fc-hide-scrollbar", !wheelOnly && "fc-drag-scroll", wheelOnly && "fc-drag-scroll--wheel-only", className].filter(Boolean).join(" ");
+  const hideBarStyle = { scrollbarWidth: "none", msOverflowStyle: "none" };
+
+  const onPointerDown = (e) => {
+    if (wheelOnly || e.button !== 0) return;
+    if (e.target.closest(DRAG_SCROLL_SKIP)) return;
+    const el = ref.current;
+    if (!el) return;
+    dragRef.current = { x: e.clientX, y: e.clientY, sl: el.scrollLeft, st: el.scrollTop };
+    el.classList.add("fc-drag-scroll--active");
+    el.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e) => {
+    if (!dragRef.current) return;
+    const el = ref.current;
+    const d = dragRef.current;
+    if (axis === "x") el.scrollLeft = d.sl - (e.clientX - d.x);
+    else el.scrollTop = d.st - (e.clientY - d.y);
+  };
+  const endDrag = (e) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    const el = ref.current;
+    el?.classList.remove("fc-drag-scroll--active");
+    try { el?.releasePointerCapture(e.pointerId); } catch (_) { /* noop */ }
+  };
+
+  return (
+    <div
+      ref={ref}
+      className={cls}
+      style={{ ...hideBarStyle, ...style }}
+      onPointerDown={wheelOnly ? undefined : onPointerDown}
+      onPointerMove={wheelOnly ? undefined : onPointerMove}
+      onPointerUp={wheelOnly ? undefined : endDrag}
+      onPointerCancel={wheelOnly ? undefined : endDrag}
+      {...rest}
+    >
+      {children}
+    </div>
+  );
+}
+
+function CardListScroll({ children, style }) {
+  return <DragScroll axis="y" style={{ ...CARD_LIST_SCROLL, ...style }}>{children}</DragScroll>;
+}
+
 function fmBtnPrimary(extra = {}) {
   return {
     width: "100%", background: "#fff", color: "#050608", border: "none", borderRadius: 4,
@@ -3568,20 +3783,62 @@ export default function App({ onMigrateToServer } = {}) {
       showToast(`Socker Coin ไม่พอ (ต้องการ ${item.coinCost} เหรียญ)`);
       return;
     }
-    const next = {
+    const nextProfile = {
       ...profile,
       inventory: { ...(profile?.inventory || {}) },
       sockerCoins: coins - item.coinCost,
       shopBuyDay: today,
       shopBuyCount: (profile?.shopBuyDay === today ? (profile?.shopBuyCount || 0) : 0) + 1,
     };
-    next.inventory[itemId] = (next.inventory[itemId] || 0) + 1;
-    saveProfile(next);
-    const left = SHOP_DAILY_BUY_LIMIT - next.shopBuyCount;
+    const left = SHOP_DAILY_BUY_LIMIT - nextProfile.shopBuyCount;
+
+    if (item.instant) {
+      // ใช้ผลทันที ไม่เข้ากระเป๋า — แก้ career โดยตรงตาม itemId
+      updateCareer((prev) => {
+        const c = JSON.parse(JSON.stringify(prev));
+        if (itemId === "staff_ticket") {
+          ensureStaffCardFields(c);
+          c.staffDrawTickets += 1;
+          c.log = [`🎫 แลกตั๋วเปิดการ์ดสตาฟ 1 ใบ (ซื้อจากร้านค้า)`, ...c.log];
+        } else if (itemId === "camp_skip") {
+          c.trainingCampCooldownDay = c.day;
+          c.log = [`⏩ ใช้บัตรข้ามคูลดาวน์แคมป์ซ้อม — จัดแคมป์ได้ทันที`, ...c.log];
+        } else if (itemId === "termination_waiver") {
+          c.staffTerminationWaiver = true;
+          c.log = [`📜 ได้รับสิทธิ์ยกเว้นค่าปรับเลิกจ้างสตาฟครั้งถัดไป`, ...c.log];
+        }
+        return c;
+      });
+      saveProfile(nextProfile);
+      showToast(`ใช้ ${item.name} แล้ว! (ซื้อได้อีก ${left} ครั้งวันนี้)`);
+      return;
+    }
+
+    nextProfile.inventory[itemId] = (nextProfile.inventory[itemId] || 0) + 1;
+    saveProfile(nextProfile);
     showToast(`${item.name} เข้ากระเป๋าแล้ว! (ซื้อได้อีก ${left} ครั้งวันนี้)`);
   }
 
   function useItemFromBag(itemId, playerId) {
+    if (itemId === "morale_boost") {
+      const count = inventoryCount(profile, itemId);
+      if (count <= 0) { showToast("ไม่มีไอเทมในกระเป๋า"); return; }
+      const target = career.players.find((p) => p.id === playerId && p.teamId === career.userTeamId);
+      if (!target) { showToast("ไม่พบนักเตะ"); return; }
+      updateCareer((prev) => {
+        const c = JSON.parse(JSON.stringify(prev));
+        const p = c.players.find((pl) => pl.id === playerId);
+        if (!p) return c;
+        p.morale = Math.min(100, (p.morale || 0) + 15);
+        c.log = [`😊 ใช้บูสต์ขวัญกำลังใจกับ ${p.name} — ขวัญกำลังใจ ${p.morale}`, ...c.log];
+        return c;
+      });
+      const inv = { ...(profile?.inventory || {}) };
+      inv[itemId] = count - 1;
+      saveProfile({ ...profile, inventory: inv });
+      showToast(`เพิ่มขวัญกำลังใจ ${target.name} แล้ว!`);
+      return;
+    }
     if (itemId !== "injury_pack") return;
     const count = inventoryCount(profile, itemId);
     if (count <= 0) { showToast("ไม่มีไอเทมในกระเป๋า"); return; }
@@ -3778,6 +4035,7 @@ export default function App({ onMigrateToServer } = {}) {
     c.log = [`💼 ${sponsorName} +${formatMoney(sponsorIncome)} · เสื้อ +${formatMoney(merchIncome)} · ค่าเหนื่อย -${formatMoney(totalWages)} · สุทธิ ${net >= 0 ? "+" : ""}${formatMoney(net)}`, ...c.log];
 
     // --- today's training-calendar slot applies to the whole first-team squad ---
+    const trainingSnap = snapshotPlayerAttrs(uSquad);
     const slotIdx = (c.day - 1) % 10;
     const trainingType = c.trainingPlan[slotIdx] || "BALANCED";
     const isRestDay = trainingType === "REST";
@@ -3813,14 +4071,18 @@ export default function App({ onMigrateToServer } = {}) {
     const headMedLongClears = [];
     c.players.forEach((p) => {
       const teamFitness = (c.staff[p.teamId] || {}).FITNESS;
+      const fitnessCoach = teamFitness ? ensureCoachProfile(teamFitness, "FITNESS") : null;
       const facilityBonus = p.teamId === c.userTeamId ? (myFacilities.fitness - 1) * 2 : 0;
       const fitnessSynergy = p.teamId === c.userTeamId && trainingType === "FITNESS" ? 1.5 : 1;
       const restBoost = p.teamId === c.userTeamId && isRestDay ? 10 : 0;
       const postMatchBoost = p.teamId === c.userTeamId && playedTodayIds.has(p.id) && !isRestDay ? 12 : 0;
+      const fitnessStaminaBonus = (p.teamId === c.userTeamId && fitnessCoach)
+        ? Math.round((fitnessCoach ? coachFitnessStaminaPerDay(fitnessCoach) : 0) * fitnessSynergy)
+        : (teamFitness ? Math.round(teamFitness.boost * 10 * fitnessSynergy) : 0);
       const headMedStamina = (p.teamId === c.userTeamId && userHeadMed && p.injuryDays > 0)
         ? headMedicalRehabStaminaBonus(userHeadMed)
         : 0;
-      const recover = (isRestDay && p.teamId === c.userTeamId ? 22 : 12) + (teamFitness ? teamFitness.boost * 10 * fitnessSynergy : 0) + facilityBonus + restBoost + postMatchBoost + headMedStamina;
+      const recover = (isRestDay && p.teamId === c.userTeamId ? 22 : 12) + fitnessStaminaBonus + facilityBonus + restBoost + postMatchBoost + headMedStamina;
       p.stamina = clamp(p.stamina + recover, 0, 100);
       if (p.injuryDays > 0) {
         const doctor = (c.staff[p.teamId] || {}).PHYSIO;
@@ -3843,12 +4105,17 @@ export default function App({ onMigrateToServer } = {}) {
       Object.keys(c.staff).forEach((teamId) => {
         Object.keys(c.staff[teamId]).forEach((spec) => {
           if (!["GK", "DF", "MF", "FW"].includes(spec)) return;
-          const co = c.staff[teamId][spec];
+          const co = ensureCoachProfile(c.staff[teamId][spec], spec);
           const facilityMult = teamId === c.userTeamId ? 1 + (myFacilities.training - 1) * 0.15 : 1;
           const synergyMult = teamId === c.userTeamId ? coachTrainingSynergyMult(spec, trainingType) : 1;
+          const dailyBump = coachDailyAttrBump(co) + coachSynergyExtraBump(co, synergyMult);
           c.players.forEach((p) => {
             if (p.teamId === teamId && p.position === spec && !(teamId === c.userTeamId && playedTodayIds.has(p.id))) {
-              bumpAttrs(p, co.boost * 0.05 * facilityMult * synergyMult);
+              bumpAttrs(p, dailyBump * facilityMult);
+              if (teamId === c.userTeamId && synergyMult > 1) {
+                const md = coachTrainingMoraleTick(co, synergyMult);
+                if (md) p.morale = clamp(p.morale + md, 10, 99);
+              }
             }
           });
         });
@@ -3866,6 +4133,20 @@ export default function App({ onMigrateToServer } = {}) {
       });
     }
     if (!isRestDay) rollTrainingEvent(c, uSquad.filter((p) => !playedTodayIds.has(p.id)), trainingType);
+
+    const playerDeltas = computePlayerAttrDeltas(trainingSnap, uSquad);
+    appendTrainingReport(c, buildTrainingDayReport({
+      day: c.day,
+      season: c.season,
+      trainingType,
+      trainingLabel: TRAINING_TH[trainingType],
+      slotIdx,
+      isRestDay,
+      drillSummary,
+      playerDeltas,
+      individualFocus: { ...(c.individualFocus || {}) },
+      skippedMatchIds: playedTodayIds,
+    }));
 
     // --- youth academy: passive development, loans, scouting ---
     const devBoost = c.academyManager ? c.academyManager.stats.development / 100 : 0.15;
@@ -4083,14 +4364,15 @@ export default function App({ onMigrateToServer } = {}) {
 
   function kickoffUserMatch() {
     const uT = career.teams.find((t) => t.id === career.userTeamId);
-    const uSquadAvail = squadOf(career.userTeamId, career).filter((p) => p.injuryDays <= 0);
+    const uSquadAvail = squadOf(career.userTeamId, career).filter((p) => p.injuryDays <= 0 && (p.suspendedMatches || 0) <= 0);
     const xi = career.lineups[career.userTeamId] || [];
     const filled = uT.autoMode
       ? getBestXI(uSquadAvail, recommendFormation(uT, uSquadAvail))
       : fillLineupGaps(uSquadAvail, xi.filter((id) => uSquadAvail.some((p) => p.id === id)), uT.formation);
     if (filled.length < MIN_XI_SIZE) {
       const injured = squadOf(career.userTeamId, career).filter((p) => p.injuryDays > 0).length;
-      showToast(`ลงสนามไม่ได้ — พร้อมเล่น ${filled.length}/11 คน (บาดเจ็บ ${injured} คน)`);
+      const suspended = squadOf(career.userTeamId, career).filter((p) => (p.suspendedMatches || 0) > 0).length;
+      showToast(`ลงสนามไม่ได้ — พร้อมเล่น ${filled.length}/11 คน (บาดเจ็บ ${injured} คน · ติดแบน ${suspended} คน)`);
       return;
     }
     updateCareer((prev) => {
@@ -4112,7 +4394,7 @@ export default function App({ onMigrateToServer } = {}) {
       const isHome = userMatch.home === c.userTeamId;
       const oppId = isHome ? userMatch.away : userMatch.home;
       const oppTeam = c.teams.find((t) => t.id === oppId);
-      const uSquad = squadOf(c.userTeamId, c).filter((p) => p.injuryDays <= 0);
+      const uSquad = squadOf(c.userTeamId, c).filter((p) => p.injuryDays <= 0 && (p.suspendedMatches || 0) <= 0);
       const oppSquad = squadOf(oppId, c);
 
       if (uT.autoMode) {
@@ -4168,13 +4450,13 @@ export default function App({ onMigrateToServer } = {}) {
         isHome ? null : uSlotAssign,
       );
       const userMeta = { team: uT, squad: uSquad, xiIds: uXI, familiarityMult };
-      const userTactics = managerPlanProfile(uT).tactics;
+      const userMarkMult = enrichedManagerPlan(c, uT).markMult;
       if (isHome) {
         hc = applyMatchPrepToContext(hc, prep, userMeta);
-        ac = applyOppositionMarkToContext(ac, prep.markPlayerId, oppSquad, oppXI, userTactics);
+        ac = applyOppositionMarkToContext(ac, prep.markPlayerId, oppSquad, oppXI, userMarkMult);
       } else {
         ac = applyMatchPrepToContext(ac, prep, userMeta);
-        hc = applyOppositionMarkToContext(hc, prep.markPlayerId, oppSquad, oppXI, userTactics);
+        hc = applyOppositionMarkToContext(hc, prep.markPlayerId, oppSquad, oppXI, userMarkMult);
       }
       const { xgHome, xgAway } = expectedGoalsFull(hc, ac);
       c.liveMatch = {
@@ -4350,7 +4632,7 @@ export default function App({ onMigrateToServer } = {}) {
     }
   }
 
-  function finishLiveMatch(homeGoals, awayGoals, finalHomeXI, finalAwayXI) {
+  function finishLiveMatch(homeGoals, awayGoals, finalHomeXI, finalAwayXI, cardEvents = []) {
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       const lm = c.liveMatch;
@@ -4378,6 +4660,26 @@ export default function App({ onMigrateToServer } = {}) {
       });
       updateTacticFamiliarity(c, uT.formation, uT.manager);
       if (c.matchPrep) c.matchPrep = { ...c.matchPrep, markPlayerId: null };
+      // เดินโทษแบนของคนที่ติดแบน "ก่อน" แมตช์นี้อยู่แล้วก่อน (นับว่ารับโทษนัดนี้ไปแล้ว) —
+      // ต้องทำก่อนตั้งแบนใหม่จาก cardEvents ด้านล่าง ไม่งั้นคนเพิ่งโดนแดงนัดนี้จะถูกลดโทษเหลือ 0 ทันที
+      c.players.filter((p) => p.teamId === c.userTeamId && (p.suspendedMatches || 0) > 0)
+        .forEach((p) => { p.suspendedMatches -= 1; });
+      // ประมวลผลใบเหลือง/แดงสะสมจากแมตช์นี้ — เฉพาะผู้เล่นทีมผู้ใช้ (v1 scope)
+      cardEvents.forEach(({ playerId, red }) => {
+        const p = c.players.find((pl) => pl.id === playerId && pl.teamId === c.userTeamId);
+        if (!p) return;
+        if (red) {
+          p.suspendedMatches = Math.max(p.suspendedMatches || 0, 1);
+          c.log = [`🟥 ${p.name} โดนแบน 1 นัดจากใบแดง`, ...c.log];
+        } else {
+          p.seasonYellows = (p.seasonYellows || 0) + 1;
+          if (p.seasonYellows >= 5) {
+            p.seasonYellows = 0;
+            p.suspendedMatches = Math.max(p.suspendedMatches || 0, 1);
+            c.log = [`🟨 ${p.name} ใบเหลืองครบ 5 ใบ — โดนแบน 1 นัด (รีเซ็ตตัวนับ)`, ...c.log];
+          }
+        }
+      });
       c.liveMatch = null;
       finalizeDayExtras(c);
       return c;
@@ -4839,7 +5141,9 @@ export default function App({ onMigrateToServer } = {}) {
         c.staffCardBag.push(...newCards);
         mergeOut.attempts = attempts;
       }
-      c.lastStaffPull = pulled.filter((card) => c.staffCardBag.some((b) => b.cardId === card.cardId));
+      c.lastStaffPull = pulled
+        .map((card) => c.staffCardBag.find((b) => b.cardId === card.cardId))
+        .filter(Boolean);
       if (canFree) c.staffFreeDrawsLeft -= 1;
       else c.staffDrawTickets -= tier.ticketCost;
       c.log = [`🃏 เปิดซอง ${tier.label} ${pulled.length} ใบ (${canFree ? "ฟรี" : `ใช้ ${tier.ticketCost} ตั๋ว`})`, ...c.log];
@@ -4953,10 +5257,15 @@ export default function App({ onMigrateToServer } = {}) {
         const underContract = t.manager && t.manager.contractEndsDay != null && c.day < t.manager.contractEndsDay;
         const daysLeft = underContract ? t.manager.contractEndsDay - c.day : 0;
         const terminationFee = underContract ? Math.round((daysLeft * t.manager.weeklyWage * 1.4) / 1000) * 1000 : 0;
-        if (terminationFee > 0 && c.budget < terminationFee) return c;
-        if (terminationFee > 0) {
-          c.budget -= terminationFee;
-          c.log = [`✂️ เลิกสัญญา ${t.manager.name} ก่อนครบกำหนด (เหลือ ${daysLeft} วัน) จ่ายค่าปรับ ${formatMoney(terminationFee)}`, ...c.log];
+        const waived = !!c.staffTerminationWaiver;
+        const actualFee = waived ? 0 : terminationFee;
+        if (actualFee > 0 && c.budget < actualFee) return c;
+        if (waived && terminationFee > 0) {
+          c.staffTerminationWaiver = false;
+          c.log = [`📜 ใช้สิทธิ์ยกเว้นค่าปรับเลิกจ้าง (ประหยัดไป ${formatMoney(terminationFee)})`, ...c.log];
+        } else if (actualFee > 0) {
+          c.budget -= actualFee;
+          c.log = [`✂️ เลิกสัญญา ${t.manager.name} ก่อนครบกำหนด (เหลือ ${daysLeft} วัน) จ่ายค่าปรับ ${formatMoney(actualFee)}`, ...c.log];
         }
         const mgr = staffCardToManager(card);
         const contractDays = rand(70, 160);
@@ -4969,10 +5278,15 @@ export default function App({ onMigrateToServer } = {}) {
         const existing = c.staff[c.userTeamId][spec];
         if (isStaffRoleLocked(existing, c.season)) { locked = true; return c; }
         const terminationFee = existing ? Math.round((existing.weeklyWage * 8) / 1000) * 1000 : 0;
-        if (terminationFee > 0 && c.budget < terminationFee) return c;
-        if (terminationFee > 0) {
-          c.budget -= terminationFee;
-          c.log = [`✂️ เลิกจ้าง ${existing.name} จ่ายค่าปรับ ${formatMoney(terminationFee)}`, ...c.log];
+        const waived = !!c.staffTerminationWaiver;
+        const actualFee = waived ? 0 : terminationFee;
+        if (actualFee > 0 && c.budget < actualFee) return c;
+        if (waived && terminationFee > 0) {
+          c.staffTerminationWaiver = false;
+          c.log = [`📜 ใช้สิทธิ์ยกเว้นค่าปรับเลิกจ้าง (ประหยัดไป ${formatMoney(terminationFee)})`, ...c.log];
+        } else if (actualFee > 0) {
+          c.budget -= actualFee;
+          c.log = [`✂️ เลิกจ้าง ${existing.name} จ่ายค่าปรับ ${formatMoney(actualFee)}`, ...c.log];
         }
         c.staff[c.userTeamId] = { ...c.staff[c.userTeamId], [spec]: { ...staffCardToCoach(card), hiredSeason: c.season } };
         c.log = [`🧢 จ้าง ${card.name} (${card.stars}★) เป็น${STAFF_TH[spec]}จากการ์ด`, ...c.log];
@@ -4986,16 +5300,30 @@ export default function App({ onMigrateToServer } = {}) {
           c.log = [`🔎 จ้าง ${card.name} (${card.stars}★) เป็นแมวมองเยาวชนจากการ์ด`, ...c.log];
         } else if (!isStaffRoleLocked(c.marketScout, c.season)) {
           const fee = Math.round((c.marketScout.weeklyWage * 8) / 1000) * 1000;
-          if (c.budget < fee) return c;
-          c.budget -= fee;
-          c.log = [`✂️ เลิกจ้างแมวมอง ${c.marketScout.name} จ่ายค่าปรับ ${formatMoney(fee)}`, ...c.log];
+          const waived = !!c.staffTerminationWaiver;
+          const actualFee = waived ? 0 : fee;
+          if (actualFee > 0 && c.budget < actualFee) return c;
+          if (waived && fee > 0) {
+            c.staffTerminationWaiver = false;
+            c.log = [`📜 ใช้สิทธิ์ยกเว้นค่าปรับเลิกจ้าง (ประหยัดไป ${formatMoney(fee)})`, ...c.log];
+          } else if (actualFee > 0) {
+            c.budget -= actualFee;
+            c.log = [`✂️ เลิกจ้างแมวมอง ${c.marketScout.name} จ่ายค่าปรับ ${formatMoney(actualFee)}`, ...c.log];
+          }
           c.marketScout = { ...scout, hiredSeason: c.season };
           c.log = [`🔭 จ้าง ${card.name} (${card.stars}★) แทนแมวมองทีมชุดใหญ่จากการ์ด`, ...c.log];
         } else if (!isStaffRoleLocked(c.youthScout, c.season)) {
           const fee = Math.round((c.youthScout.weeklyWage * 8) / 1000) * 1000;
-          if (c.budget < fee) return c;
-          c.budget -= fee;
-          c.log = [`✂️ เลิกจ้างแมวมอง ${c.youthScout.name} จ่ายค่าปรับ ${formatMoney(fee)}`, ...c.log];
+          const waived = !!c.staffTerminationWaiver;
+          const actualFee = waived ? 0 : fee;
+          if (actualFee > 0 && c.budget < actualFee) return c;
+          if (waived && fee > 0) {
+            c.staffTerminationWaiver = false;
+            c.log = [`📜 ใช้สิทธิ์ยกเว้นค่าปรับเลิกจ้าง (ประหยัดไป ${formatMoney(fee)})`, ...c.log];
+          } else if (actualFee > 0) {
+            c.budget -= actualFee;
+            c.log = [`✂️ เลิกจ้างแมวมอง ${c.youthScout.name} จ่ายค่าปรับ ${formatMoney(actualFee)}`, ...c.log];
+          }
           c.youthScout = { ...scout, hiredSeason: c.season };
           c.log = [`🔎 จ้าง ${card.name} (${card.stars}★) แทนแมวมองเยาวชนจากการ์ด`, ...c.log];
         } else {
@@ -5042,6 +5370,25 @@ export default function App({ onMigrateToServer } = {}) {
   function autoAssignDrills(group) {
     setDrillPlan(group, defaultDrillPlans()[group]);
     showToast(`โค้ชจัดโปรแกรมซ้อม${POS_TH[group]}ให้แล้ว`);
+  }
+  function autoAssignAnalystDrills(group) {
+    const plan = suggestDrillPlanForGroup(group, uSquad.filter((p) => p.injuryDays <= 0), DRILLS, MAX_DRILLS_PER_GROUP);
+    if (!plan.length) { showToast("Analyst ยังหาท่าซ้อมที่เหมาะไม่ได้"); return; }
+    setDrillPlan(group, plan);
+    showToast(`📊 Analyst จัดท่าซ้อม${POS_TH[group]} ${plan.length} ท่าแล้ว`);
+  }
+  function autoAssignAllAnalystDrills() {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const sq = c.players.filter((p) => p.teamId === c.userTeamId && p.injuryDays <= 0);
+      if (!c.drillPlans) c.drillPlans = defaultDrillPlans();
+      DRILL_GROUPS.forEach((g) => {
+        const plan = suggestDrillPlanForGroup(g, sq, DRILLS, MAX_DRILLS_PER_GROUP);
+        if (plan.length) c.drillPlans[g] = plan;
+      });
+      return c;
+    });
+    showToast("📊 Analyst จัดบอร์ดซ้อมทุกตำแหน่งแล้ว");
   }
   function runDrillSessionNow(group) {
     let result = null;
@@ -5374,7 +5721,10 @@ export default function App({ onMigrateToServer } = {}) {
             individualFocus={career.individualFocus || {}} onSetFocus={setIndividualFocus}
             campCooldownDay={career.trainingCampCooldownDay || 0} currentDay={career.day} onRunCamp={runTrainingCamp}
             drillPlans={career.drillPlans || {}} drillDoneDay={career.drillDoneDay || {}}
-            onSetDrillPlan={setDrillPlan} onAutoDrills={autoAssignDrills} onRunDrills={runDrillSessionNow} />
+            onSetDrillPlan={setDrillPlan} onAutoDrills={autoAssignDrills} onRunDrills={runDrillSessionNow}
+            trainingReports={career.trainingReports || []}
+            staffBonuses={staffSupportBonuses(career, uTeam.id)}
+            onAutoAnalystDrills={autoAssignAnalystDrills} onAutoAnalystAll={autoAssignAllAnalystDrills} />
         )}
         {tab === "academy" && (
           <AcademyView career={career} budget={career.budget}
@@ -5393,6 +5743,8 @@ export default function App({ onMigrateToServer } = {}) {
             userDivision={uTeam.division}
             round={round}
             teams={career.teams}
+            players={career.players}
+            legendLeagueId={career.legendLeagueId}
           />
         )}
         {tab === "medical" && (
@@ -5415,11 +5767,13 @@ export default function App({ onMigrateToServer } = {}) {
             budget={career.budget}
             onHireCoach={hireCoach}
             onHireCard={requestHireFromStaffCard}
+            uiLang={uiLang}
           />
         )}
         {tab === "staffcards" && (
           <StaffCardsView
             career={career}
+            uiLang={uiLang}
             onPull={pullStaffCards}
             onMerge={mergeStaffCards}
             onHire={requestHireFromStaffCard}
@@ -5427,6 +5781,7 @@ export default function App({ onMigrateToServer } = {}) {
             onToggleAutoTier={toggleAutoMergeTier}
           />
         )}
+        {tab === "staffguide" && <StaffGuideView career={career} uiLang={uiLang} />}
         {tab === "shop" && (
           <ShopView
             sockerCoins={profile?.sockerCoins || 0}
@@ -5647,19 +6002,26 @@ function LeaguePickModal({ currentLeagueId, onPick, onClose }) {
       <Panel style={{ maxWidth: 420, width: "100%", maxHeight: "85vh", overflowY: "auto" }}>
         <SectionLabel>🌐 เลือกลีกออนไลน์</SectionLabel>
         <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.6, marginBottom: 14 }}>
-          แต่ละลีกมีทีมล้อ 16 ทีม + ซูเปอร์สตาร์ตัวเดียวต่อเซิร์ฟเวอร์ — อยู่ Master League คว้าได้
+          ทุกลีกมี 16 ทีม · roster ~23 คน/ทีม อิงโลกจริง · ซูเปอร์สตาร์คว้าได้ใน Master League
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {LEGEND_LEAGUES.map((lg) => (
+          {LEGEND_LEAGUES.map((lg) => {
+            const full = hasFullRosterLeague(lg.id);
+            const rosterCount = full ? getRosterForLeague(lg.id).length : 0;
+            return (
             <button key={lg.id} onClick={() => onPick(lg.id)} style={{
               textAlign: "left", padding: "12px 14px", borderRadius: 10, cursor: "pointer",
               border: `1px solid ${currentLeagueId === lg.id ? C.amber : C.steel}`,
               background: currentLeagueId === lg.id ? "rgba(224,164,88,.12)" : C.panel2, color: C.chalk,
             }}>
               <div style={{ fontSize: 14, fontWeight: 700 }}>{lg.emoji} {lg.name}</div>
-              <div style={{ fontSize: 11, color: C.textDim }}>{lg.region} · 16 ทีม · {(LEGEND_TEAMS[lg.id] || []).length} สโมสร</div>
+              <div style={{ fontSize: 11, color: C.textDim }}>
+                {lg.region} · 16 ทีม
+                {full && <> · <span style={{ color: C.good }}>full roster</span> ({rosterCount} นักเตะ)</>}
+              </div>
             </button>
-          ))}
+            );
+          })}
         </div>
         <button onClick={onClose} style={{ ...btnStyle("transparent", C.textDim), border: `1px solid ${C.steel}`, marginTop: 12 }}>ยกเลิก</button>
       </Panel>
@@ -5836,11 +6198,11 @@ function ManagerView({ career, uTeam, userMatch, opponent, isHome, seasonOver, m
       {managerCards.length > 0 && (
         <Panel style={{ border: `1px solid ${C.blue}` }}>
           <SectionLabel style={{ color: C.blue }} sub={`มี ${managerCards.length} ใบในกระเป๋า — กด "จ้าง" เพื่อติดตั้งเป็นผจก.ทันที${managerCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดผจก.ที่สุ่มได้</SectionLabel>
-          <div style={CARD_LIST_SCROLL}>
+          <CardListScroll>
             {managerCards.map((card) => (
               <StaffCardTile key={card.cardId} card={card} compact onHire={onHireManagerCard} {...staffCardLockInfo(career, card)} />
             ))}
-          </div>
+          </CardListScroll>
         </Panel>
       )}
 
@@ -6329,12 +6691,25 @@ function MatchBriefingPanel({ scout, matchPrep, onSetMentality, onToggleInstruct
           <StatCompareBar label="สตามินา XI" us={scout.avgStamina} them={scout.oppAvgStamina} />
           {scout.keyThreats.length > 0 && (
             <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>อันตราย</div>
+              <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>อันตราย (XI คาด)</div>
               {scout.keyThreats.map((p) => (
                 <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, marginBottom: 4 }}>
                   <RatingBadge value={p.rating} />
                   <span style={{ fontWeight: 600 }}>{p.name}</span>
                   <span style={{ color: playerPosColor(p), fontSize: 10 }}>{playerPosTH(p)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {scout.oppRosterStars?.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 9, color: C.amber, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>ดาวเด่นในทีม ({scout.opponentShort})</div>
+              {scout.oppRosterStars.map((p) => (
+                <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, marginBottom: 4 }}>
+                  <RatingBadge value={p.rating} />
+                  <span style={{ fontWeight: 600 }}>{p.name}{p.isLegend ? " ⭐" : ""}</span>
+                  <span style={{ color: playerPosColor(p), fontSize: 10 }}>{playerPosTH(p)}</span>
+                  {p.injuryDays > 0 && <span style={{ fontSize: 9, color: C.crimson }}>🤕</span>}
                 </div>
               ))}
             </div>
@@ -6605,9 +6980,9 @@ function ClubExtraStaffPanel({ career, uiLang = "th", onHireCard }) {
       {bagCards.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6 }}>{t(uiLang, "club.extraStaffCards")}</div>
-          <div style={CARD_LIST_SCROLL}>
+          <CardListScroll>
             {bagCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireCard} {...staffCardLockInfo(career, card)} />)}
-          </div>
+          </CardListScroll>
         </div>
       )}
     </Panel>
@@ -6907,7 +7282,17 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
 
 /* ============================== SQUAD ============================== */
 /** การ์ดผู้สมัครรายสัปดาห์แบบใช้ซ้ำได้ — ใช้ทั้งห้องโค้ชและห้องพยาบาล */
-function StaffOfferCard({ spec, co, offer, locked, budget, onHire }) {
+function CoachStatMini({ co, lang = "th" }) {
+  if (!co || !["GK", "DF", "MF", "FW", "FITNESS"].includes(co.specialty)) return null;
+  const sum = coachImpactSummary(co, lang);
+  return (
+    <div style={{ marginTop: 6, padding: "6px 8px", borderRadius: 6, background: "rgba(91,141,184,.08)", border: `1px solid ${C.steel}`, fontSize: 10, color: C.textDim, lineHeight: 1.5 }}>
+      {sum.lines.slice(0, 4).map((line, i) => <div key={i}>{line}</div>)}
+    </div>
+  );
+}
+
+function StaffOfferCard({ spec, co, offer, locked, budget, onHire, uiLang = "th" }) {
   const terminationFee = co ? Math.round((co.weeklyWage * 8) / 1000) * 1000 : 0;
   return (
     <div style={{ padding: "8px 10px", borderRadius: 8, background: co ? "rgba(111,174,90,.1)" : C.panel2, border: `1px solid ${co ? C.good : C.steel}` }}>
@@ -6916,15 +7301,24 @@ function StaffOfferCard({ spec, co, offer, locked, budget, onHire }) {
         <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           {co.name}
           {staffEntityStars(co) ? <StarGlyphs count={staffEntityStars(co)} size={8} /> : null}
-          <span style={{ fontSize: 10, color: C.textDim, fontWeight: 500 }}>+{co.boost}</span>
+          {["GK", "DF", "MF", "FW", "FITNESS"].includes(spec) && (
+            <span style={{ fontSize: 10, color: C.blue, fontWeight: 600 }}>
+              {COACHING_STYLES[co.coachingStyle]?.th || ""} · ~{Math.round(coachDailyAttrBump(co) * 1000) / 10}%/วัน
+            </span>
+          )}
+          {!["GK", "DF", "MF", "FW", "FITNESS"].includes(spec) && (
+            <span style={{ fontSize: 10, color: C.textDim, fontWeight: 500 }}>+{co.boost}</span>
+          )}
           {locked && <span style={{ fontSize: 9.5, color: C.textDim }}>🔒 เปลี่ยนได้ตอนขึ้นฤดูกาลหน้า</span>}
         </div>
       )}
+      {co && ["GK", "DF", "MF", "FW", "FITNESS"].includes(spec) && <CoachStatMini co={co} lang={uiLang} />}
       {locked ? (
         <div style={{ fontSize: 10.5, color: C.textDim }}>ล็อกจนจบฤดูกาลนี้ — เปลี่ยนสตาฟตำแหน่งนี้ได้อีกครั้งตอนขึ้นฤดูกาลหน้า</div>
       ) : offer ? (
         <div>
           <div style={{ fontSize: 12, fontWeight: 700 }}>{offer.name} (เกรด {offer.grade}/5)</div>
+          {["GK", "DF", "MF", "FW", "FITNESS"].includes(spec) && <CoachStatMini co={ensureCoachProfile(offer, spec)} lang={uiLang} />}
           <div style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT, margin: "3px 0 6px" }}>
             ค่าแรกเข้า {formatMoney(offer.signingCost)} · ค่าเหนื่อย {formatMoney(offer.weeklyWage)}/วัน{co ? ` · +ค่าปรับเลิกจ้างคนเดิม ${formatMoney(terminationFee)}` : ""}
           </div>
@@ -6938,21 +7332,26 @@ function StaffOfferCard({ spec, co, offer, locked, budget, onHire }) {
 }
 
 /* ============================== COACH ROOM ============================== */
-function CoachRoomView({ career, staff, coachOffers, budget, onHireCoach, onHireCard }) {
+function CoachRoomView({ career, staff, coachOffers, budget, onHireCoach, onHireCard, uiLang = "th" }) {
   const specs = ["GK", "DF", "MF", "FW", "FITNESS"];
   const cards = (career.staffCardBag || []).filter((c) => c.type === "COACH");
+  const trainLevel = (career.facilities || {}).training || 1;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Panel accent={C.blue}>
-        <SectionLabel sub="ปรับ/เปลี่ยนโค้ชทุกตำแหน่งได้ที่นี่ที่เดียว">🧑‍🏫 ห้องโค้ช</SectionLabel>
-        <div style={{ fontSize: 11.5, color: C.textDim }}>จ้างจากผู้สมัครรายสัปดาห์ด้านล่าง หรือติดตั้งจากการ์ดสตาฟที่สุ่มได้โดยตรง</div>
+        <SectionLabel sub="โค้ชมี 3 สเตตหลัก + สไตล์ · ยิ่งดาว/เกรดสูงยิ่งปั้นเร็ว · วันฝึกตรงสายได้ synergy">🧑‍🏫 ห้องโค้ช</SectionLabel>
+        <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.55 }}>
+          <b style={{ color: C.chalk }}>เทคนิค</b> = ปั้นสเตตรายวัน · <b style={{ color: C.chalk }}>แรงจูงใจ</b> = มูดหลังซ้อม synergy · <b style={{ color: C.chalk }}>ทักษะซ้อม</b> = บอร์ดซ้อมรายตำแหน่ง
+          <br />สนามฝึก Lv.{trainLevel} บัพเพิ่ม · โค้ชฟิตเนสฟื้นสตามินาทั้งทีม
+        </div>
       </Panel>
       {cards.length > 0 && (
         <Panel style={{ border: `1px solid ${C.blue}` }}>
           <SectionLabel style={{ color: C.blue }} sub={`มี ${cards.length} ใบในกระเป๋า — กด "จ้าง" เพื่อติดตั้งทันที${cards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดโค้ชที่สุ่มได้</SectionLabel>
-          <div style={CARD_LIST_SCROLL}>
+          <CardListScroll>
             {cards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireCard} {...staffCardLockInfo(career, card)} />)}
-          </div>
+          </CardListScroll>
         </Panel>
       )}
       <Panel>
@@ -6967,6 +7366,7 @@ function CoachRoomView({ career, staff, coachOffers, budget, onHireCoach, onHire
               locked={isStaffRoleLocked(staff[spec], career.season)}
               budget={budget}
               onHire={onHireCoach}
+              uiLang={uiLang}
             />
           ))}
         </div>
@@ -7314,7 +7714,7 @@ function SquadPitchBoard({ team, squad, slots, benchIds, editable, onMove, highl
         {reserves.length > 0 && (
           <>
             <div style={{ fontSize: 8, color: C.textDim, marginBottom: 4, paddingLeft: 4 }}>นักเตะในทีม ({reserves.length}) — ลากลงมาช่อง SUB หรือเลือกจากตารางด้านล่าง</div>
-            <div style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 4 }}>
+            <DragScroll wheelOnly style={{ display: "flex", gap: 4, paddingBottom: 4 }}>
               {reserves.map((p) => {
                 const isDragSrc = drag?.src.kind === "bench" && drag.src.playerId === p.id;
                 return (
@@ -7330,7 +7730,7 @@ function SquadPitchBoard({ team, squad, slots, benchIds, editable, onMove, highl
                   </div>
                 );
               })}
-            </div>
+            </DragScroll>
           </>
         )}
         {subs.filter(Boolean).length === 0 && reserves.length === 0 && (
@@ -7730,19 +8130,58 @@ function TacticsView({
 }
 
 /* ============================== TABLE ============================== */
-function TableView({ career, userTeamId, userDivision, round, teams }) {
+function TeamRosterPanel({ team, players, onClose }) {
+  const squad = [...(players || []).filter((p) => p.teamId === team.id)].sort((a, b) => b.rating - a.rating);
+  const byPos = { GK: [], DF: [], MF: [], FW: [] };
+  squad.forEach((p) => { if (byPos[p.position]) byPos[p.position].push(p); });
+  return (
+    <Panel accent={team.color || C.amber}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <SectionLabel sub={`${squad.length} คน · ${team.formation || "4-4-2"}`}>{team.name}</SectionLabel>
+        <button type="button" onClick={onClose} style={{ ...btnStyle("transparent", C.textDim), border: `1px solid ${C.steel}`, width: "auto", padding: "4px 10px", fontSize: 10 }}>ปิด</button>
+      </div>
+      {squad.length === 0 ? (
+        <div style={{ fontSize: 12, color: C.textDim }}>ไม่มีข้อมูล squad</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {["GK", "DF", "MF", "FW"].map((pos) => byPos[pos].length > 0 && (
+            <div key={pos}>
+              <div style={{ fontSize: 9, color: POS_COLOR[pos], fontWeight: 700, marginBottom: 4, letterSpacing: 0.5 }}>{POS_TH[pos]} ({byPos[pos].length})</div>
+              {byPos[pos].map((p) => (
+                <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", borderBottom: `1px solid ${C.steel}`, fontSize: 11 }}>
+                  <RatingBadge value={p.rating} />
+                  <span style={{ flex: 1, fontWeight: p.isLegend ? 700 : 400 }}>{p.name}{p.isLegend ? " ⭐" : ""}</span>
+                  <span style={{ fontSize: 9, color: C.textDim, fontFamily: MONO_FONT }}>{p.age}y</span>
+                  {p.injuryDays > 0 && <span style={{ fontSize: 9 }}>🤕</span>}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function TableView({ career, userTeamId, userDivision, round, teams, players, legendLeagueId }) {
   const [viewDiv, setViewDiv] = useState(userDivision);
+  const [rosterTeamId, setRosterTeamId] = useState(null);
   const standings = standingsForDivision(career, viewDiv);
   const league = career.leagues[viewDiv];
+  const rosterTeam = rosterTeamId ? teams.find((t) => t.id === rosterTeamId) : null;
+  const canBrowseRoster = viewDiv === 0 && hasFullRosterLeague(legendLeagueId);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", gap: 8 }}>
         {[0, 1].map((d) => (
-          <button key={d} onClick={() => setViewDiv(d)} style={{ flex: 1, padding: "9px 0", borderRadius: 10, border: `2px solid ${viewDiv === d ? C.amber : C.steel}`, background: viewDiv === d ? "rgba(224,164,88,.12)" : "transparent", color: viewDiv === d ? C.amber : C.chalk, fontFamily: DISPLAY_FONT, fontSize: 12, cursor: "pointer" }}>
+          <button key={d} onClick={() => { setViewDiv(d); setRosterTeamId(null); }} style={{ flex: 1, padding: "9px 0", borderRadius: 10, border: `2px solid ${viewDiv === d ? C.amber : C.steel}`, background: viewDiv === d ? "rgba(224,164,88,.12)" : "transparent", color: viewDiv === d ? C.amber : C.chalk, fontFamily: DISPLAY_FONT, fontSize: 12, cursor: "pointer" }}>
             {LEAGUE_NAMES[d]}{d === userDivision ? " (ทีมคุณ)" : ""}
           </button>
         ))}
       </div>
+      {canBrowseRoster && (
+        <div style={{ fontSize: 10, color: C.textDim, lineHeight: 1.5 }}>แตะชื่อทีม Master League เพื่อดู roster ~23 คน</div>
+      )}
       <Panel style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ padding: 14, paddingBottom: 0 }}><SectionLabel>{league.name} (16 ทีม)</SectionLabel></div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
@@ -7755,10 +8194,14 @@ function TableView({ career, userTeamId, userDivision, round, teams }) {
           <tbody style={{ fontFamily: MONO_FONT }}>
             {standings.map((s, i) => {
               const zone = viewDiv === 0 ? (i >= standings.length - 4 ? "down" : null) : (i < 4 ? "up" : null);
+              const clickable = canBrowseRoster && s.team.legendTeamKey;
               return (
-                <tr key={s.team.id} style={{ background: s.team.id === userTeamId ? "rgba(224,164,88,.15)" : zone === "up" ? "rgba(111,174,90,.06)" : zone === "down" ? "rgba(193,68,14,.06)" : "transparent", borderTop: `1px solid ${C.steel}` }}>
+                <tr key={s.team.id} onClick={clickable ? () => setRosterTeamId(rosterTeamId === s.team.id ? null : s.team.id) : undefined} style={{
+                  background: rosterTeamId === s.team.id ? "rgba(224,164,88,.2)" : s.team.id === userTeamId ? "rgba(224,164,88,.15)" : zone === "up" ? "rgba(111,174,90,.06)" : zone === "down" ? "rgba(193,68,14,.06)" : "transparent",
+                  borderTop: `1px solid ${C.steel}`, cursor: clickable ? "pointer" : "default",
+                }}>
                   <td style={{ padding: "5px 6px" }}>{i + 1}</td>
-                  <td style={{ padding: "5px 6px", fontFamily: "'Segoe UI', sans-serif", fontWeight: s.team.id === userTeamId ? 700 : 400 }}>{s.team.short}</td>
+                  <td style={{ padding: "5px 6px", fontFamily: "'Segoe UI', sans-serif", fontWeight: s.team.id === userTeamId ? 700 : 400, color: clickable ? C.amber : C.chalk }}>{s.team.short}{clickable ? " ›" : ""}</td>
                   <td style={{ textAlign: "center" }}>{s.played}</td><td style={{ textAlign: "center" }}>{s.w}</td>
                   <td style={{ textAlign: "center" }}>{s.d}</td><td style={{ textAlign: "center" }}>{s.l}</td>
                   <td style={{ textAlign: "center" }}>{s.gd > 0 ? "+" + s.gd : s.gd}</td>
@@ -7770,6 +8213,9 @@ function TableView({ career, userTeamId, userDivision, round, teams }) {
         </table>
         <div style={{ padding: "8px 14px", fontSize: 10, color: C.textDim }}>{viewDiv === 0 ? "แดง = โซนตกชั้น (4 ทีมล่างสุด)" : "เขียว = โซนเลื่อนชั้น (4 ทีมบนสุด)"}</div>
       </Panel>
+      {rosterTeam && (
+        <TeamRosterPanel team={rosterTeam} players={players} onClose={() => setRosterTeamId(null)} />
+      )}
       {viewDiv === userDivision && round && (
         <Panel>
           <SectionLabel>โปรแกรมวันที่ {round.day}</SectionLabel>
@@ -7990,9 +8436,9 @@ function MarketScoutView({ scoutFinds, budget, onBuyScoutFind, onScoutSearch, on
       {scoutCards.length > 0 && (
         <Panel style={{ border: `1px solid ${C.blue}` }}>
           <SectionLabel style={{ color: C.blue }} sub={`มี ${scoutCards.length} ใบในกระเป๋า — ติดตั้งได้ทั้งแมวมองชุดใหญ่/เยาวชน${scoutCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดแมวมองที่สุ่มได้</SectionLabel>
-          <div style={CARD_LIST_SCROLL}>
+          <CardListScroll>
             {scoutCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireScoutCard} {...staffCardLockInfo(career, card)} />)}
-          </div>
+          </CardListScroll>
         </Panel>
       )}
       <Panel style={{ border: `1px solid ${hasScout ? C.blue : C.steel}` }}>
@@ -8237,7 +8683,7 @@ function FMSquadBar({ squad, xi, ratings, subsUsed, team }) {
         <span style={{ fontSize: 10, color: FM_LIVE.dim }}>·</span>
         <span style={{ fontSize: 10, color: team.color || FM_LIVE.accent, fontWeight: 700 }}>{team.short}</span>
       </div>
-      <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
+      <DragScroll wheelOnly style={{ display: "flex", gap: 6, paddingBottom: 2 }}>
         {players.map((p) => {
           const rt = (ratings[p.id] || 6.5).toFixed(1);
           return (
@@ -8258,7 +8704,7 @@ function FMSquadBar({ squad, xi, ratings, subsUsed, team }) {
             </div>
           );
         })}
-      </div>
+      </DragScroll>
     </div>
   );
 }
@@ -8502,6 +8948,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   ballSimRef.current = ballSim;
   const possBallXRef = useRef(0.5);
   const cardsRef = useRef(new Map()); // playerId -> จำนวนใบเหลืองสะสม (สอง = แดง)
+  const redCardIdsRef = useRef(new Set()); // playerId ที่โดนแดงในแมตช์นี้ (ตรงๆ หรือ 2 เหลือง) — ใช้ส่งต่อระบบแบนสะสม
   const virtualBallPxRef = useRef(50);
   const commentaryIdRef = useRef(1);
   const gameMinRef = useRef(0);
@@ -8754,7 +9201,11 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   function finalize(finalHomeGoals, finalAwayGoals) {
     if (finishedRef.current) return;
     finishedRef.current = true;
-    onFinish(finalHomeGoals, finalAwayGoals, homeXI, awayXI);
+    const cardEvents = Array.from(cardsRef.current.keys()).map((playerId) => ({
+      playerId,
+      red: redCardIdsRef.current.has(playerId),
+    }));
+    onFinish(finalHomeGoals, finalAwayGoals, homeXI, awayXI, cardEvents);
   }
 
   /* beta-only: instantly resolve remaining time using expected-goals proportional to time left */
@@ -8928,6 +9379,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
             const prevYellow = cardsRef.current.get(offender.id) || 0;
             const isRed = prevYellow >= 1 || Math.random() < 0.05;
             cardsRef.current.set(offender.id, prevYellow + 1);
+            if (isRed) redCardIdsRef.current.add(offender.id);
             const kind = isRed ? "red" : "yellow";
             setStats((s) => (awayFouled ? { ...s, cardsA: s.cardsA + 1 } : { ...s, cardsH: s.cardsH + 1 }));
             setEvents((e) => [`${isRed ? "🟥 ใบแดง!" : "🟨 ใบเหลือง"} ${gameMin}' ${offender.name} (${foulTeam.short})`, ...e]);
@@ -8937,11 +9389,16 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           }
         }
 
-        // ฟาวล์บางลูก (ในระยะยิงได้) = ฟรีคิก — นักเตะเดินมาตั้งกำแพง ยิงเสร็จกลับตำแหน่ง
+        // ฟาวล์ในกรอบเขตโทษ = จุดโทษ, นอกกรอบ = ฟรีคิกเหมือนเดิม
         const fkSide = awayFouled ? "home" : "away";
         const amb = ambientRef.current;
-        if (amb && !amb.shotSeq && !amb.setPiece && !amb.celebration && !amb.restart && Math.random() < 0.4) {
-          startFreekickScene(amb, fkSide);
+        const foulInBox = ballSimRef.current.px > 74 || ballSimRef.current.px < 26;
+        if (amb && !amb.shotSeq && !amb.setPiece && !amb.celebration && !amb.restart) {
+          if (foulInBox) {
+            startPenaltyScene(amb, fkSide);
+          } else if (Math.random() < 0.4) {
+            startFreekickScene(amb, fkSide);
+          }
         }
       }
 
@@ -10112,7 +10569,7 @@ function DrillCard({ drillId, onRemove }) {
     </div>
   );
 }
-function DrillBoard({ drillPlans, drillDoneDay, currentDay, squad, staff, onSetDrillPlan, onAutoDrills, onRunDrills }) {
+function DrillBoard({ drillPlans, drillDoneDay, currentDay, squad, staff, onSetDrillPlan, onAutoDrills, onRunDrills, onAutoAnalystDrills, hasAnalyst }) {
   const [pickerGroup, setPickerGroup] = useState(null);
   return (
     <Panel style={{ border: `1px solid ${C.good}` }}>
@@ -10133,7 +10590,7 @@ function DrillBoard({ drillPlans, drillDoneDay, currentDay, squad, staff, onSetD
                 {coach && <div style={{ fontSize: 8.5, color: C.good }}>⚡ โค้ช</div>}
               </div>
               <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingTop: 7, paddingBottom: 2 }}>
+                <DragScroll style={{ display: "flex", gap: 6, paddingTop: 7, paddingBottom: 2 }}>
                   {plan.map((id, idx) => (
                     <DrillCard key={`${id}_${idx}`} drillId={id} onRemove={() => onSetDrillPlan(g, plan.filter((_, i) => i !== idx))} />
                   ))}
@@ -10143,9 +10600,14 @@ function DrillBoard({ drillPlans, drillDoneDay, currentDay, squad, staff, onSetD
                     </button>
                   )}
                   {plan.length === 0 && (
-                    <button type="button" onClick={() => onAutoDrills(g)} style={{ flex: "0 0 auto", padding: "0 12px", borderRadius: 8, border: `1px solid ${C.purple}`, background: "transparent", color: C.purple, cursor: "pointer", fontSize: 10.5, fontWeight: 700 }}>ให้โค้ชจัดให้</button>
+                    <>
+                      <button type="button" onClick={() => onAutoDrills(g)} style={{ flex: "0 0 auto", padding: "0 12px", borderRadius: 8, border: `1px solid ${C.purple}`, background: "transparent", color: C.purple, cursor: "pointer", fontSize: 10.5, fontWeight: 700 }}>ให้โค้ชจัดให้</button>
+                      {hasAnalyst && onAutoAnalystDrills && (
+                        <button type="button" onClick={() => onAutoAnalystDrills(g)} style={{ flex: "0 0 auto", padding: "0 10px", borderRadius: 8, border: `1px solid ${C.blue}`, background: "rgba(90,155,213,.12)", color: C.blue, cursor: "pointer", fontSize: 10, fontWeight: 700 }}>📊 Analyst</button>
+                      )}
+                    </>
                   )}
-                </div>
+                </DragScroll>
                 {pickerOpen && (
                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap", padding: "6px 6px", borderRadius: 8, background: "rgba(0,0,0,.22)", border: `1px solid ${C.steel}` }}>
                     {Object.entries(DRILLS).filter(([, d]) => d.groups.includes(g)).map(([id, d]) => (
@@ -10173,10 +10635,109 @@ function DrillBoard({ drillPlans, drillDoneDay, currentDay, squad, staff, onSetD
   );
 }
 
+function TrainingAnalystPanel({ squad, staffBonuses, onSetFocus, onAutoAnalystAll }) {
+  const pack = buildSquadTrainingRecommendations(
+    (squad || []).filter((p) => p.injuryDays <= 0),
+    DRILLS,
+    staffBonuses || {},
+    { attrLabel: (k) => ATTR_TH[k] || k },
+  );
+  const { recs, hasAnalyst, analystName } = pack;
+  return (
+    <Panel style={{ border: `1px solid ${hasAnalyst ? C.blue : C.steel}` }}>
+      <SectionLabel style={{ color: hasAnalyst ? C.blue : C.textDim }} sub={hasAnalyst ? `${analystName || "Data Analyst"} วิเคราะห์จุดอ่อนรายคน · กดใส่โฟกัสหรือจัดบอร์ดซ้อม` : "จ้าง Data Analyst จากการ์ดสตาฟเพื่อเห็นรายละเอียดและคำแนะนำมากขึ้น"}>
+        📊 แนะนำการฝึก{hasAnalyst ? " (Analyst)" : ""}
+      </SectionLabel>
+      {hasAnalyst && onAutoAnalystAll && (
+        <button type="button" onClick={onAutoAnalystAll} style={{ ...btnStyle(C.blue, "#08150e"), width: "100%", marginBottom: 10, fontSize: 11, padding: "8px 0" }}>
+          จัดบอร์ดซ้อมทุกตำแหน่งตาม Analyst
+        </button>
+      )}
+      {recs.length === 0 ? (
+        <div style={{ fontSize: 11, color: C.textDim }}>ทีมฟิตดี — ไม่มีจุดที่ต้องเร่งซ้อมเร่งด่วน</div>
+      ) : (
+        <CardListScroll style={{ maxHeight: 220, gap: 6 }}>
+          {recs.map((rec) => (
+            <div key={rec.playerId} style={{ padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 4 }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>{rec.name} <span style={{ color: C.textDim, fontSize: 10 }}>{rec.pos || rec.position}</span></div>
+                {onSetFocus && (
+                  <button type="button" onClick={() => onSetFocus(rec.playerId, rec.focusType)} style={{ fontSize: 9, padding: "3px 8px", borderRadius: 5, border: `1px solid ${TRAINING_COLOR[rec.focusType]}`, background: TRAINING_COLOR[rec.focusType], color: "#08150e", fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+                    โฟกัส {TRAINING_TH[rec.focusType]}
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: C.textDim, lineHeight: 1.45 }}>{rec.reason}</div>
+              {hasAnalyst && rec.drillIds?.length > 0 && (
+                <div style={{ fontSize: 9, color: C.blue, marginTop: 4 }}>
+                  ท่าแนะนำ: {rec.drillIds.map((d) => `${d.icon || ""}${d.name}`).join(" · ")}
+                </div>
+              )}
+            </div>
+          ))}
+        </CardListScroll>
+      )}
+    </Panel>
+  );
+}
+
+function TrainingReportPanel({ reports, currentDay }) {
+  const [openDay, setOpenDay] = useState(null);
+  const list = (reports || []).slice(0, 7);
+  const today = list.find((r) => r.day === currentDay) || list[0];
+  const shown = openDay != null ? list.find((r) => r.day === openDay) : today;
+  return (
+    <Panel style={{ border: `1px solid ${C.amber}` }}>
+      <SectionLabel style={{ color: C.amber }} sub={`เก็บย้อนหลัง ${list.length} วัน · สรุปสเตตที่ขึ้นหลังฝึก`}>📋 รายงานการฝึกซ้อม</SectionLabel>
+      {list.length === 0 ? (
+        <div style={{ fontSize: 11, color: C.textDim }}>ยังไม่มีรายงาน — จะสร้างอัตโนมัติทุกวันหลังฝึก</div>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            {list.map((r) => (
+              <button key={`${r.season}_${r.day}`} type="button" onClick={() => setOpenDay(r.day === openDay ? null : r.day)} style={{
+                fontSize: 9.5, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
+                border: `1px solid ${shown?.day === r.day ? C.amber : C.steel}`,
+                background: shown?.day === r.day ? "rgba(212,175,55,.15)" : "transparent",
+                color: shown?.day === r.day ? C.amber : C.textDim, fontWeight: shown?.day === r.day ? 700 : 500,
+              }}>ว.{r.day}{r.day === currentDay ? " · วันนี้" : ""}</button>
+            ))}
+          </div>
+          {shown && (
+            <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.55 }}>
+              <div style={{ marginBottom: 6 }}>
+                <b style={{ color: TRAINING_COLOR[shown.trainingType] || C.chalk }}>{shown.trainingLabel || shown.trainingType}</b>
+                {shown.isRestDay ? " · วันพัก" : ` · ช่อง ${(shown.slotIdx ?? 0) + 1}/10`}
+                {shown.skippedMatchCount > 0 && ` · ข้ามตัวจริง ${shown.skippedMatchCount} คน`}
+              </div>
+              {shown.drillSummary?.length > 0 && (
+                <div style={{ marginBottom: 6 }}>🏟️ ซ้อมรายตำแหน่ง: {shown.drillSummary.join(" · ")}</div>
+              )}
+              {shown.topGainers?.length > 0 ? (
+                <CardListScroll style={{ maxHeight: 160, gap: 4 }}>
+                  {shown.topGainers.map((row) => (
+                    <div key={row.id} style={{ fontSize: 10.5, padding: "4px 0", borderTop: `1px solid ${C.steel}` }}>
+                      <span style={{ fontWeight: 700, color: C.chalk }}>{row.name}</span>
+                      <span style={{ color: C.good, fontFamily: MONO_FONT, marginLeft: 6 }}>{formatDeltaSummary(row.deltas, (k) => ATTR_TH[k], 4)}</span>
+                    </div>
+                  ))}
+                </CardListScroll>
+              ) : (
+                <div>ไม่มีสเตตขึ้นเด่นชัดวันนี้{shown.isRestDay ? " (วันพัก)" : ""}</div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </Panel>
+  );
+}
+
 function TrainingView({
   trainingPlan, autoTraining, currentSlot, onSetDay, onToggleAuto, onAutoAssign, facilities, budget, onUpgradeFacility,
   squad, staff, individualFocus, onSetFocus, campCooldownDay, currentDay, onRunCamp,
   drillPlans, drillDoneDay, onSetDrillPlan, onAutoDrills, onRunDrills,
+  trainingReports, staffBonuses, onAutoAnalystDrills, onAutoAnalystAll,
 }) {
   const focusSlots = (facilities || {}).techLab || 1;
   const focusUsed = Object.keys(individualFocus || {}).length;
@@ -10186,8 +10747,11 @@ function TrainingView({
   const eligibleFocusPlayers = (squad || []).filter((p) => p.injuryDays <= 0).sort((a, b) => b.rating - a.rating);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <TrainingAnalystPanel squad={squad} staffBonuses={staffBonuses} onSetFocus={onSetFocus} onAutoAnalystAll={onAutoAnalystAll} />
+      <TrainingReportPanel reports={trainingReports} currentDay={currentDay} />
       <DrillBoard drillPlans={drillPlans || {}} drillDoneDay={drillDoneDay || {}} currentDay={currentDay}
-        squad={squad} staff={staff} onSetDrillPlan={onSetDrillPlan} onAutoDrills={onAutoDrills} onRunDrills={onRunDrills} />
+        squad={squad} staff={staff} onSetDrillPlan={onSetDrillPlan} onAutoDrills={onAutoDrills} onRunDrills={onRunDrills}
+        onAutoAnalystDrills={onAutoAnalystDrills} hasAnalyst={staffBonuses?.hasAnalyst} />
       <Panel>
         <SectionLabel sub="ห้องพยาบาลย้ายไปแท็บ 🏥 ห้องพยาบาล (เมนูเพิ่มเติม) แล้ว">ศูนย์ฝึกสโมสร</SectionLabel>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -10334,9 +10898,9 @@ function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, o
       {medicalCards.length > 0 && (
         <Panel style={{ border: `1px solid ${C.blue}` }}>
           <SectionLabel style={{ color: C.blue }} sub={`มี ${medicalCards.length} ใบในกระเป๋า — กด "จ้าง" เพื่อติดตั้งทันที${medicalCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดหมอ/นักกายภาพที่สุ่มได้</SectionLabel>
-          <div style={CARD_LIST_SCROLL}>
+          <CardListScroll>
             {medicalCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireCard} {...staffCardLockInfo(career, card)} />)}
-          </div>
+          </CardListScroll>
         </Panel>
       )}
 
@@ -10400,9 +10964,9 @@ function AcademyView({ career, budget, onHireScout, onHireScoutCard, onHireAcade
       {scoutCards.length > 0 && (
         <Panel style={{ border: `1px solid ${C.blue}` }}>
           <SectionLabel style={{ color: C.blue }} sub={`มี ${scoutCards.length} ใบในกระเป๋า — ติดตั้งได้ทั้งแมวมองชุดใหญ่/เยาวชน${scoutCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดแมวมองที่สุ่มได้</SectionLabel>
-          <div style={CARD_LIST_SCROLL}>
+          <CardListScroll>
             {scoutCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireScoutCard} {...staffCardLockInfo(career, card)} />)}
-          </div>
+          </CardListScroll>
         </Panel>
       )}
 
@@ -10556,10 +11120,7 @@ function SettingsView({ career, onReset, onEnterOnline, uiLang = "th", onSetUiLa
 
 /* ============================== SHOP ============================== */
 function ShopView({ sockerCoins, inventory, shopBuyCount, onPurchasePack, onBuyItemToBag }) {
-  const injuryItem = SHOP_ITEMS[0];
-  const canAffordInjury = sockerCoins >= injuryItem.coinCost;
   const canBuyToday = shopBuyCount < SHOP_DAILY_BUY_LIMIT;
-  const packInBag = inventory?.injury_pack || 0;
   const buysLeft = SHOP_DAILY_BUY_LIMIT - shopBuyCount;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -10599,31 +11160,41 @@ function ShopView({ sockerCoins, inventory, shopBuyCount, onPurchasePack, onBuyI
         </div>
       </Panel>
 
-      <Panel accent={C.blue}>
-        <SectionLabel sub={`ราคา ${injuryItem.coinCost} เหรียญ · ซื้อได้วันละ ${SHOP_DAILY_BUY_LIMIT} ครั้ง`}>ไอเทมในเกม</SectionLabel>
-        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
-          <div style={{ fontSize: 36 }}>{injuryItem.icon}</div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>{injuryItem.name}</div>
-            <div style={{ fontSize: 11.5, color: C.textDim, marginTop: 4, lineHeight: 1.55 }}>{injuryItem.desc}</div>
-            <div style={{ fontSize: 11, color: C.blue, marginTop: 8 }}>ในกระเป๋า: <b>{packInBag}</b> ชิ้น · ซื้อได้อีก <b>{buysLeft}</b> ครั้งวันนี้</div>
-          </div>
-        </div>
-        <button
-          type="button"
-          disabled={!canAffordInjury || !canBuyToday}
-          onClick={() => onBuyItemToBag("injury_pack")}
-          style={{
-            ...btnStyle(canAffordInjury && canBuyToday ? C.good : "#2b332f", canAffordInjury && canBuyToday ? "#08150e" : C.textDim),
-            width: "100%", cursor: canAffordInjury && canBuyToday ? "pointer" : "not-allowed",
-          }}
-        >
-          {!canBuyToday ? "ซื้อครบโควต้าวันนี้แล้ว" : !canAffordInjury ? `เหรียญไม่พอ (ต้องการ ${injuryItem.coinCost})` : `ซื้อเข้ากระเป๋า 🪙${injuryItem.coinCost}`}
-        </button>
-        <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 10, lineHeight: 1.55 }}>
-          ใช้ไอเทมได้ที่ <b style={{ color: C.chalk }}>ตลาด → จัดการทีม → กระเป๋าไอเทม</b>
-        </div>
-      </Panel>
+      {SHOP_ITEMS.map((item) => {
+        const canAfford = sockerCoins >= item.coinCost;
+        const inBag = inventory?.[item.id] || 0;
+        const canBuy = canAfford && canBuyToday;
+        return (
+          <Panel key={item.id} accent={C.blue}>
+            <SectionLabel sub={`ราคา ${item.coinCost} เหรียญ · ซื้อได้วันละ ${SHOP_DAILY_BUY_LIMIT} ครั้ง`}>{item.name}</SectionLabel>
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 12 }}>
+              <div style={{ fontSize: 36 }}>{item.icon}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 11.5, color: C.textDim, marginTop: 4, lineHeight: 1.55 }}>{item.desc}</div>
+                {!item.instant && (
+                  <div style={{ fontSize: 11, color: C.blue, marginTop: 8 }}>ในกระเป๋า: <b>{inBag}</b> ชิ้น · ซื้อได้อีก <b>{buysLeft}</b> ครั้งวันนี้</div>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={!canBuy}
+              onClick={() => onBuyItemToBag(item.id)}
+              style={{
+                ...btnStyle(canBuy ? C.good : "#2b332f", canBuy ? "#08150e" : C.textDim),
+                width: "100%", cursor: canBuy ? "pointer" : "not-allowed",
+              }}
+            >
+              {!canBuyToday ? "ซื้อครบโควต้าวันนี้แล้ว" : !canAfford ? `เหรียญไม่พอ (ต้องการ ${item.coinCost})` : item.instant ? `ใช้ทันที 🪙${item.coinCost}` : `ซื้อเข้ากระเป๋า 🪙${item.coinCost}`}
+            </button>
+            {!item.instant && (
+              <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 10, lineHeight: 1.55 }}>
+                ใช้ไอเทมได้ที่ <b style={{ color: C.chalk }}>ตลาด → จัดการทีม → กระเป๋าไอเทม</b>
+              </div>
+            )}
+          </Panel>
+        );
+      })}
     </div>
   );
 }
@@ -10639,6 +11210,142 @@ function staffPortraitTreatment(stars) {
   const saturate = (0.55 - t * 0.42).toFixed(2);
   const contrast = (1.12 + t * 0.24).toFixed(2);
   return { filter: `brightness(${brightness}) saturate(${saturate}) contrast(${contrast})`, auraAlpha: "99" };
+}
+
+/** keyframes สำหรับอนิเมชันเปิดซอง — ฝังครั้งเดียว (ไฟล์นี้ไม่เคยมี <style> เลย จำเป็นเพราะ
+ * inline style ทำ @keyframes ไม่ได้) ไม่กระทบส่วนอื่นของเกมที่ยังใช้ inline style ล้วนตามเดิม */
+function PackOpenKeyframes() {
+  return (
+    <style>{`
+      @keyframes pkShake {
+        10%, 90% { transform: translateX(-2px) rotate(-1deg); }
+        20%, 80% { transform: translateX(3px) rotate(1deg); }
+        30%, 50%, 70% { transform: translateX(-5px) rotate(-2deg); }
+        40%, 60% { transform: translateX(5px) rotate(2deg); }
+      }
+      @keyframes pkBurstOut {
+        0% { transform: scale(1); opacity: 1; filter: brightness(1); }
+        60% { transform: scale(1.15); opacity: 1; filter: brightness(2.4); }
+        100% { transform: scale(0.2); opacity: 0; filter: brightness(3); }
+      }
+      @keyframes pkFlash {
+        0% { opacity: 0; transform: scale(.2); }
+        35% { opacity: 1; transform: scale(1.3); }
+        100% { opacity: 0; transform: scale(2.2); }
+      }
+      @keyframes pkFlipIn {
+        0% { opacity: 0; transform: rotateY(-100deg) translateY(14px) scale(.92); }
+        55% { opacity: 1; }
+        100% { opacity: 1; transform: rotateY(0deg) translateY(0) scale(1); }
+      }
+      @keyframes pkRingPop {
+        0% { opacity: 0; transform: scale(.6); }
+        45% { opacity: .9; transform: scale(1.15); }
+        100% { opacity: 0; transform: scale(1.5); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pk-shake, .pk-burst, .pk-flash, .pk-flip, .pk-ring { animation: none !important; }
+      }
+    `}</style>
+  );
+}
+
+/** ซีเควนซ์เปิดซอง: สั่น/เรืองแสง (900ms) → ระเบิดแสง (450ms) → การ์ดพลิกทีละใบ (180ms/ใบ) → onDone
+ * tierDef = STAFF_PACK_TIERS[key] (เอาสี/label), cards = ผลที่สุ่มมาแล้วจริงจาก onPull */
+function StaffPackOpenSequence({ tierDef, cards, onDone }) {
+  // แช่ชุดการ์ดไว้ตอนเมาท์ครั้งเดียว — กัน career/lastPull เปลี่ยนระหว่างเล่นอนิเมชัน (เช่น
+  // ระบบรวมการ์ดอัตโนมัติทำงานพร้อมกัน) ทำให้ cards.length ขยับจนตัวนับเปิดใบไม่ถึงเงื่อนไขจบ
+  // (บั๊กที่เจอจริง: โชว์ 9/10 ใบค้าง แล้วปุ่มปิดไม่โผล่เพราะ phase ไปไม่ถึง "done")
+  const [snapshotCards] = useState(cards);
+  const [phase, setPhase] = useState("charging"); // charging -> bursting -> revealing -> done
+  const [revealedCount, setRevealedCount] = useState(0);
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setPhase("bursting"), 900);
+    const t2 = setTimeout(() => setPhase("revealing"), 1350);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
+
+  useEffect(() => {
+    if (phase !== "revealing") return;
+    if (revealedCount >= snapshotCards.length) {
+      const t = setTimeout(() => setPhase("done"), 600);
+      return () => clearTimeout(t);
+    }
+    const t = setTimeout(() => setRevealedCount((n) => n + 1), 180);
+    return () => clearTimeout(t);
+  }, [phase, revealedCount, snapshotCards.length]);
+
+  const charging = phase === "charging";
+  const bursting = phase === "bursting";
+  const showCards = phase === "revealing" || phase === "done";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+      <PackOpenKeyframes />
+      {!showCards && (
+        <div style={{ position: "relative", width: 240, height: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {bursting && (
+            <div className="pk-flash" style={{
+              position: "absolute", inset: -60, borderRadius: "50%",
+              background: `radial-gradient(circle, ${tierDef.color}f0 0%, ${tierDef.color}80 35%, transparent 70%)`,
+              animation: "pkFlash .5s ease-out forwards",
+            }} />
+          )}
+          <div className={charging ? "pk-shake" : bursting ? "pk-burst" : ""} style={{
+            width: 168, height: 244,
+            background: `linear-gradient(155deg, ${tierDef.color}, ${C.panel2} 130%)`,
+            clipPath: "polygon(20px 0, 100% 0, 100% calc(100% - 20px), calc(100% - 20px) 100%, 0 100%, 0 20px)",
+            boxShadow: charging
+              ? `0 20px 44px -14px rgba(0,0,0,.75), 0 0 40px 6px ${tierDef.color}aa`
+              : "0 20px 44px -14px rgba(0,0,0,.75)",
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10,
+            animation: charging ? "pkShake .55s cubic-bezier(.36,.07,.19,.97) infinite"
+              : bursting ? "pkBurstOut .38s ease-in forwards" : "none",
+          }}>
+            <div style={{
+              width: 74, height: 74, borderRadius: "50%",
+              background: `radial-gradient(circle at 34% 28%, ${C.steelLight}, ${C.panel} 70%)`,
+              border: `3px solid ${C.pitchDark}`, boxShadow: `0 0 0 3px ${tierDef.color}`,
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30,
+            }}>🎴</div>
+            <div style={{ fontFamily: "'Arial Black','Segoe UI Black',sans-serif", fontStyle: "italic", fontSize: 15, letterSpacing: 1.5, color: C.pitchDark }}>
+              {tierDef.label.toUpperCase()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCards && (
+        <>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center", perspective: 1000 }}>
+            {snapshotCards.map((card, i) => (
+              <div key={card.cardId} style={{
+                opacity: i < revealedCount ? 1 : 0,
+                transform: i < revealedCount ? "none" : "rotateY(-100deg) translateY(14px) scale(.92)",
+                animation: i < revealedCount ? "pkFlipIn .55s cubic-bezier(.2,.8,.3,1)" : "none",
+                position: "relative",
+              }}>
+                {i < revealedCount && (
+                  <div style={{
+                    position: "absolute", inset: -10, borderRadius: "50%", filter: "blur(16px)",
+                    background: `radial-gradient(circle, ${starColor(card.stars)}aa 0%, transparent 70%)`,
+                    animation: "pkRingPop .7s ease-out .3s forwards", opacity: 0,
+                  }} />
+                )}
+                <StaffPackCardFace card={card} />
+              </div>
+            ))}
+          </div>
+          {phase === "done" && (
+            <button type="button" onClick={onDone} style={{ ...btnStyle(C.amber, "#0b2318"), width: "auto", padding: "10px 24px" }}>
+              ปิด
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 /** การ์ดโชว์ผลตอนเปิดซอง (foil card ทรงเหรียญตัดมุม) — กรอบสีตามดาวของการ์ดนั้นๆ (starColor)
@@ -10671,16 +11378,25 @@ function StaffPackCardFace({ card }) {
       { label: "คุณภาพที่พบ", val: card.qualityBoost || 0, max: 21, strong: false, suffix: "" },
       { label: "เกรด", val: card.grade || 1, max: 7, strong: false, suffix: "/7" },
     ];
+  } else if (card.type === "COACH") {
+    const c = ensureCoachProfile({ ...card }, card.specialty);
+    roleLine = `${STAFF_CARD_TYPE_TH.COACH} · ${STAFF_TH[c.specialty]} · ${COACHING_STYLES[c.coachingStyle]?.th || ""}`;
+    statRows = coachCardStatRows(c);
   } else if (EXTRA_STAFF_TYPES.includes(card.type)) {
     roleLine = STAFF_CARD_TYPE_TH[card.type];
     statRows = [
       { label: "โบนัสเฉพาะทาง", val: card.boost || 0, max: 1.1, strong: true, suffix: "" },
       { label: "เกรด", val: card.grade || 1, max: 7, strong: false, suffix: "/7" },
     ];
-  } else {
+  } else if (card.type === "DOCTOR") {
     roleLine = `${STAFF_CARD_TYPE_TH[card.type]} · ${STAFF_TH[card.specialty]}`;
     statRows = [
       { label: "โบนัสเฉพาะทาง", val: card.boost || 0, max: 1.1, strong: true, suffix: "" },
+      { label: "เกรด", val: card.grade || 1, max: 7, strong: false, suffix: "/7" },
+    ];
+  } else {
+    roleLine = STAFF_CARD_TYPE_TH[card.type] || card.type;
+    statRows = [
       { label: "เกรด", val: card.grade || 1, max: 7, strong: false, suffix: "/7" },
     ];
   }
@@ -10688,6 +11404,8 @@ function StaffPackCardFace({ card }) {
   const tilting = tilt.x !== 0 || tilt.y !== 0;
   return (
     <div
+      className="staff-pack-card"
+      data-no-drag-scroll
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
       style={{
@@ -10710,16 +11428,22 @@ function StaffPackCardFace({ card }) {
         }} />
       )}
       {card.portrait && (
-        <div style={{
-          position: "absolute", top: 0, left: 0, right: 0, height: 128, zIndex: 1,
-          backgroundImage: `url("${card.portrait}")`, backgroundSize: "cover", backgroundPosition: "center 18%",
-          filter: photoFilter,
-        }} />
+        <img
+          src={card.portrait}
+          alt=""
+          draggable={false}
+          style={{
+            position: "absolute", top: 0, left: 0, right: 0, height: 128, width: "100%",
+            objectFit: "cover", objectPosition: "center 18%", zIndex: 1,
+            filter: photoFilter, pointerEvents: "none",
+          }}
+        />
       )}
       {card.portrait && (
         <div style={{
           position: "absolute", top: 0, left: 0, right: 0, height: 128, zIndex: 2,
           background: "linear-gradient(180deg, rgba(7,21,16,.1) 0%, rgba(7,21,16,0) 34%, rgba(7,21,16,.7) 82%, rgba(7,21,16,.92) 100%)",
+          pointerEvents: "none",
         }} />
       )}
       <div style={{ position: "relative", zIndex: 3, height: "100%", display: "flex", flexDirection: "column", padding: "12px 12px 10px" }}>
@@ -10786,7 +11510,7 @@ function StaffCardStack({ group, career, onHire }) {
   const shown = expanded ? group.cards : group.cards.slice(0, 1);
   return (
     <div>
-      <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 4 }}>
+      <DragScroll style={{ display: "flex", gap: 10, paddingBottom: 2 }}>
         {shown.map((card) => {
           const lock = staffCardLockInfo(career, card);
           const canAfford = lock.afford !== false;
@@ -10813,7 +11537,7 @@ function StaffCardStack({ group, career, onHire }) {
             </div>
           );
         })}
-      </div>
+      </DragScroll>
       {group.count > 1 && (
         <button type="button" onClick={() => setExpanded((v) => !v)} style={{
           background: "none", border: "none", color: C.blue, fontSize: 10.5,
@@ -10927,8 +11651,78 @@ function ManagerHireConfirmModal({ name, stars, preferredFormation, weeklyWage, 
   );
 }
 
-function StaffCardsView({ career, onPull, onMerge, onHire, onAutoMerge, onToggleAutoTier }) {
+function StaffGuideView({ career, uiLang = "th" }) {
+  const categories = staffGuideCategories(uiLang);
+  const [cat, setCat] = useState("manager");
+  const roles = staffGuideRolesByCategory(cat, uiLang);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <Panel accent={C.blue}>
+        <SectionLabel sub={t(uiLang, "staff.guideSub")}>📖 {t(uiLang, "staff.guideTitle")}</SectionLabel>
+        <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.55 }}>
+          {uiLang === "en"
+            ? "Stars (★) and grade affect strength. Coach/doctor roles lock until season end if replaced mid-season."
+            : "ดาว (★) และเกรดยิ่งสูงยิ่งแรง · โค้ช/หมอเปลี่ยนกลางฤดูกาลมีค่าปรับและล็อกจนจบฤดูกาล"}
+        </div>
+      </Panel>
+
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+        {categories.map((c) => {
+          const active = cat === c.id;
+          return (
+            <button key={c.id} type="button" onClick={() => setCat(c.id)} style={{
+              padding: "6px 10px", borderRadius: 6, cursor: "pointer", fontSize: 10, fontWeight: 700,
+              background: active ? "rgba(91,141,184,.2)" : C.panel2,
+              border: `1px solid ${active ? C.blue : C.steel}`,
+              color: active ? C.blue : C.textDim,
+            }}>
+              {c.icon} {c.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {roles.map((role) => {
+          const hired = isStaffGuideRoleHired(career, role) || isStaffGuideSpecialHired(career, role.id);
+          return (
+            <Panel key={role.id} style={{ border: hired ? `1px solid ${C.good}` : undefined }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.chalk }}>
+                    {role.icon} {role.title}
+                  </div>
+                  {role.subtitle && <div style={{ fontSize: 10, color: C.textDim, marginTop: 2 }}>{role.subtitle}</div>}
+                </div>
+                {hired && (
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, color: C.good, background: "rgba(46,204,113,.12)",
+                    border: `1px solid ${C.good}`, borderRadius: 4, padding: "2px 6px", flexShrink: 0,
+                  }}>{t(uiLang, "staff.guideHired")}</span>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: C.amber, fontWeight: 600, marginBottom: 4, letterSpacing: 0.5 }}>
+                {t(uiLang, "staff.guideEffects")}
+              </div>
+              <ul style={{ margin: "0 0 8px 0", paddingLeft: 18, fontSize: 11, color: C.textDim, lineHeight: 1.55 }}>
+                {role.effects.map((line, i) => <li key={i} style={{ marginBottom: 3 }}>{line}</li>)}
+              </ul>
+              <div style={{ fontSize: 10, color: C.textDim, borderTop: `1px solid ${C.steel}`, paddingTop: 6 }}>
+                <span style={{ color: C.blue, fontWeight: 600 }}>{t(uiLang, "staff.guideWhere")}: </span>
+                {role.hire}
+              </div>
+            </Panel>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StaffCardsView({ career, uiLang = "th", onPull, onMerge, onHire, onAutoMerge, onToggleAutoTier }) {
   const [sub, setSub] = useState("draw");
+  const [openingTier, setOpeningTier] = useState(null);
   const tickets = career.staffDrawTickets || 0;
   const freeLeft = career.staffFreeDrawsLeft || 0;
   const bag = career.staffCardBag || [];
@@ -10943,9 +11737,9 @@ function StaffCardsView({ career, onPull, onMerge, onHire, onAutoMerge, onToggle
   }));
 
   const subTabs = [
-    { id: "draw", label: "เปิดการ์ด", icon: "🎴" },
-    { id: "bag", label: "กระเป๋า", icon: "🎒" },
-    { id: "merge", label: "รวมการ์ด", icon: "✨" },
+    { id: "draw", label: uiLang === "en" ? "Draw" : "เปิดการ์ด", icon: "🎴" },
+    { id: "bag", label: uiLang === "en" ? "Bag" : "กระเป๋า", icon: "🎒" },
+    { id: "merge", label: uiLang === "en" ? "Merge" : "รวมการ์ด", icon: "✨" },
   ];
 
   return (
@@ -10960,16 +11754,16 @@ function StaffCardsView({ career, onPull, onMerge, onHire, onAutoMerge, onToggle
       </Panel>
 
       <div style={{ display: "flex", gap: 6 }}>
-        {subTabs.map((t) => {
-          const active = sub === t.id;
+        {subTabs.map((st) => {
+          const active = sub === st.id;
           return (
-            <button key={t.id} type="button" onClick={() => setSub(t.id)} style={{
+            <button key={st.id} type="button" onClick={() => setSub(st.id)} style={{
               flex: 1, padding: "9px 4px", borderRadius: 8, cursor: "pointer", fontSize: 10.5, fontWeight: 700,
               background: active ? "rgba(224,164,88,.15)" : C.panel2,
               border: `2px solid ${active ? C.amber : C.steel}`,
               color: active ? C.amber : C.textDim,
             }}>
-              <div style={{ fontSize: 14 }}>{t.icon}</div>{t.label}
+              <div style={{ fontSize: 14 }}>{st.icon}</div>{st.label}
             </button>
           );
         })}
@@ -10977,48 +11771,58 @@ function StaffCardsView({ career, onPull, onMerge, onHire, onAutoMerge, onToggle
 
       {sub === "draw" && (
         <Panel>
-          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
-            เปิดครั้งละ {CARDS_PER_STAFF_PULL} ใบ · เลือกระดับซอง · สิทธิ์ฟรีรายวันใช้ได้เฉพาะ Bronze
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {STAFF_PACK_TIER_LIST.map((tier) => {
-              const canFreeThis = tier.freeEligible && freeLeft > 0;
-              const canTicketThis = tickets >= tier.ticketCost;
-              const canPullThis = canFreeThis || canTicketThis;
-              const oddsHint = tier.weights[6] > 0 ? "มีโอกาสได้ 7★" : tier.weights[0] === 0 ? "การันตีอย่างน้อย 2★" : "คละดาว";
-              return (
-                <button key={tier.key} type="button" disabled={!canPullThis} onClick={() => onPull(tier.key)} style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "10px 14px", borderRadius: 10, cursor: canPullThis ? "pointer" : "not-allowed",
-                  background: canPullThis ? `linear-gradient(135deg, ${tier.color}33, ${tier.color}11)` : "#1a221c",
-                  border: `2px solid ${canPullThis ? tier.color : C.steel}`,
-                  opacity: canPullThis ? 1 : 0.55,
-                }}>
-                  <div style={{ textAlign: "left" }}>
-                    <div style={{ fontSize: 13, fontWeight: 800, color: canPullThis ? tier.color : C.textDim }}>ซอง {tier.label}</div>
-                    <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, marginTop: 2 }}>{oddsHint}</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: canPullThis ? C.chalk : C.textDim, fontFamily: MONO_FONT }}>
-                      {canFreeThis ? "ฟรีวันนี้" : `${tier.ticketCost} ตั๋ว`}
-                    </div>
-                    {!canPullThis && <div style={{ fontSize: 9, color: C.crimson, marginTop: 2 }}>ตั๋วไม่พอ</div>}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          {lastPull.length > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <SectionLabel sub="เลื่อนดูการ์ดที่ได้">ผลการเปิด</SectionLabel>
-              <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 6, marginBottom: 10 }}>
-                {lastPull.map((card) => <StaffPackCardFace key={card.cardId} card={card} />)}
+          {openingTier ? (
+            <StaffPackOpenSequence
+              tierDef={openingTier}
+              cards={lastPull}
+              onDone={() => setOpeningTier(null)}
+            />
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
+                เปิดครั้งละ {CARDS_PER_STAFF_PULL} ใบ · เลือกระดับซอง · สิทธิ์ฟรีรายวันใช้ได้เฉพาะ Bronze
               </div>
-              <SectionLabel sub={`จ้างจากที่เพิ่งได้${lastPull.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>รายการจ้างงาน</SectionLabel>
-              <div style={{ ...CARD_LIST_SCROLL, gap: 6 }}>
-                {lastPull.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHire} {...staffCardLockInfo(career, card)} />)}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {STAFF_PACK_TIER_LIST.map((tier) => {
+                  const canFreeThis = tier.freeEligible && freeLeft > 0;
+                  const canTicketThis = tickets >= tier.ticketCost;
+                  const canPullThis = canFreeThis || canTicketThis;
+                  const oddsHint = tier.weights[6] > 0 ? "มีโอกาสได้ 7★" : tier.weights[0] === 0 ? "การันตีอย่างน้อย 2★" : "คละดาว";
+                  return (
+                    <button key={tier.key} type="button" disabled={!canPullThis} onClick={() => { onPull(tier.key); setOpeningTier(tier); }} style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "10px 14px", borderRadius: 10, cursor: canPullThis ? "pointer" : "not-allowed",
+                      background: canPullThis ? `linear-gradient(135deg, ${tier.color}33, ${tier.color}11)` : "#1a221c",
+                      border: `2px solid ${canPullThis ? tier.color : C.steel}`,
+                      opacity: canPullThis ? 1 : 0.55,
+                    }}>
+                      <div style={{ textAlign: "left" }}>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: canPullThis ? tier.color : C.textDim }}>ซอง {tier.label}</div>
+                        <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, marginTop: 2 }}>{oddsHint}</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: canPullThis ? C.chalk : C.textDim, fontFamily: MONO_FONT }}>
+                          {canFreeThis ? "ฟรีวันนี้" : `${tier.ticketCost} ตั๋ว`}
+                        </div>
+                        {!canPullThis && <div style={{ fontSize: 9, color: C.crimson, marginTop: 2 }}>ตั๋วไม่พอ</div>}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
-            </div>
+              {lastPull.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <SectionLabel sub="เลื่อนดูการ์ดที่ได้">ผลการเปิด</SectionLabel>
+                  <DragScroll style={{ display: "flex", gap: 10, paddingBottom: 2, marginBottom: 10 }}>
+                    {lastPull.map((card) => <StaffPackCardFace key={card.cardId} card={card} />)}
+                  </DragScroll>
+                  <SectionLabel sub={`จ้างจากที่เพิ่งได้${lastPull.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>รายการจ้างงาน</SectionLabel>
+                  <CardListScroll style={{ gap: 6 }}>
+                    {lastPull.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHire} {...staffCardLockInfo(career, card)} />)}
+                  </CardListScroll>
+                </div>
+              )}
+            </>
           )}
         </Panel>
       )}
@@ -11221,11 +12025,12 @@ function MoreView({ setTab, marketOpen }) {
   const items = [
     { id: "profile", label: "โปรไฟล์สโมสร", desc: "ถ้วยรางวัล · สถิติทุกฤดูกาล", icon: "🏆" },
     { id: "club", label: "สโมสร", desc: "แฟนบอล · สปอนเซอร์ · การเงิน", icon: "🏟️" },
-    { id: "staffcards", label: "การ์ดสตาฟ", desc: "สุ่ม · กระเป๋า · รวมดาว", icon: "🎴" },
+    { id: "staffcards", label: "การ์ดสตาฟ", desc: "สุ่ม · กระเป๋า · รวมการ์ด", icon: "🎴" },
+    { id: "staffguide", label: "คู่มือสตาฟ", desc: "บัพแต่ละตำแหน่ง · จ้างที่ไหน", icon: "📖" },
     { id: "coach", label: "ห้องโค้ช", desc: "ปรับ/เปลี่ยนโค้ชทุกตำแหน่ง", icon: "🧑‍🏫" },
     { id: "medical", label: "ห้องพยาบาล", desc: "บาดเจ็บ · หมอ/นักกายภาพ", icon: "🏥" },
     { id: "shop", label: "ร้านค้า", desc: "Socker Coin + ไอเทม", icon: "🛒" },
-    { id: "table", label: "ตารางลีกเต็ม", desc: "โปรแกรม + คะแนนทุกทีม", icon: "📊" },
+    { id: "table", label: "ตารางลีกเต็ม", desc: "คะแนน + ดู roster Master League", icon: "📊" },
     { id: "training", label: "ฝึกซ้อม", desc: "แผนฝึก + อัปเกรดสนาม", icon: "🏋️" },
     { id: "academy", label: "อคาเดมี", desc: "ดาวรุ่ง + แมวมองเยาวชน", icon: "🌱" },
     { id: "settings", label: "ตั้งค่า", desc: "บันทึก · รีเซ็ต · ออนไลน์", icon: "⚙" },

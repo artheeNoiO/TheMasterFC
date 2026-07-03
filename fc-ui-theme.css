@@ -368,3 +368,37 @@
   margin: 0 auto;
   padding: 10px 12px;
 }
+
+/* Scroll without visible bars — drag or wheel instead */
+.fc-scroll-x,
+.fc-scroll-y,
+.fc-hide-scrollbar {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+.fc-scroll-x::-webkit-scrollbar,
+.fc-scroll-y::-webkit-scrollbar,
+.fc-hide-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+.fc-scroll-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.fc-scroll-y {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.fc-drag-scroll {
+  cursor: grab;
+}
+.fc-drag-scroll.fc-drag-scroll--active {
+  cursor: grabbing;
+  user-select: none;
+}
+.fc-drag-scroll.fc-drag-scroll--wheel-only {
+  cursor: default;
+}
