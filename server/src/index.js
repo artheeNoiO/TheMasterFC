@@ -34,7 +34,7 @@ app.use("/api/stake", stakeRoutes);
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.listen(port, () => {
-  console.log(`The Socker Manager API → http://localhost:${port}`);
+  console.log(`The Master Football Club API → http://localhost:${port}`);
   console.log(`Auth mode: ${process.env.SUPABASE_URL ? "Supabase" : "dev (local)"}`);
 });
 

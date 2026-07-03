@@ -1,11 +1,11 @@
 @echo off
 chcp 65001 >nul
-title Deploy The Socker Manager
+title Deploy The Master Football Club
 cd /d "C:\Users\arnlo\OneDrive\Desktop\OLARN Projects\Made your club"
 
 echo.
 echo  ============================================
-echo   THE SOCKER MANAGER — Deploy Playtest
+echo   The Master Football Club — Deploy Playtest
 echo  ============================================
 echo.
 echo  ขั้นที่ 1: Login Vercel (ครั้งแรกเท่านั้น)
@@ -33,6 +33,6 @@ call npx vercel --prod
 
 echo.
 echo  เสร็จแล้ว — คัดลอก URL ที่ Vercel แสดง แชร์ให้เพื่อนลองเล่น
-echo  ตั้งโดเมน thesockermanager.com ตาม DEPLOY.txt
+echo  ตั้งโดเมน themasterfc.com ตาม DEPLOY.txt
 echo.
 pause

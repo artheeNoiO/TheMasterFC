@@ -1,7 +1,7 @@
 import React, { useId, useRef, useMemo } from "react";
 import { HexTeamBadge } from "./club-badge.jsx";
 
-/** v0 live football pitch — adapted for The Socker Manager */
+/** v0 live football pitch — The Master Football Club */
 const VB = { w: 1600, h: 900 };
 const AD_BG = "#45c47a";
 const AD_TEXT = "#0a2818";
@@ -642,7 +642,7 @@ export function TrackerMatchView({
   ballSim, possHomePct = 50, sponsorLabel, animTick = 0, goalFlash, highlightSeq, players, shotPath = null,
 }) {
   const uid = useId().replace(/:/g, "");
-  const label = sponsorLabel || "SOCker Manager";
+  const label = sponsorLabel || "The Master FC";
 
   const targetPx = ballSim?.px ?? 50;
   const targetPy = ballSim?.py ?? 50;

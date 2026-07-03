@@ -11,7 +11,7 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: CLIENT_URL
-        value: https://www.thesockermanager.com
+        value: https://www.themasterfc.com
       - key: CRON_SECRET
         generateValue: true
       - key: SUPABASE_URL

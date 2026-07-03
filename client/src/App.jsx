@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { api, getToken, setToken } from "./lib/api.js";
 import { isSupabaseMode, supabase } from "./lib/supabase.js";
 
+import { GAME_NAME } from "@version";
+
 const C = {
   panel: "#132a20", amber: "#e0a458", good: "#6fae5a", steel: "#26433a", textDim: "#a9bdb1", purple: "#9d6fe0", chalk: "#f2f0e6",
 };
@@ -13,7 +15,7 @@ function SplashScreen() {
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box", background: "#0a0a0a" }}>
       <img
         src={BRAND_SPLASH_LOGO}
-        alt="Master Football Manager"
+        alt={GAME_NAME}
         style={{ maxWidth: "min(420px, 88vw)", width: "100%", height: "auto", objectFit: "contain" }}
       />
     </div>
@@ -92,7 +94,7 @@ function AuthScreen({ onAuthed }) {
   return (
     <LoginBackdrop style={{ padding: 24 }}>
       <div style={{ textAlign: "center", marginBottom: 16 }}>
-        <img src={BRAND_SPLASH_LOGO} alt="Master Football Manager" style={{ maxWidth: "min(260px, 72vw)", width: "100%", height: "auto" }} />
+        <img src={BRAND_SPLASH_LOGO} alt={GAME_NAME} style={{ maxWidth: "min(260px, 72vw)", width: "100%", height: "auto" }} />
       </div>
       <p style={{ textAlign: "center", color: C.textDim, fontSize: 14 }}>
         {isSupabaseMode ? "ล็อกอินด้วย Supabase" : "โหมดทดสอบ (dev) — ไม่ต้องมีเซิร์ฟเวอร์จ่ายเงิน"}

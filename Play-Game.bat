@@ -1,11 +1,11 @@
 @echo off
 chcp 65001 >nul
-title The Socker Manager
+title The Master Football Club
 cd /d "%~dp0"
 
 echo.
 echo  ========================================
-echo    THE SOCKER MANAGER - กำลังเปิดเกม...
+echo    The Master Football Club - กำลังเปิดเกม...
 echo  ========================================
 echo.
 
@@ -22,7 +22,7 @@ powershell -NoProfile -Command ^
 timeout /t 1 /nobreak >nul
 
 echo เริ่มเกม (client + API server)...
-start "The Socker Manager" "%~dp0Start-Game-Server.bat"
+start "The Master Football Club" "%~dp0Start-Game-Server.bat"
 
 echo รอเซิร์ฟเวอร์พร้อม...
 set /a WAIT=0
@@ -31,7 +31,7 @@ powershell -NoProfile -Command "try { (Invoke-WebRequest -Uri 'http://127.0.0.1:
 if %errorlevel%==0 goto server_ready
 set /a WAIT+=1
 if %WAIT% GEQ 40 (
-  echo [WARN] รอนานเกิน 40 วินาที — ลองเปิดเบราว์เซอร์เองที่ http://localhost:5173
+  echo [WARN] รอนานเกิน 40 วินาที — ลองเปิดเบราว์เซอร์เองที่ http://localhost:5173/play
   goto open_browser
 )
 timeout /t 1 /nobreak >nul
@@ -41,14 +41,14 @@ goto wait_loop
 echo เซิร์ฟเวอร์พร้อมแล้ว!
 
 :open_browser
-start "" "http://localhost:5173"
+start "" "http://localhost:5173/play"
 
 echo.
-echo  เปิดเบราว์เซอร์แล้ว: http://localhost:5173
+echo  เปิดเบราว์เซอร์แล้ว: http://localhost:5173/play
 echo  API server: http://localhost:3001
 echo  โหมดโลกจำลอง: เล่นในเบราว์เซอร์ได้เลย
 echo.
-echo  ถ้ายังไม่ขึ้น: ดูหน้าต่าง "The Socker Manager — Server"
+echo  ถ้ายังไม่ขึ้น: ดูหน้าต่าง "The Master Football Club — Server"
 echo  ปิดหน้าต่าง Server เพื่อหยุดเกม
 echo.
 pause

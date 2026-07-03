@@ -1,0 +1,370 @@
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap");
+
+/* Shared FC theme — landing page + in-game shell (NOT live match) */
+
+.fc-display {
+  font-family: "Barlow Condensed", "Segoe UI", sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fc-game-shell {
+  position: relative;
+  min-height: 100vh;
+  color: #fff;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  padding-bottom: 64px;
+  isolation: isolate;
+}
+
+.fc-game-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: center 35% / cover no-repeat;
+  pointer-events: none;
+}
+
+.fc-game-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 70% 50% at 50% 35%, rgba(61, 186, 106, 0.06), transparent 60%),
+    linear-gradient(180deg, rgba(5, 6, 8, 0.75) 0%, rgba(5, 6, 8, 0.92) 45%, #050608 100%);
+}
+
+.fc-game-noise {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  opacity: 0.035;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.fc-game-content {
+  position: relative;
+  z-index: 2;
+}
+
+/* —— Header —— */
+.fc-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(5, 6, 8, 0.72);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fc-header-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 8px;
+}
+
+.fc-header-team {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fc-header-meta {
+  font-size: 10px;
+  color: #9aa3ad;
+}
+
+.fc-header-budget {
+  font-family: ui-monospace, "SF Mono", "Courier New", monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: #d4af37;
+  font-variant-numeric: tabular-nums;
+}
+
+.fc-header-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 8px;
+  font-size: 10px;
+  color: #9aa3ad;
+  font-family: ui-monospace, "SF Mono", "Courier New", monospace;
+}
+
+.fc-header-chip {
+  background: rgba(212, 175, 55, 0.12);
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 10px;
+  color: #d4af37;
+  font-weight: 700;
+}
+
+.fc-header-short {
+  margin-left: auto;
+  color: #d4af37;
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+/* —— Panels —— */
+.fc-panel {
+  position: relative;
+  padding: 14px 16px;
+  border-radius: 6px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+}
+
+.fc-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #3dba6a, #d4af37);
+  opacity: 0.75;
+}
+
+.fc-panel--plain::before {
+  display: none;
+}
+
+.fc-panel--accent::before {
+  background: var(--fc-panel-accent, #3dba6a);
+  opacity: 1;
+}
+
+/* —— Section labels —— */
+.fc-section {
+  margin-bottom: 10px;
+}
+
+.fc-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #9aa3ad;
+}
+
+.fc-section-sub {
+  font-size: 10px;
+  color: #6b7280;
+  margin-top: 3px;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* —— Buttons —— */
+.fc-btn {
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  cursor: pointer;
+  border: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.fc-btn--primary {
+  background: #fff;
+  color: #050608;
+}
+
+.fc-btn--primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(255, 255, 255, 0.18);
+}
+
+.fc-btn--ghost {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.fc-btn--ghost:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+.fc-btn--green {
+  background: rgba(61, 186, 106, 0.15);
+  color: #3dba6a;
+  border: 1px solid rgba(61, 186, 106, 0.4);
+}
+
+/* —— Bottom nav —— */
+.fc-bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: space-around;
+  padding: 4px 0 max(4px, env(safe-area-inset-bottom));
+  background: rgba(5, 6, 8, 0.88);
+  backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fc-bottom-nav-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 52px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #9aa3ad;
+}
+
+.fc-bottom-nav-btn--active {
+  color: #d4af37;
+}
+
+.fc-bottom-nav-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.fc-bottom-nav-label {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fc-bottom-nav-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: #d4af37;
+}
+
+/* —— Title / login (in-game) —— */
+.fc-title-screen {
+  min-height: 100vh;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  color: #fff;
+}
+
+.fc-title-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: center 35% / cover no-repeat;
+}
+
+.fc-title-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(5, 6, 8, 0.7) 0%, rgba(5, 6, 8, 0.95) 100%);
+}
+
+.fc-title-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 400px;
+  width: 100%;
+  text-align: center;
+}
+
+.fc-eyebrow {
+  display: inline-block;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #3dba6a;
+  margin-bottom: 16px;
+  padding: 6px 14px;
+  border: 1px solid rgba(61, 186, 106, 0.35);
+  border-radius: 2px;
+  background: rgba(61, 186, 106, 0.08);
+}
+
+.fc-title-logo {
+  max-width: min(280px, 78vw);
+  width: 100%;
+  height: auto;
+  margin-bottom: 12px;
+  filter: drop-shadow(0 12px 32px rgba(0, 0, 0, 0.55));
+}
+
+.fc-title-tagline {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: clamp(14px, 3vw, 18px);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.85);
+  margin: 0 0 24px;
+}
+
+.fc-save-card {
+  font-size: 12px;
+  color: #fff;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.fc-toast {
+  position: fixed;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  padding: 10px 18px;
+  border-radius: 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: #fff;
+  color: #050608;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.fc-main-wrap {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 10px 12px;
+}

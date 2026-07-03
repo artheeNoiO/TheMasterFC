@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title The Socker Manager - Home API Server
+title The Master Football Club - Home API Server
 cd /d "%~dp0"
 
 echo.

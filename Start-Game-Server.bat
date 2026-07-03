@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title The Socker Manager - Server
+title The Master Football Club - Server
 cd /d "%~dp0"
 
 where node >nul 2>&1

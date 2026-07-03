@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title The Socker Manager - Cloudflare Tunnel
+title The Master Football Club - Cloudflare Tunnel
 cd /d "%~dp0"
 
 where cloudflared >nul 2>&1

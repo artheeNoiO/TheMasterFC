@@ -1,5 +1,6 @@
 import React from "react";
 import OnlineApp from "./App.jsx";
+import { GAME_NAME } from "@version";
 
 const C = { amber: "#e0a458", textDim: "#a9bdb1", steel: "#26433a", panel: "#132a20" };
 
@@ -11,7 +12,7 @@ export default function OnlinePortal({ onPracticeAgain }) {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "10px 14px", borderBottom: `1px solid ${C.steel}`, background: C.panel,
       }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber }}>🌐 The Socker Manager — ออนไลน์</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.amber }}>🌐 {GAME_NAME} — ออนไลน์</div>
         <button
           type="button"
           onClick={onPracticeAgain}

@@ -1,4 +1,4 @@
-# Deploy checklist — The Socker Manager
+# Deploy checklist — The Master Football Club
 
 ## 1) Vercel (หน้าเกม — playtest)
 
@@ -10,16 +10,19 @@
 หรือจากเครื่อง (ต้อง login Vercel ครั้งแรก):
   Deploy-Playtest.bat
 
-## 2) โดเมน thesockermanager.com
+## 2) โดเมน themasterfc.com
 
-1. ซื้อโดเมนที่ Cloudflare Registrar / Namecheap (~$12/ปี)
+1. ซื้อโดเมนที่ Cloudflare Registrar / Namecheap
 2. Vercel → Project → Settings → Domains → Add:
-   - thesockermanager.com
-   - www.thesockermanager.com
+   - themasterfc.com
+   - www.themasterfc.com
 3. ตั้ง DNS ตามที่ Vercel บอก (มักเป็น):
    - A @ → 76.76.21.21
    - CNAME www → cname.vercel-dns.com
-4. ตั้ง redirect: thesockermanager.com → www.thesockermanager.com
+4. ตั้ง redirect: themasterfc.com → www.themasterfc.com
+
+หน้าเว็บ: https://www.themasterfc.com/
+เกมจริง: https://www.themasterfc.com/play
 
 ## 3) API ออนไลน์
 
@@ -29,8 +32,8 @@
 
   สรุป:
     Start-Home-Server.bat     → API :3001 + SQLite
-    Start-Home-Tunnel.bat     → Cloudflare Tunnel → api.thesockermanager.com
-    Vercel env: VITE_API_URL=https://api.thesockermanager.com
+    Start-Home-Tunnel.bat     → Cloudflare Tunnel → api.themasterfc.com
+    Vercel env: VITE_API_URL=https://api.themasterfc.com
     Run-Game-Cron.bat         → day-tick (Task Scheduler ทุก 1 ชม.)
 
 ### ตัวเลือก B — Render (จ่าย ~$7+/เดือน, 24/7 ไม่ต้องเปิดคอม)

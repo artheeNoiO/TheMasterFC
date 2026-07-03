@@ -1,11 +1,11 @@
 @echo off
 chcp 65001 >nul
-title The Socker Manager
+title The Master Football Club
 cd /d "%~dp0"
 
 echo.
 echo  ========================================
-echo    THE SOCKER MANAGER - กำลังเปิดเกม...
+echo    The Master Football Club - กำลังเปิดเกม...
 echo  ========================================
 echo.
 
@@ -24,7 +24,7 @@ if not exist "node_modules\" (
 )
 
 echo เริ่มเซิร์ฟเวอร์เกม...
-start "The Socker Manager - Server" cmd /k "cd /d "%~dp0" && npm run dev"
+start "The Master Football Club - Server" cmd /k "cd /d "%~dp0" && npm run dev"
 
 echo รอเซิร์ฟเวอร์พร้อม...
 timeout /t 6 /nobreak >nul
@@ -33,6 +33,6 @@ start "" "http://localhost:5173"
 
 echo.
 echo  เปิดเบราว์เซอร์แล้ว: http://localhost:5173
-echo  ปิดหน้าต่าง "The Socker Manager - Server" เพื่อหยุดเกม
+echo  ปิดหน้าต่าง "The Master Football Club - Server" เพื่อหยุดเกม
 echo.
 pause

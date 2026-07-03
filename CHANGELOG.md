@@ -1,10 +1,34 @@
 # Changelog
 
-All notable changes to **The Socker Manager** (Siam Manager Online).
+All notable changes to **MASTER FOOTBALL MANAGER** (Siam Manager Online).
 
 Game release version (`GAME_VERSION`) lives in `game-version.js`. Save migrations use integer `SAVE_VERSION` in career saves.
 
-## 0.8.0-stable — baseline (2026-07-03)
+## Unreleased
+
+_(nothing yet)_
+
+## 0.9.0-stable — baseline (2026-07-03)
+
+**เวอร์ชันหลัก + แช่ (production & rollback baseline).**
+
+- **GAME_VERSION:** `0.9.0` · **SAVE_VERSION:** `5` (ไม่เปลี่ยน)
+- Git tag: `v0.9.0-stable` — ย้อนกลับ: `git checkout v0.9.0-stable`
+- Patch ทดลอง: branch `patch/qwen-*` + bump `GAME_VERSION` เป็น `0.9.x` (อย่า bump `SAVE_VERSION` ถ้าไม่จำเป็น)
+
+### New
+- **Landing page** ที่ `/` — Features / Roadmap / สไตล์ themasterfc.com
+- **เกม** ที่ `/play` — routing แยกจากเว็บ
+- **FC web UI theme** ในเกม — พื้นหลังมืด, glass card, Barlow Condensed, header/nav แบบเว็บ
+- **ศูนย์แผนก่อนเกม (MatchPlanHub)** — เทียบสถิติ / จัดตัว / วางแผน + scout report
+- **ผู้จัดการทีมมีระดับดาว (1★–7★)** — ส่งผลคำแนะนำ, prep, training, negotiation
+- **Rebrand** → **The Master Football Club** (`themasterfc.com`)
+
+### Changed
+- `Play-Game.bat` เปิด `/play` โดยตรง
+- สี UI เกมจาก FM เขียว → FC dark (`#050608`, `#3dba6a`, `#d4af37`)
+
+## 0.8.0-stable — baseline (2026-07-03) [superseded by 0.9.0-stable]
 
 **แช่เวอร์ชันหลักก่อนทด patch ด้วย Qwen (Codey).**
 

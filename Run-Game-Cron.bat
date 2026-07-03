@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title The Socker Manager - Game Cron
+title The Master Football Club - Game Cron
 cd /d "%~dp0"
 
 where node >nul 2>&1

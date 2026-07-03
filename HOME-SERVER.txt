@@ -1,5 +1,5 @@
 ================================================================================
-  THE SOCKER MANAGER — คู่มือ Home Server (คอมเป็น API ฟรี)
+  The Master Football Club — คู่มือ Home Server (คอมเป็น API ฟรี)
 ================================================================================
 
 เป้าหมาย: หน้าเกมอยู่ Vercel (ฟรี) + API รันบนคอมคุณ + เปิดให้คนนอกเข้าผ่าน Cloudflare Tunnel
@@ -9,9 +9,9 @@
  ภาพรวม
 --------------------------------------------------------------------------------
 
-  ผู้เล่น → www.thesockermanager.com (Vercel)
+  ผู้เล่น → www.themasterfc.com (Vercel)
                 ↓ VITE_API_URL
-           api.thesockermanager.com (Cloudflare Tunnel ฟรี)
+           api.themasterfc.com (Cloudflare Tunnel ฟรี)
                 ↓
            คอมคุณ :3001 (Express + SQLite)
 
@@ -59,7 +59,7 @@
        cloudflared tunnel create the-socker-manager
 
   4. ผูก DNS (ตัวอย่าง subdomain api):
-       cloudflared tunnel route dns the-socker-manager api.thesockermanager.com
+       cloudflared tunnel route dns the-master-fc api.themasterfc.com
 
   5. คัดลอก cloudflared-config.example.yml → cloudflared-config.yml
      แก้ credentials-file ให้ชี้ไฟล์ .json ที่ได้จากขั้น 3
@@ -68,7 +68,7 @@
        หน้าต่าง A: Start-Home-Server.bat
        หน้าต่าง B: Start-Home-Tunnel.bat
 
-  7. ทดสอบ: https://api.thesockermanager.com/health
+  7. ทดสอบ: https://api.themasterfc.com/health
 
   ทางลัดทดสอบ (ไม่ต้องมีโดเมน): cloudflared tunnel --url http://localhost:3001
   จะได้ URL ชั่วคราวแบบ trycloudflare.com
@@ -78,7 +78,7 @@
 --------------------------------------------------------------------------------
 
   1. Vercel → Project → Settings → Environment Variables
-     VITE_API_URL = https://api.thesockermanager.com
+     VITE_API_URL = https://api.themasterfc.com
 
   (ถ้าใช้ Supabase Auth เพิ่ม)
      VITE_SUPABASE_URL = ...
@@ -86,7 +86,7 @@
 
   2. Redeploy หน้าเว็บ
 
-  3. เปิด www.thesockermanager.com → โหมดออนไลน์ควรเรียก API ที่คอมคุณ
+  3. เปิด www.themasterfc.com → กด เล่นเกม → /play
 
 --------------------------------------------------------------------------------
  ขั้นที่ 4 — Cron เกมเดินวัน (แทน Render cron)

@@ -1,0 +1,31 @@
+# Deploy ไป Cloudflare (ไม่ใช้ Vercel)
+
+## วิธี A — รัน Deploy-Cloudflare.bat (แนะนำ)
+
+1. Double-click Deploy-Cloudflare.bat
+2. Login Cloudflare ใน browser (ครั้งแรก)
+3. รอ deploy เสร็จ
+4. Dashboard → Workers & Pages → themasterfc → Custom domains
+5. Add: www.themasterfc.com และ themasterfc.com
+
+## วิธี B — อัปโหลดมือ (ถ้า bat ไม่ผ่an)
+
+1. รัน Publish-Website.bat (build + เปิดโฟลเดอร์ dist)
+2. Cloudflare → Workers & Pages → **แท็บ Pages** (ไม่ใช่ Workers)
+3. Create → **Pages** → Upload assets
+4. เปิด dist → Ctrl+A → ลากไฟล์ทั้งหมด (ต้องมี index.html + assets)
+5. Project name: themasterfc (ไม่ใช่ Worker name แบบ random)
+6. Deploy
+
+## ถ้า Deploy ไม่ผ่an — เช็ค
+
+- ต้องมี index.html ในรายการอัปโหลด
+- ต้องมีโฟลเดอร์ assets (ไฟล์ .js .css)
+- ชื่อ project ใช้ a-z 0-9 เท่านั้น เช่น themasterfc
+- อย่าใช้หน้า "Create Worker" — ใช้ "Create Pages"
+- ลองใหม่หลัง 10 นาที (Cloudflare บางที error ชั่วคราว)
+
+## หลัง deploy สำเร็จ
+
+https://www.themasterfc.com/
+https://www.themasterfc.com/play

@@ -1,9 +1,33 @@
 /**
- * The Socker Manager — game & save versioning
+ * The Master Football Club — game & save versioning
  * Bump GAME_VERSION for releases; bump SAVE_VERSION only on breaking save-schema changes.
  */
 
-export const GAME_VERSION = "0.8.0";
+/** Display name (single source of truth for UI, bats, meta tags) */
+export const GAME_NAME = "The Master Football Club";
+
+/** Short label for tight UI (headers, window titles) */
+export const GAME_NAME_SHORT = "The Master FC";
+
+/** Marketing tagline */
+export const GAME_TAGLINE = "Build your team. Build your dream. Be number one.";
+
+/** Production URLs (local dev uses localhost) */
+export const GAME_SITE_URL = "https://www.themasterfc.com";
+export const GAME_API_URL = "https://api.themasterfc.com";
+
+/** Donation — set URL when ready (Ko-fi, PayPal, PromptPay page, etc.) */
+export const GAME_DONATE_URL = "";
+export const GAME_DONATE_LABEL = "Support development";
+
+/** Premium / event currency label (Socker Coins in-game may map here later) */
+export const MASTER_COIN_LABEL = "Master Coin";
+
+export const GAME_VERSION = "0.9.0";
+
+/** Frozen baseline tag — same as GAME_VERSION after a stable release */
+export const STABLE_VERSION = "0.9.0";
+export const STABLE_TAG = "v0.9.0-stable";
 
 /** งบเริ่มต้นผู้เล่นใหม่ (โลกจำลอง + online shard) */
 export const STARTING_BUDGET = 10_000_000;

@@ -1,8 +1,10 @@
+@import "../../fc-ui-theme.css";
+
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font-family: "Segoe UI", system-ui, sans-serif;
-  background: #0b2318;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  background: #050608;
   color: #f2f0e6;
   min-height: 100vh;
 }

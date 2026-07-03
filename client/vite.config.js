@@ -21,6 +21,8 @@ export default defineConfig({
       "@version": path.resolve(root, "../game-version.js"),
       "@crowd": path.resolve(root, "../stadium-crowd.js"),
       "@tracker": path.resolve(root, "../tracker-pitch.jsx"),
+      "@worldcup": path.resolve(root, "../world-cup-event.js"),
+      "@roadmap": path.resolve(root, "../features-roadmap.js"),
     },
   },
 });
