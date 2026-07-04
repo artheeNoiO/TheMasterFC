@@ -11,7 +11,7 @@ import {
 } from "@siam/game-engine";
 import { prisma } from "../db.js";
 import { reclaimInactiveLegends } from "./legendService.js";
-import { DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY } from "../../../game-version.js";
+import { DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY, isMatchWindowOpen } from "../../../game-version.js";
 import {
   initRoadmapForNewClub,
   getRoadmapPayload,
@@ -289,6 +289,26 @@ export async function getLeagueTable(shardId, viewerUserId) {
   }));
 }
 
+/** รายชื่อนักเตะทุกทีมในชาร์ด (ยกเว้นทีมตัวเอง) — สำหรับหน้าตลาด/เสนอซื้อตรง */
+export async function getShardRoster(shardId, viewerClubId) {
+  const clubs = await prisma.club.findMany({
+    where: { shardId, id: { not: viewerClubId } },
+    include: { players: { where: { isLegend: false } } },
+    orderBy: { name: "asc" },
+  });
+  return clubs.map((c) => ({
+    id: c.id,
+    name: c.name,
+    shortCode: c.shortCode,
+    primaryColor: c.primaryColor,
+    isBot: c.isBot,
+    players: c.players.map((p) => ({
+      id: p.id, name: p.name, position: p.position, age: p.age,
+      rating: p.rating, potential: p.potential, value: p.value, wage: p.wage,
+    })),
+  }));
+}
+
 export async function getTodayMatches(shardId, dayNumber) {
   return prisma.match.findMany({
     where: { shardId, dayNumber },
@@ -470,6 +490,7 @@ function resolveLockedXI(club, players) {
 
 /** ก่อนแมตช์สด — จำลองบอทที่เหลือในวันนี้ แล้วคืนข้อมูลแมตช์ของผู้เล่น */
 export async function prepareUserLiveMatch(userId) {
+  if (!isMatchWindowOpen()) throw new Error("นอกช่วงเวลาแข่งขัน (9:00-20:00 น.) — ตอนนี้เป็นช่วงพักฟื้น/ตลาด");
   const club = await getClubForUser(userId);
   if (!club) throw new Error("ไม่พบสโมสร");
   await simBotOnlyMatchesOnDay(club.shardId, club.shard.dayNumber);
@@ -592,6 +613,10 @@ export async function finishUserLiveMatch(userId, matchId) {
  * autoSimHuman=false → รอแมตช์สด (ใช้ dev เท่านั้น)
  */
 export async function runDayTickForShard(shardId, { autoSimHuman = true, force = false } = {}) {
+  // แข่งได้เฉพาะ 9:00-20:00 เวลาไทยเท่านั้น — หลัง 20:00 คือช่วงพักฟื้น/อีเวนต์/ตลาด ห้าม day-tick เดินต่อ
+  if (!force && !isMatchWindowOpen()) {
+    return { shardId, action: "outside_match_window" };
+  }
   const now = Date.now();
   const last = lastShardDayTick.get(shardId) || 0;
   if (!force && now - last < MS_PER_GAME_DAY) {

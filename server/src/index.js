@@ -8,6 +8,7 @@ import matchRoutes from "./routes/matches.js";
 import cronRoutes from "./routes/cron.js";
 import legendRoutes from "./routes/legends.js";
 import stakeRoutes from "./routes/stake.js";
+import negotiationRoutes from "./routes/negotiations.js";
 import feedbackRoutes from "./routes/feedback.js";
 import { runStakeTick } from "./services/stakeService.js";
 import { runDayTickAll } from "./services/gameService.js";
@@ -52,6 +53,7 @@ app.use("/api/matches", matchRoutes);
 app.use("/api/cron", cronRoutes);
 app.use("/api/legends", legendRoutes);
 app.use("/api/stake", stakeRoutes);
+app.use("/api/negotiations", negotiationRoutes);
 app.use("/api/feedback", feedbackRoutes);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -59,7 +61,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 app.listen(port, () => {
   console.log(`The Master Football Club API → http://localhost:${port}`);
   console.log(`Auth mode: ${process.env.SUPABASE_URL ? "Supabase + Game ID" : "Game ID + dev"}`);
-  console.log(`Season pace: ${MATCH_DAYS_PER_SEASON} game days / 24h (~${MINUTES_PER_GAME_DAY} min/day)`);
+  console.log(`Season pace: ${MATCH_DAYS_PER_SEASON} game days / 9:00-20:00 น. ไทย (~${MINUTES_PER_GAME_DAY} min/day) · หลัง 20:00 = พักฟื้น/ตลาด`);
   console.log(`Daily staff card draws: ${DAILY_STAFF_CARD_DRAWS}/calendar day`);
 });
 

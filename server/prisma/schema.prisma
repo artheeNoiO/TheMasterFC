@@ -214,3 +214,25 @@ model Bid {
 
   @@index([listingId])
 }
+
+/** เสนอซื้อนักเตะตรงจากทีมอื่น (สไตล์ Top Eleven "Negotiations") — เสนอได้แม้นักเตะไม่ได้ประกาศขาย
+ * เจ้าของมีเวลาจำกัดตอบรับ/ปฏิเสธ/ต่อรอง ก่อนหมดเวลาแล้วถือว่าปฏิเสธอัตโนมัติ */
+model PlayerOffer {
+  id            String   @id @default(cuid())
+  shardId       String
+  playerId      String
+  fromClubId    String
+  toClubId      String
+  feeOffer      Int
+  wageOffer     Int
+  status        String   @default("pending") // pending | accepted | rejected | countered | expired | cancelled
+  counterFee    Int?
+  counterWage   Int?
+  round         Int      @default(1)
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  respondedAt   DateTime?
+
+  @@index([shardId, toClubId, status])
+  @@index([shardId, fromClubId, status])
+}

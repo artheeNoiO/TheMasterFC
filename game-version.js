@@ -60,11 +60,36 @@ export const STARTER_MASTER_COINS = BETA_TEST ? BETA_STARTER_MASTER_COINS : 10;
 /** เปิดซองการ์ดสตาฟฟรี — รีเซ็ตทุกวันตามเวลาจริง (ISO date) */
 export const DAILY_STAFF_CARD_DRAWS = 100;
 
-/** ออนไลน์: จบ 1 ฤดูกาล (15 นัด) ภายใน 24 ชม. จริง → ~96 นาที/นัด */
+/** ออนไลน์: จบ 1 ฤดูกาล (15 นัด) ภายใน 1 วันจริง — แต่แข่งเฉพาะช่วง 9:00-20:00 (เวลาไทย) เท่านั้น
+ * หลัง 20:00 ถึง 9:00 วันถัดไป = ช่วงพักฟื้นนักเตะ/อีเวนต์/ตลาดซื้อขาย (ห้ามแข่ง) */
 export const MATCH_DAYS_PER_SEASON = 15;
-export const SEASON_REAL_HOURS = 24;
-export const MS_PER_GAME_DAY = Math.floor((SEASON_REAL_HOURS * 3600 * 1000) / MATCH_DAYS_PER_SEASON);
+export const ACTIVE_WINDOW_START_HOUR = 9;
+export const ACTIVE_WINDOW_END_HOUR = 20;
+export const ACTIVE_WINDOW_HOURS = ACTIVE_WINDOW_END_HOUR - ACTIVE_WINDOW_START_HOUR; // 11
+export const MS_PER_GAME_DAY = Math.floor((ACTIVE_WINDOW_HOURS * 3600 * 1000) / MATCH_DAYS_PER_SEASON);
 export const MINUTES_PER_GAME_DAY = Math.round(MS_PER_GAME_DAY / 60000);
+export const GAME_TIMEZONE = "Asia/Bangkok";
+
+/** ชั่วโมงปัจจุบันตามเวลาไทย (0-23, รวมเศษนาทีเป็นทศนิยม) — ไม่พึ่ง timezone ของเครื่อง/เซิร์ฟเวอร์ */
+export function bangkokHourNow(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: GAME_TIMEZONE, hour: "numeric", minute: "numeric", hourCycle: "h23",
+  }).formatToParts(date);
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  return h + m / 60;
+}
+
+/** true ระหว่าง 9:00-20:00 เวลาไทย — ช่วงที่แข่งขันได้ (day-tick เดินได้, ห้ามซื้อขาย) */
+export function isMatchWindowOpen(date = new Date()) {
+  const h = bangkokHourNow(date);
+  return h >= ACTIVE_WINDOW_START_HOUR && h < ACTIVE_WINDOW_END_HOUR;
+}
+
+/** true ระหว่าง 20:00-9:00 เวลาไทย — ช่วงพักฟื้น/อีเวนต์/ตลาดซื้อขาย (ห้ามแข่ง) */
+export function isMarketWindowOpen(date = new Date()) {
+  return !isMatchWindowOpen(date);
+}
 
 /** @deprecated ใช้ DAILY_STAFF_CARD_DRAWS */
 export const DAILY_FREE_STAFF_DRAWS = DAILY_STAFF_CARD_DRAWS;
