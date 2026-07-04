@@ -29,17 +29,48 @@ export const GAME_DISCORD_HINT =
 /** Premium / event currency label (Socker Coins in-game may map here later) */
 export const MASTER_COIN_LABEL = "Master Coin";
 
-export const GAME_VERSION = "0.9.6";
+export const GAME_VERSION = "0.9.24";
 
 /** Frozen baseline tag — same as GAME_VERSION after a stable release */
 export const STABLE_VERSION = "0.9.0";
 export const STABLE_TAG = "v0.9.0-stable";
 
+/** Beta test — ปิดเป็น false เมื่อจบช่วงทดสอบ */
+export const BETA_TEST = true;
+export const BETA_STARTING_BUDGET = 500_000_000;
+export const BETA_STARTER_MASTER_COINS = 1000;
+export const BETA_LABEL = "TEST BETA";
+export const BETA_HEADLINE = "ช่วงทดสอบ Test Beta";
+export const BETA_MESSAGE =
+  "เกมอยู่ระหว่างพัฒนา — ระบบอาจเปลี่ยน ข้อมูลอาจรีเซ็ต แจ้งบั๊กและความคิดเห็นได้ที่ Discord";
+export const BETA_PERKS =
+  "ผู้ทดสอบ: งบสโมสร 500M · Master Coin 1,000 · สมัคร Game ID ฟรี";
+/** รางวัลช่วง Test Beta — แสดงบนเว็บ */
+export const BETA_MASTER_REWARD =
+  "เล่นจนถึง Master League ในช่วง Test Beta — รับรางวัล Limited Edition";
+export const BETA_MASTER_REWARD_SHORT =
+  "ถึง Master League ใน Test Beta → รางวัล Limited";
+
 /** งบเริ่มต้นผู้เล่นใหม่ (โลกจำลอง + online shard) */
-export const STARTING_BUDGET = 10_000_000;
+export const STARTING_BUDGET = BETA_TEST ? BETA_STARTING_BUDGET : 10_000_000;
+
+/** Master Coin / Socker Coin ตอนสร้างโปรไฟล์ใหม่ */
+export const STARTER_MASTER_COINS = BETA_TEST ? BETA_STARTER_MASTER_COINS : 10;
+
+/** เปิดซองการ์ดสตาฟฟรี — รีเซ็ตทุกวันตามเวลาจริง (ISO date) */
+export const DAILY_STAFF_CARD_DRAWS = 100;
+
+/** ออนไลน์: จบ 1 ฤดูกาล (15 นัด) ภายใน 24 ชม. จริง → ~96 นาที/นัด */
+export const MATCH_DAYS_PER_SEASON = 15;
+export const SEASON_REAL_HOURS = 24;
+export const MS_PER_GAME_DAY = Math.floor((SEASON_REAL_HOURS * 3600 * 1000) / MATCH_DAYS_PER_SEASON);
+export const MINUTES_PER_GAME_DAY = Math.round(MS_PER_GAME_DAY / 60000);
+
+/** @deprecated ใช้ DAILY_STAFF_CARD_DRAWS */
+export const DAILY_FREE_STAFF_DRAWS = DAILY_STAFF_CARD_DRAWS;
 
 /** Integer — increments when save migrations are required */
-export const SAVE_VERSION = 11;
+export const SAVE_VERSION = 12;
 
 /**
  * UI / feature gates keyed off save version (applied after migrateCareerSave).
@@ -57,6 +88,7 @@ export const FEATURES = {
   clubSystems: SAVE_VERSION >= 9,
   /** Full real-world rosters for Big 5 master leagues */
   fullRosterDB: SAVE_VERSION >= 11,
+  roadmapTierAB: SAVE_VERSION >= 12,
 };
 
 /** Human-readable migration notes (mirrors CHANGELOG save entries) */
@@ -72,4 +104,5 @@ export const SAVE_MIGRATION_NOTES = {
   9: "Club systems — stadium upgrades, board satisfaction, extra staff bonuses",
   10: "Training reports + Analyst training recommendations",
   11: "Full rosters — ~23 players/team, all 8 legend leagues (~2,944 players)",
+  12: "Roadmap Tier A/B — FFP, board sack, contracts, shadow squad, scouting zones, derby, World Cup stub, press, conversations, xG, injury depth, pre-season, B-team",
 };

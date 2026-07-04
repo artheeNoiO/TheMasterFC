@@ -29,3 +29,24 @@
 
 https://www.themasterfc.com/
 https://www.themasterfc.com/play
+
+## โหมดออนไลน์ (Phase 1) — ตั้งครั้งเดียว
+
+Cloudflare Pages ต้องมี secret เดียวกับ game API บน Render:
+
+1. Double-click **Setup-Online-Bridge.bat** (สร้าง secret + ส่งขึ้น Cloudflare)
+2. Render Dashboard → **the-socker-manager-api** → Environment
+   - เพิ่ม `GAME_PROVISION_SECRET` = ค่าเดียวกับใน `server\.env`
+3. รัน **Deploy-Cloudflare.bat** อีกครั้ง (ให้ Functions ใช้ secret ใหม่)
+
+`GAME_API_URL` default เป็น `https://api.themasterfc.com` แล้ว — ไม่ต้องตั้งบน CF ถ้าใช้โดเมนนี้
+
+Local dev: `server\.env` มี `GAME_PROVISION_SECRET` แล้ว — ไม่ต้องผ่าน CF session (localhost ใช้ JWT จาก :3001 โดยตรง)
+
+## Home Server (API บนคอม — ฟรี)
+
+1. **Setup-Home-Tunnel-Auto.bat** — login Cloudflare + สร้าง tunnel → `api.themasterfc.com`
+2. **Start-Online-Stack.bat** — เปิด API + tunnel 2 หน้าต่างพร้อมกัน
+3. ทดสอบ: https://api.themasterfc.com/health → `{"ok":true}`
+
+ต้องเปิดคอม + tunnel ตลอด — ถ้าปิด เกมออนไลน์หยุด

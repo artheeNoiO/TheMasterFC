@@ -4,14 +4,34 @@ import cors from "cors";
 import authRoutes from "./routes/auth.js";
 import clubRoutes from "./routes/clubs.js";
 import leagueRoutes from "./routes/leagues.js";
+import matchRoutes from "./routes/matches.js";
 import cronRoutes from "./routes/cron.js";
 import legendRoutes from "./routes/legends.js";
 import stakeRoutes from "./routes/stake.js";
 import feedbackRoutes from "./routes/feedback.js";
 import { runStakeTick } from "./services/stakeService.js";
+import { runDayTickAll } from "./services/gameService.js";
+import {
+  MS_PER_GAME_DAY,
+  MINUTES_PER_GAME_DAY,
+  MATCH_DAYS_PER_SEASON,
+  DAILY_STAFF_CARD_DRAWS,
+} from "../../game-version.js";
+
+// Fail loudly at startup rather than silently minting tokens with a weak
+// fallback secret if this ever runs with NODE_ENV=production unconfigured.
+if (process.env.NODE_ENV === "production" && !process.env.AUTH_TOKEN_SECRET) {
+  throw new Error(
+    "AUTH_TOKEN_SECRET is not set. Set a long random value before running in production."
+  );
+}
 
 const app = express();
 const port = Number(process.env.PORT) || 3001;
+
+// Deployed behind Render's reverse proxy — trust the first hop's X-Forwarded-For
+// so express-rate-limit (and req.ip) see the real client IP instead of the proxy's.
+app.set("trust proxy", 1);
 
 /** รองรับหลาย origin คั่นด้วย comma — ใช้ตอน Vercel + home server */
 function parseCorsOrigins() {
@@ -28,6 +48,7 @@ app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/clubs", clubRoutes);
 app.use("/api/leagues", leagueRoutes);
+app.use("/api/matches", matchRoutes);
 app.use("/api/cron", cronRoutes);
 app.use("/api/legends", legendRoutes);
 app.use("/api/stake", stakeRoutes);
@@ -37,11 +58,25 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.listen(port, () => {
   console.log(`The Master Football Club API → http://localhost:${port}`);
-  console.log(`Auth mode: ${process.env.SUPABASE_URL ? "Supabase" : "dev (local)"}`);
+  console.log(`Auth mode: ${process.env.SUPABASE_URL ? "Supabase + Game ID" : "Game ID + dev"}`);
+  console.log(`Season pace: ${MATCH_DAYS_PER_SEASON} game days / 24h (~${MINUTES_PER_GAME_DAY} min/day)`);
+  console.log(`Daily staff card draws: ${DAILY_STAFF_CARD_DRAWS}/calendar day`);
 });
 
-/* Stake League real-time tick — เช็คทุก 30 วิ ว่ามีรอบที่ถึงเวลาแข่งหรือยัง
-   (production ที่ instance หลับได้ ควรตั้ง cron ภายนอกยิง /api/cron/stake-tick เสริม) */
+/* League day-tick — จบ 1 ฤดูกาลใน 24 ชม. (~96 นาที/นัด) · cron ภายนอกเป็น backup */
+if (process.env.DAY_TICK_DISABLED !== "1") {
+  setInterval(async () => {
+    try {
+      const results = await runDayTickAll();
+      const active = results.filter((r) => r.action && r.action !== "throttled");
+      if (active.length) console.log("day-tick:", JSON.stringify(active));
+    } catch (e) {
+      console.error("day-tick error", e);
+    }
+  }, MS_PER_GAME_DAY);
+}
+
+/* Stake League real-time tick */
 if (process.env.STAKE_TICK_DISABLED !== "1") {
   setInterval(async () => {
     try {

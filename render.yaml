@@ -14,6 +14,12 @@ services:
         value: https://www.themasterfc.com
       - key: CRON_SECRET
         generateValue: true
+      - key: AUTH_TOKEN_SECRET
+        generateValue: true
+      - key: GAME_PROVISION_SECRET
+        sync: false
+      - key: NODE_ENV
+        value: production
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
@@ -42,6 +48,7 @@ services:
   - type: cron
     name: day-tick
     runtime: node
+    # backup — in-process tick ทุก ~96 นาที (15 นัด/24ชม.) เป็นหลัก; throttle กันซ้ำ
     schedule: "0 * * * *"
     rootDir: server
     buildCommand: npm install

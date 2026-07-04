@@ -36,7 +36,7 @@ export function createUserClub(config, shardId) {
     secondaryColor: config.secondaryColor ?? "#f2f0e6",
     shirtColor: config.shirtColor,
     shortsColor: config.shortsColor,
-    budget: 10_000_000,
+    budget: 500_000_000,
     tier: -3,
     formation: "4-4-2",
     chemistry: 50,

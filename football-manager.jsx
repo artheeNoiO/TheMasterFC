@@ -6,11 +6,13 @@ import {
   getRosterForTeam, hasFullRosterLeague, ROSTER_STATS, getRosterForLeague,
 } from "@legend";
 import { starsFromRating, getPlayerStarProfile, STAR_LABEL_TH, STAR_MAX, starWageMultiplier } from "@stars";
-import { GAME_NAME, GAME_TAGLINE, GAME_VERSION, SAVE_VERSION, FEATURES, STARTING_BUDGET, GAME_DISCORD_URL, GAME_DISCORD_LABEL, GAME_DISCORD_HINT } from "@version";
+import { GAME_NAME, GAME_TAGLINE, GAME_VERSION, SAVE_VERSION, FEATURES, STARTING_BUDGET, STARTER_MASTER_COINS, BETA_TEST, BETA_STARTING_BUDGET, BETA_STARTER_MASTER_COINS, GAME_DISCORD_URL, GAME_DISCORD_LABEL, GAME_DISCORD_HINT, DAILY_STAFF_CARD_DRAWS, MINUTES_PER_GAME_DAY, MATCH_DAYS_PER_SEASON } from "@version";
 import {
   genPlayerName, pickNationalityForTeam, pickNationality, getNationality,
   formatNationality, ensurePlayerNationality, resolvePlayerNationality,
 } from "@nat";
+import { BetaStrip } from "@beta";
+import { getDefaultGameUiLang } from "@locale";
 import { t, resolveUiLang, UI_LANGS } from "@i18n";
 import {
   STADIUM_LEVELS, EXTRA_STAFF_EFFECTS, getStadiumLevel, getStadiumDef, stadiumName,
@@ -19,6 +21,14 @@ import {
   refreshBoardAfterUserMatch, processBoardSeasonEnd,
   headMedicalTeamBuff, dailyMedicalRecoveryDays, headMedicalRehabStaminaBonus, headMedicalLongInjuryClear,
 } from "@club";
+import {
+  ensureRoadmapFields, initRoadmapOnCareer, runDailyRoadmapTick, runSeasonEndRoadmap,
+  recordMatchXg, recordTransferSpend, canAffordTransferFfp, enrichPlayerContract,
+  applyInjuryToPlayer, blocksHeavyTraining, applyPressChoice, resolvePlayerConversation,
+  isDerbyMatch, derbyMoraleBonus, runPreSeasonFriendlies,
+  canRunYouthIntakeCeremony, markYouthIntakeCeremony, addShadowTarget, checkShadowMarketAlerts,
+  assignScoutZone, SCOUT_ZONES, INJURY_SEVERITY,
+} from "@roadmapfx";
 import {
   staffGuideCategories, staffGuideRolesByCategory,
   isStaffGuideRoleHired, isStaffGuideSpecialHired,
@@ -35,6 +45,12 @@ import {
 import { useStadiumCrowd, isCrowdMuted, setCrowdMuted } from "@crowd";
 import { TrackerMatchView, pitchToWide, V0PitchSVG, TrackerPlayerDots } from "@tracker";
 import { ClubBadge, LOGO_ICONS, shadeColor } from "./club-badge.jsx";
+import IntroCutscene, { INTRO_SEEN_KEY } from "./intro-cutscene.jsx";
+import { buildNewClubWorldNews, WorldNewsFlash, HomeNewsPanel } from "./world-news.jsx";
+import {
+  careerSaveKey, profileSaveKey, introSeenKey,
+  migrateLegacySavesToUser, rememberLastUsername,
+} from "@save";
 import {
   createAmbientPitchState, advanceAmbientPitch, ambientAsBallSim,
   computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene, startPenaltyScene,
@@ -449,7 +465,7 @@ function genPlayer(position, tier, teamId, forcedAge, startDay, opts = {}) {
   p.wage = computePlayerWage(p.rating);
   p.potential = age <= 21 ? clamp(p.rating + rand(6, 34), p.rating, 99) : age <= 25 ? clamp(p.rating + rand(0, 10), p.rating, 99) : p.rating;
   p.contractEndsDay = (startDay || 1) + rand(150, 400);
-  return p;
+  return enrichPlayerContract(p);
 }
 const genSquad = (teamId, tier, startDay, opts = {}) => SQUAD_TEMPLATE.map((pos) => genPlayer(pos, tier, teamId, undefined, startDay || 1, opts));
 
@@ -746,8 +762,12 @@ function pickStaffPortrait(type, specialty, stars) {
   return `/staff-portraits/${folder}/${encodeURIComponent(file)}`;
 }
 const STARTING_STAFF_TICKETS = 20;
-const DAILY_FREE_STAFF_DRAWS = 5;
+const DAILY_FREE_STAFF_DRAWS = DAILY_STAFF_CARD_DRAWS;
 const CARDS_PER_STAFF_PULL = 10;
+/** สตาฟเริ่มต้น — ทุกตำแหน่ง 3★ สเตตเท่ากัน (ไม่สุ่มการ์ด gacha) */
+const STARTER_STAFF_STARS = 3;
+const STARTER_MANAGER_FORMATION = "4-4-2";
+const STARTER_COACHING_STYLE = "balanced";
 const MERGE_CARD_COUNT = 10;
 const SEASON_STAFF_TICKETS = [10, 8, 6, 4, 2];
 const STAR_PULL_WEIGHTS = [30, 25, 20, 12, 8, 4, 1];
@@ -786,6 +806,89 @@ function starsToManagerStatRange(stars) {
   const lo = 12 + stars * 8;
   const hi = lo + 8 + stars * 2;
   return { lo, hi };
+}
+
+/** สเตตผจก.กลางๆ ของดาวที่กำหนด — ใช้ค่าเดียวทุกสเตต */
+function uniformManagerStat(stars) {
+  const { lo, hi } = starsToManagerStatRange(stars);
+  return Math.round((lo + hi) / 2);
+}
+
+/** Payload การ์ดสตาฟเริ่มต้น — 3★ ค่าเท่ากันทุกคน ไม่สุ่ม strong stat / specialty */
+function buildUniformStaffCardPayload(type, stars, opts = {}) {
+  const grade = starsToStaffGrade(stars);
+  const boost = Math.round((0.1 + grade * 0.14) * 100) / 100;
+
+  if (type === "MANAGER") {
+    const stat = uniformManagerStat(stars);
+    const stats = {};
+    Object.keys(MANAGER_STAT_TH).forEach((k) => { stats[k] = stat; });
+    return {
+      stats,
+      preferredFormation: STARTER_MANAGER_FORMATION,
+      signingCost: 0,
+      weeklyWage: scaleStaffDailyWage(stat * 300 + stars * 2000),
+    };
+  }
+  if (type === "COACH") {
+    const specialty = opts.specialty || "MF";
+    const profile = buildCoachProfile(specialty, stars, grade, boost);
+    return {
+      ...profile,
+      specialty,
+      coachingStyle: STARTER_COACHING_STYLE,
+      signingCost: 0,
+      weeklyWage: scaleStaffDailyWage(grade * 7000 + stars * 1500),
+    };
+  }
+  if (type === "SCOUT") {
+    return {
+      grade,
+      specialtyPos: "MF",
+      findChance: 0.18 + grade * 0.09,
+      qualityBoost: grade * 3,
+      signingCost: 0,
+      weeklyWage: scaleStaffDailyWage(grade * 5500 + stars * 1200),
+    };
+  }
+  if (EXTRA_STAFF_TYPES.includes(type)) {
+    return {
+      specialty: type,
+      grade,
+      boost,
+      signingCost: 0,
+      weeklyWage: scaleStaffDailyWage(grade * 6000 + stars * 1300),
+    };
+  }
+  const specialty = opts.specialty || "PHYSIO";
+  return {
+    specialty,
+    grade,
+    boost: Math.round((0.12 + grade * 0.11) * 100) / 100,
+    signingCost: 0,
+    weeklyWage: scaleStaffDailyWage(grade * 6500 + stars * 1300),
+  };
+}
+
+function genUniformStarterStaffCard(type, opts = {}) {
+  const stars = STARTER_STAFF_STARS;
+  const namePool = type === "MANAGER" ? MANAGER_FIRST : EXTRA_STAFF_TYPES.includes(type) ? FIRST_NAMES : COACH_FIRST;
+  const name = choice(namePool) + " " + choice(LAST_NAMES);
+  const payload = buildUniformStaffCardPayload(type, stars, opts);
+  const portrait = pickStaffPortrait(type, payload.specialty, stars);
+  return { cardId: uid("card"), type, stars, name, portrait, ...payload };
+}
+
+function genUniformCoachOffer(specialty) {
+  return staffCardToCoach(genUniformStarterStaffCard("COACH", { specialty }));
+}
+
+function genUniformScoutOffer() {
+  return staffCardToScout(genUniformStarterStaffCard("SCOUT"));
+}
+
+function genUniformManagerOffer() {
+  return staffCardToManager(genUniformStarterStaffCard("MANAGER"));
 }
 
 function buildStaffCardPayload(type, stars) {
@@ -859,10 +962,12 @@ function genStaffCard(fixedType, fixedStars, weights) {
 }
 
 function defaultStaffCardState(day = 1) {
+  const today = new Date().toISOString().slice(0, 10);
   return {
     staffDrawTickets: STARTING_STAFF_TICKETS,
     staffFreeDrawsLeft: DAILY_FREE_STAFF_DRAWS,
     staffFreeDrawResetDay: day,
+    staffFreeDrawResetDate: today,
     staffCardBag: [],
     lastStaffPull: null,
     autoMergeTiers: { 1: false, 2: false, 3: false, 4: false },
@@ -874,6 +979,8 @@ function ensureStaffCardIds(bag) {
     if (!card?.cardId) card.cardId = uid("card");
     // เซฟเก่าก่อนมีระบบภาพเหมือน — เติม portrait ย้อนหลังให้การ์ดที่ยังไม่มี (สุ่มตามหมวดของการ์ดนั้น)
     if (card && !card.portrait) card.portrait = pickStaffPortrait(card.type, card.specialty, card.stars);
+    // การ์ดที่ล็อกไว้ (คนเล่นกดเอง) จะไม่ถูกดึงไปรวม ทั้งอัตโนมัติและตอนกด "รวม" แบบหยิบให้อัตโนมัติ
+    if (card && card.locked == null) card.locked = false;
   });
   return bag;
 }
@@ -882,12 +989,13 @@ function ensureStaffCardFields(c) {
   if (c.staffDrawTickets == null) c.staffDrawTickets = STARTING_STAFF_TICKETS;
   if (c.staffFreeDrawsLeft == null) c.staffFreeDrawsLeft = DAILY_FREE_STAFF_DRAWS;
   if (c.staffFreeDrawResetDay == null) c.staffFreeDrawResetDay = c.day || 1;
+  if (c.staffFreeDrawResetDate == null) c.staffFreeDrawResetDate = new Date().toISOString().slice(0, 10);
   if (!c.staffCardBag) c.staffCardBag = [];
   ensureStaffCardIds(c.staffCardBag);
   if (Array.isArray(c.lastStaffPull)) ensureStaffCardIds(c.lastStaffPull);
   if (c.lastStaffPull == null) c.lastStaffPull = null;
   if (!c.autoMergeTiers) c.autoMergeTiers = { 1: false, 2: false, 3: false, 4: false };
-  return c;
+  return resetDailyStaffDraws(c);
 }
 
 function purgeCardsFromBag(c, removeSet) {
@@ -912,7 +1020,8 @@ function computeAutoMergeAttempts(bag, enabledTiers) {
   const attempts = [];
   let guard = 0;
   while (guard++ < 300) {
-    const groups = groupStaffCards(working);
+    // การ์ดที่ล็อกไว้ไม่นับเป็นวัตถุดิบรวมอัตโนมัติ — ต้องกดปลดล็อกเองก่อนถึงจะถูกดึงไปรวม
+    const groups = groupStaffCards(working.filter((card) => !card.locked));
     const target = groups.find((g) => g.stars <= AUTO_MERGE_MAX_STARS && enabledTiers?.[g.stars] && g.count >= MERGE_CARD_COUNT);
     if (!target) break;
     const consumed = target.cards.slice(0, MERGE_CARD_COUNT).map((card) => card.cardId);
@@ -929,9 +1038,12 @@ function computeAutoMergeAttempts(bag, enabledTiers) {
 }
 
 function resetDailyStaffDraws(c) {
-  ensureStaffCardFields(c);
-  if (c.staffFreeDrawResetDay !== c.day) {
-    c.staffFreeDrawsLeft = DAILY_FREE_STAFF_DRAWS;
+  // ห้ามเรียก ensureStaffCardFields(c) ในนี้ — ensureStaffCardFields เรียกฟังก์ชันนี้อยู่แล้วเป็นขั้นตอนสุดท้าย
+  // เรียกกลับไปกลับมาแบบนี้จะวนไม่รู้จบจน stack overflow (บั๊กที่เจอจริง: สร้างเกมใหม่ไม่ได้เลย)
+  const today = new Date().toISOString().slice(0, 10);
+  if (c.staffFreeDrawResetDate !== today) {
+    c.staffFreeDrawsLeft = DAILY_STAFF_CARD_DRAWS;
+    c.staffFreeDrawResetDate = today;
     c.staffFreeDrawResetDay = c.day;
   }
   return c;
@@ -1104,80 +1216,53 @@ function enrichedManagerPlan(c, team) {
 
 function bootstrapStarterStaff(c) {
   ensureStaffCardFields(c);
-  const pulled = Array.from({ length: CARDS_PER_STAFF_PULL }, () => genStaffCard());
   const t = c.teams.find((tm) => tm.id === c.userTeamId);
-  const usedIds = new Set();
+  const stars = STARTER_STAFF_STARS;
   const hired = [];
 
-  const pickBest = (type) => {
-    const pool = pulled.filter((card) => card.type === type && !usedIds.has(card.cardId));
-    if (!pool.length) return null;
-    return pool.sort((a, b) => b.stars - a.stars)[0];
-  };
+  const mgrCard = genUniformStarterStaffCard("MANAGER");
+  const mgr = staffCardToManager(mgrCard);
+  mgr.contractEndsDay = c.day + 120;
+  mgr.contractDays = 120;
+  t.manager = mgr;
+  hired.push(`ผจก. ${mgr.name} (${stars}★)`);
 
-  const mgrCard = pickBest("MANAGER");
-  if (mgrCard) {
-    const mgr = staffCardToManager(mgrCard);
-    const contractDays = rand(100, 150);
-    mgr.contractEndsDay = c.day + contractDays;
-    mgr.contractDays = contractDays;
-    t.manager = mgr;
-    usedIds.add(mgrCard.cardId);
-    hired.push(`ผจก. ${mgr.name} (${mgrCard.stars}★)`);
-  }
+  const docCard = genUniformStarterStaffCard("DOCTOR", { specialty: "PHYSIO" });
+  c.staff[c.userTeamId][docCard.specialty] = { ...staffCardToCoach(docCard), hiredSeason: c.season };
+  hired.push(`หมอ ${docCard.name} (${stars}★)`);
 
-  const docCard = pickBest("DOCTOR");
-  if (docCard) {
-    c.staff[c.userTeamId][docCard.specialty] = { ...staffCardToCoach(docCard), hiredSeason: c.season };
-    usedIds.add(docCard.cardId);
-    hired.push(`หมอ ${docCard.name} (${docCard.stars}★)`);
-  }
-
-  const scoutCard = pickBest("SCOUT");
-  if (scoutCard) {
-    c.marketScout = { ...staffCardToScout(scoutCard), hiredSeason: c.season };
-    usedIds.add(scoutCard.cardId);
-    hired.push(`สเกาต์ ${scoutCard.name} (${scoutCard.stars}★)`);
-  }
+  const scoutCard = genUniformStarterStaffCard("SCOUT");
+  c.marketScout = { ...staffCardToScout(scoutCard), hiredSeason: c.season };
+  hired.push(`สเกาต์ ${scoutCard.name} (${stars}★)`);
 
   COACH_CARD_SPECIALTIES.forEach((spec) => {
-    const coachCard = pulled
-      .filter((card) => card.type === "COACH" && card.specialty === spec && !usedIds.has(card.cardId))
-      .sort((a, b) => b.stars - a.stars)[0];
-    if (coachCard && !c.staff[c.userTeamId][spec]) {
-      c.staff[c.userTeamId][spec] = { ...staffCardToCoach(coachCard), hiredSeason: c.season };
-      usedIds.add(coachCard.cardId);
-      hired.push(`โค้ช ${coachCard.name} (${coachCard.stars}★)`);
-    }
+    const coachCard = genUniformStarterStaffCard("COACH", { specialty: spec });
+    c.staff[c.userTeamId][spec] = { ...staffCardToCoach(coachCard), hiredSeason: c.season };
+    hired.push(`โค้ช${spec} ${coachCard.name} (${stars}★)`);
   });
 
-  c.staffCardBag = pulled.filter((card) => !usedIds.has(card.cardId));
-  c.lastStaffPull = pulled;
-  c.starterStaffBootstrapped = true;
-  if (hired.length) {
-    c.log = [
-      `🎴 สตาฟเริ่มต้นจากการ์ดสุ่ม: ${hired.join(" · ")}`,
-      `🎒 การ์ดที่เหลือ ${c.staffCardBag.length} ใบเข้ากระเป๋า`,
-      ...c.log,
-    ];
-  }
   EXTRA_STAFF_TYPES.forEach((type) => {
-    if (c.staff[c.userTeamId][type]) return;
-    const card = pickBest(type);
-    if (card) {
-      c.staff[c.userTeamId][type] = { ...staffCardToCoach(card), hiredSeason: c.season };
-      usedIds.add(card.cardId);
-      c.staffCardBag = c.staffCardBag.filter((x) => x.cardId !== card.cardId);
-    }
+    const card = genUniformStarterStaffCard(type);
+    c.staff[c.userTeamId][type] = { ...staffCardToCoach(card), hiredSeason: c.season };
+    hired.push(`${STAFF_CARD_TYPE_TH[type] || type} ${card.name} (${stars}★)`);
   });
+
+  c.staffCardBag = [];
+  c.lastStaffPull = null;
+  c.starterStaffBootstrapped = true;
+  c.log = [
+    `👥 สตาฟเริ่มต้น ${stars}★ ทุกตำแหน่ง · สเตตเท่ากัน: ${hired.join(" · ")}`,
+    ...c.log,
+  ];
   initBoard(c, t);
+  initRoadmapOnCareer(c);
+  runPreSeasonFriendlies(c);
   return c;
 }
 
 const SCOUT_FIND_SOURCES = ["ลีกรองภูมิภาค", "ดิวิชันต่ำ", "ทีมเยาวชน", "ฟรีเอเจนต์ต่างประเทศ", "ฐานข้อมูลสโมสร"];
 
-/* ============================== SHOP / SOCKER COIN ============================== */
-const SOCKER_COIN_WELCOME = 10;
+/* ============================== SHOP / SOCKER COIN (Master Coin) ============================== */
 const SHOP_DAILY_BUY_LIMIT = 5;
 const SHOP_ITEMS = [
   {
@@ -1848,6 +1933,14 @@ function migrateSaveV10ToV11(c) {
   return refreshFullRosterMasterLeagues(c);
 }
 
+/** v12 — Tier A/B roadmap features */
+function migrateSaveV11ToV12(c) {
+  if (c.roadmapV12) return c;
+  ensureRoadmapFields(c);
+  (c.players || []).forEach(enrichPlayerContract);
+  return c;
+}
+
 const SAVE_MIGRATIONS = [
   migrateSaveV0ToV1,
   migrateSaveV1ToV2,
@@ -1860,6 +1953,7 @@ const SAVE_MIGRATIONS = [
   migrateSaveV8ToV9,
   migrateSaveV9ToV10,
   migrateSaveV10ToV11,
+  migrateSaveV11ToV12,
 ];
 
 function normalizeCareerSave(c) {
@@ -1939,6 +2033,28 @@ function normalizeCareerSave(c) {
   if (c.stadiumLevel == null) c.stadiumLevel = 1;
   if (!c.board && uT) initBoard(c, uT);
   if (!c.trainingReports) c.trainingReports = [];
+  if (!c.worldNews) c.worldNews = [];
+  if (BETA_TEST) applyBetaCareerGrant(c);
+  ensureRoadmapFields(c);
+  return c;
+}
+
+const BETA_PACK_ID = "betaPack2026";
+
+function applyBetaProfileGrant(p) {
+  if (!BETA_TEST || !p || p[BETA_PACK_ID]) return p;
+  p.sockerCoins = Math.max(p.sockerCoins || 0, BETA_STARTER_MASTER_COINS);
+  p[BETA_PACK_ID] = true;
+  return p;
+}
+
+function applyBetaCareerGrant(c) {
+  if (!BETA_TEST || !c || c[BETA_PACK_ID]) return c;
+  c.budget = Math.max(c.budget || 0, BETA_STARTING_BUDGET);
+  const uT = c.teams?.find((t) => t.id === c.userTeamId);
+  if (uT) uT.budget = Math.max(uT.budget || 0, BETA_STARTING_BUDGET);
+  c[BETA_PACK_ID] = true;
+  c.log = [`🎁 Beta Test — งบสโมสร ${formatMoney(BETA_STARTING_BUDGET)} · Master Coin ${BETA_STARTER_MASTER_COINS}`, ...(c.log || [])];
   return c;
 }
 
@@ -1996,7 +2112,7 @@ function buildSeasonFixtures(teamIds) {
 /* เลือก 11 ตัวที่ดีที่สุดแบบรู้ตำแหน่งละเอียด — จับคู่ทีละช่องด้วย rating×ฟอร์ม×ความคุ้นเคยตำแหน่ง */
 function getBestXI(squad, formationKey, { excludeInjured = true } = {}) {
   const slotDefs = FORMATIONS[resolveFormation(formationKey)].slots;
-  const pool = squad.filter((p) => !excludeInjured || p.injuryDays <= 0);
+  const pool = squad.filter((p) => !excludeInjured || (p.injuryDays <= 0 && (p.suspendedMatches || 0) <= 0));
   const assigned = new Set();
   const xi = [];
   slotDefs.forEach((slot) => {
@@ -2030,7 +2146,7 @@ function topUpTeamSquad(players, teamId, tier, day, leagueId = "thailand", teams
 }
 
 function resolveTeamXI(team, squad, savedLineup) {
-  const avail = squad.filter((p) => p.injuryDays <= 0);
+  const avail = squad.filter((p) => p.injuryDays <= 0 && (p.suspendedMatches || 0) <= 0);
   let xi;
   if (team.isUser && !team.autoMode && savedLineup?.length) {
     xi = fillLineupGaps(avail, savedLineup.filter((id) => avail.some((p) => p.id === id)), team.formation);
@@ -2042,7 +2158,7 @@ function resolveTeamXI(team, squad, savedLineup) {
 }
 
 function recommendFormation(team, squad) {
-  const avail = squad.filter((p) => p.injuryDays <= 0);
+  const avail = squad.filter((p) => p.injuryDays <= 0 && (p.suspendedMatches || 0) <= 0);
   const scored = FORMATION_KEYS.map((f) => {
     const bestXI = getBestXI(avail, f);
     const avg = bestXI.length
@@ -2055,7 +2171,7 @@ function recommendFormation(team, squad) {
 }
 
 function fillLineupGaps(squad, xi, formation) {
-  const avail = squad.filter((p) => p.injuryDays <= 0);
+  const avail = squad.filter((p) => p.injuryDays <= 0 && (p.suspendedMatches || 0) <= 0);
   const counts = FORMATIONS[resolveFormation(formation)].counts;
   const kept = xi.filter((id) => avail.some((p) => p.id === id));
   const posHave = { GK: 0, DF: 0, MF: 0, FW: 0 };
@@ -2932,7 +3048,7 @@ function runMonthlyAwards(c) {
   return c;
 }
 
-function genTransferListing(teams, excludeTeamId) {
+function genTransferListing(teams, excludeTeamId, c = null) {
   const pool = teams.filter((t) => t.id !== excludeTeamId);
   const t = choice(pool);
   const pos = choice(["GK", "DF", "MF", "FW"]);
@@ -2944,6 +3060,7 @@ function genTransferListing(teams, excludeTeamId) {
   p.topBid = { wage: startWage, fee: startFee, bidder: "ตลาด (ราคาเปิด)", isUser: false };
   p.bidHistory = [];
   p.endsAt = Date.now() + 120000;
+  if (c) checkShadowMarketAlerts(c, p);
   return p;
 }
 
@@ -3223,12 +3340,22 @@ function rolloverSeason(c) {
   c.monthlyGoals = {};
   c.monthlyApps = {};
   c.sockerCupSeason = null;
-  c = runYouthIntake(c);
+  const sackResult = runSeasonEndRoadmap(c, uT, prevPos);
+  if (sackResult.sacked) {
+    c.managerSacked = true;
+    c.sackReason = sackResult.reason;
+    c.log = [`🚪 ${sackResult.reason}`, ...c.log];
+  }
+  if (canRunYouthIntakeCeremony(c)) {
+    c = runYouthIntake(c);
+    markYouthIntakeCeremony(c);
+    c.log = [`🎓 Youth Intake Day — พิธีรับเด็กใหม่ประจำฤดูกาล`, ...c.log];
+  }
   c.log = [`เริ่มฤดูกาลที่ ${c.season} แล้ว!`, ...c.log];
   return c;
 }
 
-function createNewCareer(customClub) {
+function createNewCareer(customClub, managerName = "ผู้จัดการ") {
   const legendLeagueId = "england";
   const masterBots = createLegendMasterTeams(legendLeagueId, 1);
   const challengerBots = CHALLENGER_TEAM_DEFS.map((t, idx) => ({
@@ -3263,12 +3390,11 @@ function createNewCareer(customClub) {
   });
   const staff = {};
   teams.forEach((t) => { staff[t.id] = {}; });
-  const coachOffers = {};
-  STAFF_SPECS.forEach((spec) => { coachOffers[spec] = genCoach(spec); });
+  const coachOffers = { PHYSIOTHERAPIST: genUniformCoachOffer("PHYSIOTHERAPIST") };
   const career = {
     season: 1, day: 1, userTeamId: userTeam.id,
     teams, players, leagues, lineups, benchLineups, staff,
-    budget: STARTING_BUDGET, transferList: [], coachOffers, coachRerollCounts: {}, managerOffer: genManager(),
+    budget: STARTING_BUDGET, transferList: [], coachOffers, coachRerollCounts: {}, managerOffer: null,
     managerRerollCount: 0, marketScoutRerollCount: 0, youthScoutRerollCount: 0, academyManagerRerollCount: 0,
     facilities: { fitness: 1, training: 1, techLab: 1, medical: 1 },
     weeklyQuests: pickWeeklyQuests(), weeklyProgress: { wins: 0, goals: 0, cleanSheets: 0 }, weeklyRewarded: [],
@@ -3281,11 +3407,11 @@ function createNewCareer(customClub) {
     drillPlans: defaultDrillPlans(), drillDoneDay: {},
     trainingReports: [],
     // youth academy + market scout (separate)
-    marketScout: null, marketScoutOffer: genScout(),
-    youthScout: null, youthScoutOffer: genScout(),
+    marketScout: null, marketScoutOffer: null,
+    youthScout: null, youthScoutOffer: genUniformScoutOffer(),
     scoutFinds: [],
     scoutSearchDay: 0,
-    academyManager: null, academyManagerOffer: genManager(true),
+    academyManager: null, academyManagerOffer: genUniformManagerOffer(),
     academyPlayers: [], youthProspects: [], loans: [], seasonAcademySales: 0,
     // season goal (pick one each season for a budget bonus)
     seasonGoalOptions: pickSeasonGoalOptions(), seasonGoal: null,
@@ -3306,8 +3432,18 @@ function createNewCareer(customClub) {
     uiPrefs: { marketSub: "trade" },
     squadOwnTab: true,
     ...defaultStaffCardState(1),
-    log: [`ยินดีต้อนรับสู่ตำแหน่งไดเรคเตอร์ฟุตบอลของ ${userTeam.name}! เริ่มในโลกจำลอง — Master League คือ ${legendLeagueLabel(legendLeagueId)} (ทีม/ซูเปอร์สตาร์ล้อโลกจริง)`, `งบเริ่มต้น ${formatMoney(STARTING_BUDGET)}`, `สร้างมูลค่าสโมสรรวมถึง ${formatMoney(ONLINE_UNLOCK_TEAM_VALUE)} เพื่อปลดล็อกออนไลน์`, `เริ่มต้นที่ Challenger League ไต่อันดับเพื่อเลื่อนชั้นสู่ Master League`, `👥 ฐานแฟนบอลเริ่มต้น 2,500 คน`, `🎫 ได้ตั๋วสุ่มการ์ดสตาฟ ${STARTING_STAFF_TICKETS} ใบ · เปิดฟรีวันละ ${DAILY_FREE_STAFF_DRAWS} ครั้ง`],
+    worldNews: [],
+    flashWorldNewsId: null,
+    log: [`📰 [โลก TMFC] สโมสรใหม่ ${userTeam.name} (${managerName}) ถูกจัดตั้งใน The Master FC Online`, `ยินดีต้อนรับสู่ตำแหน่งไดเรคเตอร์ฟุตบอลของ ${userTeam.name}! เริ่มในโลกจำลอง — Master League คือ ${legendLeagueLabel(legendLeagueId)} (ทีม/ซูเปอร์สตาร์ล้อโลกจริง)`, `งบเริ่มต้น ${formatMoney(STARTING_BUDGET)}`, `สร้างมูลค่าสโมสรรวมถึง ${formatMoney(ONLINE_UNLOCK_TEAM_VALUE)} เพื่อปลดล็อกออนไลน์`, `เริ่มต้นที่ Challenger League ไต่อันดับเพื่อเลื่อนชั้นสู่ Master League`, `👥 ฐานแฟนบอลเริ่มต้น 2,500 คน`, `🎫 เปิดการ์ดฟรีวันละ ${DAILY_STAFF_CARD_DRAWS} ครั้ง (รีเซ็ตทุกวัน) · ตั๋วเริ่มต้น ${STARTING_STAFF_TICKETS} ใบ`],
   };
+  const newsItem = buildNewClubWorldNews({
+    season: career.season,
+    day: career.day,
+    clubName: userTeam.name,
+    managerName,
+  });
+  career.worldNews = [newsItem];
+  career.flashWorldNewsId = newsItem.id;
   return bootstrapStarterStaff(career);
 }
 
@@ -3457,7 +3593,57 @@ function PlayerStarsRow({ p, compact }) {
   );
 }
 
-function FMHeader({ uTeam, career, userLeague, budget, wageBill, sockerCoins = 0, onOpenShop, uiLang = "th" }) {
+function AccountMenuChip({ accountUser, onLogout }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function onDoc(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  if (!accountUser) return null;
+  const label = accountUser.username || accountUser.displayName?.slice(0, 10) || "player";
+
+  return (
+    <div className="fc-account-menu" ref={ref}>
+      <button
+        type="button"
+        className="fc-header-chip fc-account-menu-btn"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        title="บัญชี"
+      >
+        @{label} ▾
+      </button>
+      {open && (
+        <div className="fc-account-menu-drop" role="menu">
+          <div className="fc-account-menu-name">
+            {accountUser.displayName || accountUser.username || "ผู้เล่น"}
+            {accountUser.username && (
+              <span className="fc-account-menu-user">@{accountUser.username}</span>
+            )}
+          </div>
+          <button
+            type="button"
+            className="fc-account-menu-logout"
+            role="menuitem"
+            onClick={() => { setOpen(false); onLogout?.(); }}
+          >
+            ออกจากระบบ
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FMHeader({ uTeam, career, userLeague, budget, wageBill, sockerCoins = 0, onOpenShop, uiLang = "th", accountUser, onLogout }) {
   const day = Math.min(career.day, userLeague.fixtures.length);
   const total = userLeague.fixtures.length;
   return (
@@ -3471,6 +3657,9 @@ function FMHeader({ uTeam, career, userLeague, budget, wageBill, sockerCoins = 0
         <button type="button" onClick={onOpenShop} className="fc-header-chip">
           🪙 {sockerCoins}
         </button>
+        {accountUser && (
+          <AccountMenuChip accountUser={accountUser} onLogout={onLogout} />
+        )}
         <a
           href={GAME_DISCORD_URL}
           target="_blank"
@@ -3688,11 +3877,17 @@ function RadarStats({ stats }) {
 }
 
 /* ============================== MAIN APP ============================== */
-export default function App({ onMigrateToServer } = {}) {
+export default function App({
+  onMigrateToServer,
+  accountUser = null,
+  onOpenAuth,
+  onOpenOnlinePortal,
+  onSyncOnlineServer,
+  onLogout,
+} = {}) {
   const [profile, setProfile] = useState(null);
   const [career, setCareer] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [gameEntered, setGameEntered] = useState(false);
   const [tab, setTab] = useState("dashboard");
   const [marketSub, setMarketSub] = useState("trade");
   const [toast, setToast] = useState(null);
@@ -3703,7 +3898,16 @@ export default function App({ onMigrateToServer } = {}) {
   const [booting, setBooting] = useState(false);
   const [loadMsg, setLoadMsg] = useState("กำลังโหลด...");
   const [splashDone, setSplashDone] = useState(false);
+  const [gameEntered, setGameEntered] = useState(false);
+  const [introDone, setIntroDone] = useState(false);
   const toastTimer = useRef(null);
+  const saveUsername = accountUser?.username || "";
+  const saveKeysRef = useRef({ profileKey: "profile_v1", careerKey: "career_v3", introKey: INTRO_SEEN_KEY });
+  saveKeysRef.current = {
+    profileKey: profileSaveKey(saveUsername),
+    careerKey: careerSaveKey(saveUsername),
+    introKey: introSeenKey(saveUsername),
+  };
 
   useEffect(() => { const iv = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(iv); }, []);
   // นับคนออนไลน์ — heartbeat ไม่ระบุตัวตนทุก 45 วิ ขณะเปิดแอปค้างอยู่ (ไม่ว่าจะอยู่หน้าไหนในเกม)
@@ -3727,24 +3931,58 @@ export default function App({ onMigrateToServer } = {}) {
     return () => clearTimeout(t);
   }, [loading]);
   useEffect(() => {
+    if (!saveUsername) {
+      setLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setLoadMsg("กำลังโหลด...");
+    setProfile(null);
+    setCareer(null);
+    setIntroDone(false);
+    setSplashDone(false);
+    migrateLegacySavesToUser(saveUsername);
+    rememberLastUsername(saveUsername);
+    const profileKey = profileSaveKey(saveUsername);
+    const careerKey = careerSaveKey(saveUsername);
+
     (async () => {
-      try { const pr = await window.storage.get("profile_v1"); if (pr && pr.value) {
-        const p = JSON.parse(pr.value);
-        if (p.sockerCoins == null) p.sockerCoins = 0;
-        if (p.inventory == null) p.inventory = {};
-        if (p.shopBuyDay == null) p.shopBuyDay = "";
-        if (p.shopBuyCount == null) p.shopBuyCount = 0;
-        if (!p.uiLang) p.uiLang = "th";
-        setProfile(p);
-      } } catch (e) {}
       try {
-        const res = await window.storage.get("career_v3");
+        const pr = await window.storage.get(profileKey);
+        if (pr && pr.value) {
+          const p = JSON.parse(pr.value);
+          if (p.sockerCoins == null) p.sockerCoins = 0;
+          if (p.inventory == null) p.inventory = {};
+          if (p.shopBuyDay == null) p.shopBuyDay = "";
+          if (p.shopBuyCount == null) p.shopBuyCount = 0;
+          if (!p.uiLang) p.uiLang = getDefaultGameUiLang();
+          applyBetaProfileGrant(p);
+          if (!cancelled) {
+            setProfile(p);
+            window.storage.set(profileKey, JSON.stringify(p)).catch(() => {});
+          }
+        }
+      } catch (e) { /* ignore */ }
+      try {
+        const res = await window.storage.get(careerKey);
         if (res && res.value) {
-          let c = JSON.parse(res.value);
+          // parse แยกออกมาต่างหาก — ถ้า JSON เองเสียจริง (กู้ไม่ได้อยู่แล้ว) ถึงจะลบทิ้ง
+          // ส่วน error อื่นๆ ที่เกิดหลังจากนี้ (บั๊กโค้ดเกม/migrate พัง) ต้อง "ไม่ลบเซฟ" เด็ดขาด
+          // (บั๊กที่เจอจริง: เคยมีบั๊กวนลูปไม่รู้จบระหว่างจำลองวันที่ขาดหายไป ทำให้ error หลุดมาที่ catch
+          // ข้างนอกแล้วลบเซฟผู้เล่นทิ้งทั้งที่ตัวเซฟเองไม่ได้เสีย แค่โค้ดมีบั๊ก)
+          let c;
+          try {
+            c = JSON.parse(res.value);
+          } catch (parseErr) {
+            console.error("career JSON parse failed — save จริงๆ เสีย ลบทิ้ง", parseErr);
+            await window.storage.delete(careerKey);
+            throw parseErr;
+          }
           const elapsedHours = (Date.now() - (c.lastSeenAt || Date.now())) / 3600000;
           const daysToSim = Math.min(Math.floor(elapsedHours), 7);
           if (daysToSim >= 1) {
-            setLoadMsg(`สรุปผล ${daysToSim} วันที่ไม่อยู่...`);
+            if (!cancelled) setLoadMsg(`สรุปผล ${daysToSim} วันที่ไม่อยู่...`);
             const startDay = c.day, startSeason = c.season;
             const logBefore = c.log;
             for (let i = 0; i < daysToSim; i++) c = simulateOneDayFast(c);
@@ -3755,37 +3993,60 @@ export default function App({ onMigrateToServer } = {}) {
             const headline = `⏱ ระหว่างที่คุณไม่อยู่ ผ่านไป ${daysToSim} วันเกม (ฤดูกาล ${startSeason} วัน ${startDay} → ฤดูกาล ${c.season} วัน ${c.day})`;
             c.log = [headline, ...highlights, ...logBefore].slice(0, 60);
           }
-          setLoadMsg("เตรียมข้อมูลลีก...");
+          if (!cancelled) setLoadMsg("เตรียมข้อมูลลีก...");
           c.lastSeenAt = Date.now();
-          try {
-            c = migrateCareerSave(c);
-          } catch (migrateErr) {
-            console.error("migrateCareerSave failed", migrateErr);
-            await window.storage.delete("career_v3");
-            throw migrateErr;
+          c = migrateCareerSave(c);
+          if (!cancelled) {
+            setCareer(c);
+            setMarketSub(c.uiPrefs?.marketSub === "squad" ? "trade" : (c.uiPrefs?.marketSub || "trade"));
+            window.storage.set(careerKey, JSON.stringify(c)).catch(() => {});
           }
-          setCareer(c);
-          setMarketSub(c.uiPrefs?.marketSub === "squad" ? "trade" : (c.uiPrefs?.marketSub || "trade"));
-          window.storage.set("career_v3", JSON.stringify(c)).catch(() => {});
         }
       } catch (e) {
-        console.error("career load failed", e);
-        window.storage.delete("career_v3").catch(() => {});
+        // ไม่ลบเซฟที่นี่ — เซฟที่ parse ผ่านแล้วแปลว่าข้อมูลยังอยู่ครบ แค่โค้ดตอนประมวลผลมีบั๊ก
+        // ปล่อยให้ค้างเป็น career=null (โชว์หน้าสร้างทีมชั่วคราว) ดีกว่าลบข้อมูลจริงทิ้งถาวรโดยกู้คืนไม่ได้
+        console.error("career load failed (เซฟไม่ได้ถูกลบ รอแก้บั๊กแล้วลองเข้าใหม่)", e);
+        if (!cancelled) showToast("โหลดเซฟไม่สำเร็จ — ข้อมูลยังอยู่ ลองรีเฟรชอีกครั้ง หรือแจ้งบั๊กใน Discord");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
     })();
-  }, []);
 
-  function saveProfile(p) { window.storage.set("profile_v1", JSON.stringify(p)).catch(() => {}); setProfile(p); }
+    return () => { cancelled = true; };
+  }, [saveUsername]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (profile || career) {
+      setIntroDone(true);
+      return;
+    }
+    try {
+      if (localStorage.getItem(introSeenKey(saveUsername)) === "1") setIntroDone(true);
+    } catch { /* ignore */ }
+  }, [loading, profile, career, saveUsername]);
+
+  // รับได้ทั้ง object ตรงๆ หรือ updater function (prev => next) — แบบหลังอ่านค่าล่าสุดจาก setProfile เอง
+  // ไม่ใช่จาก closure ข้างนอกที่อาจค้าง กันบั๊กที่เจอจริง: กดใช้ไอเทม/ซื้อของติดกันเร็วๆ แล้วนับซ้ำ/หาย
+  function saveProfile(updater) {
+    setProfile((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      window.storage.set(saveKeysRef.current.profileKey, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }
   function setUiLang(lang) {
-    if (!profile) return;
-    saveProfile({ ...profile, uiLang: lang === "en" ? "en" : "th" });
+    saveProfile((prev) => prev ? { ...prev, uiLang: lang === "en" ? "en" : "th" } : prev);
   }
 
   function addSockerCoins(amount) {
-    const next = { ...profile, sockerCoins: (profile?.sockerCoins || 0) + amount };
-    saveProfile(next);
-    return next.sockerCoins;
+    let resultCoins = 0;
+    saveProfile((prev) => {
+      const next = { ...prev, sockerCoins: (prev?.sockerCoins || 0) + amount };
+      resultCoins = next.sockerCoins;
+      return next;
+    });
+    return resultCoins;
   }
 
   function purchaseCoinPack(packId) {
@@ -3799,25 +4060,36 @@ export default function App({ onMigrateToServer } = {}) {
     const item = SHOP_ITEMS.find((i) => i.id === itemId);
     if (!item) return;
     const today = new Date().toDateString();
-    const boughtToday = shopBuyCountToday(profile);
-    if (boughtToday >= SHOP_DAILY_BUY_LIMIT) {
-      showToast(`ซื้อได้วันละ ${SHOP_DAILY_BUY_LIMIT} ครั้ง (ครบแล้ววันนี้)`);
+    // เช็คโควตา/เหรียญ + หักเหรียญ/เพิ่มไอเทม ทำทั้งหมดจาก "prev" ภายใน setProfile เดียวกัน (ไม่ใช้ profile
+    // จาก closure ข้างนอก) กันบั๊กที่เจอจริง: กดซื้อติดกันเร็วๆ แล้วนับโควตา/หักเหรียญไม่ตรง
+    const buyOut = { applied: false, reason: null, left: 0 };
+    saveProfile((prev) => {
+      const boughtToday = shopBuyCountToday(prev);
+      if (boughtToday >= SHOP_DAILY_BUY_LIMIT) {
+        buyOut.reason = `ซื้อได้วันละ ${SHOP_DAILY_BUY_LIMIT} ครั้ง (ครบแล้ววันนี้)`;
+        return prev;
+      }
+      const coins = prev?.sockerCoins || 0;
+      if (coins < item.coinCost) {
+        buyOut.reason = `Socker Coin ไม่พอ (ต้องการ ${item.coinCost} เหรียญ)`;
+        return prev;
+      }
+      const nextProfile = {
+        ...prev,
+        inventory: { ...(prev?.inventory || {}) },
+        sockerCoins: coins - item.coinCost,
+        shopBuyDay: today,
+        shopBuyCount: (prev?.shopBuyDay === today ? (prev?.shopBuyCount || 0) : 0) + 1,
+      };
+      buyOut.left = SHOP_DAILY_BUY_LIMIT - nextProfile.shopBuyCount;
+      if (!item.instant) nextProfile.inventory[itemId] = (nextProfile.inventory[itemId] || 0) + 1;
+      buyOut.applied = true;
+      return nextProfile;
+    });
+    if (!buyOut.applied) {
+      showToast(buyOut.reason || "ซื้อไม่ได้");
       return;
     }
-    const coins = profile?.sockerCoins || 0;
-    if (coins < item.coinCost) {
-      showToast(`Socker Coin ไม่พอ (ต้องการ ${item.coinCost} เหรียญ)`);
-      return;
-    }
-    const nextProfile = {
-      ...profile,
-      inventory: { ...(profile?.inventory || {}) },
-      sockerCoins: coins - item.coinCost,
-      shopBuyDay: today,
-      shopBuyCount: (profile?.shopBuyDay === today ? (profile?.shopBuyCount || 0) : 0) + 1,
-    };
-    const left = SHOP_DAILY_BUY_LIMIT - nextProfile.shopBuyCount;
-
     if (item.instant) {
       // ใช้ผลทันที ไม่เข้ากระเป๋า — แก้ career โดยตรงตาม itemId
       updateCareer((prev) => {
@@ -3835,22 +4107,32 @@ export default function App({ onMigrateToServer } = {}) {
         }
         return c;
       });
-      saveProfile(nextProfile);
-      showToast(`ใช้ ${item.name} แล้ว! (ซื้อได้อีก ${left} ครั้งวันนี้)`);
+      showToast(`ใช้ ${item.name} แล้ว! (ซื้อได้อีก ${buyOut.left} ครั้งวันนี้)`);
       return;
     }
+    showToast(`${item.name} เข้ากระเป๋าแล้ว! (ซื้อได้อีก ${buyOut.left} ครั้งวันนี้)`);
+  }
 
-    nextProfile.inventory[itemId] = (nextProfile.inventory[itemId] || 0) + 1;
-    saveProfile(nextProfile);
-    showToast(`${item.name} เข้ากระเป๋าแล้ว! (ซื้อได้อีก ${left} ครั้งวันนี้)`);
+  // เช็คของในกระเป๋า + หักออก ทำภายใน "prev" ของ setProfile เดียวกันเสมอ (ไม่ใช้ profile จาก closure ข้างนอก)
+  // กันบั๊กที่เจอจริง: กดใช้ไอเทมติดกันเร็วๆ (เช่นรักษา 2 คนติดกัน) แล้วนับซ้ำ/หักไม่ตรงจนได้ผลฟรี
+  function consumeInventoryItem(itemId) {
+    const out = { applied: false };
+    saveProfile((prev) => {
+      const count = inventoryCount(prev, itemId);
+      if (count <= 0) return prev;
+      const inv = { ...(prev?.inventory || {}) };
+      inv[itemId] = count - 1;
+      out.applied = true;
+      return { ...prev, inventory: inv };
+    });
+    return out.applied;
   }
 
   function useItemFromBag(itemId, playerId) {
     if (itemId === "morale_boost") {
-      const count = inventoryCount(profile, itemId);
-      if (count <= 0) { showToast("ไม่มีไอเทมในกระเป๋า"); return; }
       const target = career.players.find((p) => p.id === playerId && p.teamId === career.userTeamId);
       if (!target) { showToast("ไม่พบนักเตะ"); return; }
+      if (!consumeInventoryItem(itemId)) { showToast("ไม่มีไอเทมในกระเป๋า"); return; }
       updateCareer((prev) => {
         const c = JSON.parse(JSON.stringify(prev));
         const p = c.players.find((pl) => pl.id === playerId);
@@ -3859,17 +4141,13 @@ export default function App({ onMigrateToServer } = {}) {
         c.log = [`😊 ใช้บูสต์ขวัญกำลังใจกับ ${p.name} — ขวัญกำลังใจ ${p.morale}`, ...c.log];
         return c;
       });
-      const inv = { ...(profile?.inventory || {}) };
-      inv[itemId] = count - 1;
-      saveProfile({ ...profile, inventory: inv });
       showToast(`เพิ่มขวัญกำลังใจ ${target.name} แล้ว!`);
       return;
     }
     if (itemId !== "injury_pack") return;
-    const count = inventoryCount(profile, itemId);
-    if (count <= 0) { showToast("ไม่มีไอเทมในกระเป๋า"); return; }
     const target = career.players.find((p) => p.id === playerId && p.teamId === career.userTeamId);
     if (!target || target.injuryDays <= 0) { showToast("นักเตะคนนี้ไม่ได้บาดเจ็บ"); return; }
+    if (!consumeInventoryItem(itemId)) { showToast("ไม่มีไอเทมในกระเป๋า"); return; }
     const reduced = rand(1, 4);
     const before = target.injuryDays;
     updateCareer((prev) => {
@@ -3880,16 +4158,13 @@ export default function App({ onMigrateToServer } = {}) {
       c.log = [`🩹 ใช้ชุดปฐมพยาบาลกับ ${p.name} — ลดอาการบาดเจ็บ ${reduced} วัน (เหลือ ${p.injuryDays} วัน)`, ...c.log];
       return c;
     });
-    const inv = { ...(profile?.inventory || {}) };
-    inv[itemId] = count - 1;
-    saveProfile({ ...profile, inventory: inv });
     const after = Math.max(0, before - reduced);
     showToast(after === 0 ? `${target.name} หายบาดเจ็บแล้ว!` : `ลดอาการบาดเจ็บ ${reduced} วัน — เหลือ ${after} วัน`);
   }
 
   const persist = useCallback((next) => {
     const saved = checkOnlineUnlock(typeof next === "object" && next !== null ? { ...next } : next);
-    window.storage.set("career_v3", JSON.stringify({ ...saved, lastSeenAt: Date.now() })).catch(() => {});
+    window.storage.set(saveKeysRef.current.careerKey, JSON.stringify({ ...saved, lastSeenAt: Date.now() })).catch(() => {});
   }, []);
   const updateCareer = useCallback((updater) => {
     setCareer((prev) => {
@@ -3904,16 +4179,11 @@ export default function App({ onMigrateToServer } = {}) {
   async function enterOnlineMode() {
     const fin = computeTeamFinances(career);
     if (!career?.onlineUnlocked || !canUnlockOnline(fin)) return;
-    const apiUrl = typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL;
-    if (onMigrateToServer && apiUrl) {
-      const email = window.prompt("อีเมลสำหรับบัญชีออนไลน์ (ใช้ล็อกอินครั้งถัดไป)");
-      if (!email?.trim()) return;
+    const sync = onSyncOnlineServer || onOpenOnlinePortal;
+    if (sync) {
       try {
-        await onMigrateToServer(career, email.trim());
-        showToast("ย้ายขึ้นเซิร์ฟเวอร์ออนไลน์แล้ว!");
-        return;
-      } catch (e) {
-        showToast(e.message || "ย้ายออนไลน์ไม่สำเร็จ");
+        await sync(career);
+      } catch {
         return;
       }
     }
@@ -3951,7 +4221,7 @@ export default function App({ onMigrateToServer } = {}) {
     setBooting(true);
     setTimeout(() => {
       try {
-        const fresh = createNewCareer(clubConfig);
+        const fresh = createNewCareer(clubConfig, profile?.name || accountUser?.username || "ผู้จัดการใหม่");
         setCareer(checkOnlineUnlock(fresh));
         persist(fresh);
         setTab("dashboard");
@@ -3964,7 +4234,33 @@ export default function App({ onMigrateToServer } = {}) {
       }
     }, 30);
   }
-  function resetCareer() { window.storage.delete("career_v3").catch(() => {}); setCareer(null); setTab("dashboard"); }
+  function resetCareer() {
+    window.storage.delete(saveKeysRef.current.careerKey).catch(() => {});
+    setCareer(null);
+    setTab("dashboard");
+  }
+
+  function dismissWorldNewsFlash() {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const id = c.flashWorldNewsId;
+      if (id && c.worldNews) {
+        const w = c.worldNews.find((x) => x.id === id);
+        if (w) w.unread = false;
+      }
+      c.flashWorldNewsId = null;
+      return c;
+    });
+  }
+
+  function markWorldNewsRead(newsId) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const w = c.worldNews?.find((x) => x.id === newsId);
+      if (w) w.unread = false;
+      return c;
+    });
+  }
 
   function squadOf(teamId, c = career) { return c.players.filter((p) => p.teamId === teamId); }
   function userTeam(c = career) { return c.teams.find((t) => t.id === c.userTeamId); }
@@ -4006,7 +4302,10 @@ export default function App({ onMigrateToServer } = {}) {
           * (1 - (medicalLevel - 1) * 0.1)
           * (isUserPlayer ? userInjuryMult : 1);
         if (Math.random() < injuryChance) {
-          p.injuryDays = Math.max(1, Math.round(rand(1, 7) * (1 - doctorEff * 0.25) * (1 - (medicalLevel - 1) * 0.12)));
+          const inj = applyInjuryToPlayer(p);
+          if (isUserPlayer) {
+            c.log = [`🩹 ${p.name} บาดเจ็บระดับ${inj.label} (${inj.days} วัน)`, ...c.log];
+          }
         }
       } else {
         p.appearHistory = [false, ...(p.appearHistory || [])].slice(0, 5);
@@ -4024,16 +4323,29 @@ export default function App({ onMigrateToServer } = {}) {
   }
 
   /* ---------- weekly / daily rollover extras ---------- */
-  function finalizeDayExtras(c) {
+  // freshlySuspendedIds: เซ็ต id ผู้เล่นที่เพิ่งโดนแบนจากแมตช์ของ "วันนี้เอง" (ส่งมาจาก finishLiveMatch)
+  // กันนับซ้ำ ไม่งั้นคนเพิ่งโดนใบแดงนัดนี้จะถูกลดโทษเหลือ 0 ทันทีในฟังก์ชันเดียวกัน
+  function finalizeDayExtras(c, freshlySuspendedIds = null) {
     // --- player contract expiry: bots auto-renew silently, your club must renew manually or the player leaves free ---
     const departed = [];
+    const legendAutoRenewed = [];
     c.players = c.players.filter((p) => {
       if (p.contractEndsDay == null || c.day < p.contractEndsDay) return true;
+      // Legend ห้ามหลุดออกจากเกมเด็ดขาด (ซื้อมาแพง/มีจำกัด ไม่มีตลาดให้เซ็นใหม่) — ต่อสัญญาอัตโนมัติแทนการปล่อยออก
+      if (p.isLegend) {
+        p.contractEndsDay = c.day + rand(150, 400);
+        p.wage = Math.round((p.wage * rand(103, 112) / 100) / 100) * 100;
+        if (p.teamId === c.userTeamId) legendAutoRenewed.push(p.name);
+        return true;
+      }
       if (p.teamId === c.userTeamId) { departed.push(p.name); return false; }
       p.contractEndsDay = c.day + rand(150, 400); // bots re-sign automatically
       p.wage = Math.round((p.wage * rand(103, 112) / 100) / 100) * 100;
       return true;
     });
+    if (legendAutoRenewed.length) {
+      c.log = [`⭐ สัญญา Legend ใกล้หมด ต่อให้อัตโนมัติแล้ว: ${legendAutoRenewed.join(", ")} (ไปกดต่อสัญญาเองได้ที่หน้าสควอด)`, ...c.log];
+    }
     if (departed.length) {
       c.log = [`📄 หมดสัญญา: ${departed.join(", ")} ออกจากทีมแบบไม่มีค่าตัว (ไม่ได้ต่อสัญญาทัน)`, ...c.log];
       const remainingIds = c.players.filter((p) => p.teamId === c.userTeamId).map((p) => p.id);
@@ -4042,6 +4354,14 @@ export default function App({ onMigrateToServer } = {}) {
       const added = topUpTeamSquad(c.players, c.userTeamId, uT.tier, c.day, c.legendLeagueId || "thailand", c.teams);
       if (added.length) c.log = [`🆕 สโมสรเซ็นฟรีเอเจนต์ ${added.length} คนเพื่อเติมสควอด`, ...c.log];
     }
+
+    // ทีมที่มีนัดแข่งวันนี้ (ทุกดิวิชั่น) — ใช้กำหนดว่าใครนับวันแบนลดวันนี้ได้บ้าง (ทั้งทีมเราและทีมคู่แข่ง)
+    const teamsPlayingToday = new Set();
+    [0, 1].forEach((div) => {
+      const round = c.leagues[div]?.fixtures?.find((r) => r.day === c.day);
+      if (!round) return;
+      round.matches.forEach((m) => { teamsPlayingToday.add(m.home); teamsPlayingToday.add(m.away); });
+    });
 
     const uT = userTeam(c);
     const uSquad = squadOf(c.userTeamId, c);
@@ -4067,7 +4387,8 @@ export default function App({ onMigrateToServer } = {}) {
     const isRestDay = trainingType === "REST";
     const playedTodayIds = new Set(uSquad.filter((p) => p.appearHistory?.[0] === true).map((p) => p.id));
     uSquad.forEach((p) => {
-      const effectiveType = !isRestDay && playedTodayIds.has(p.id) ? "REST" : trainingType;
+      let effectiveType = !isRestDay && playedTodayIds.has(p.id) ? "REST" : trainingType;
+      if (blocksHeavyTraining(p) && effectiveType !== "REST") effectiveType = "REST";
       applyTrainingToPlayer(p, effectiveType);
     });
     if (uT.manager && trainingType !== "REST") {
@@ -4121,6 +4442,13 @@ export default function App({ onMigrateToServer } = {}) {
           if (longFx.longClear) headMedLongClears.push(p.name);
         }
         p.injuryDays = Math.max(0, p.injuryDays - recoverDays);
+        if (p.injuryDays <= 0) p.injurySeverity = null;
+      }
+      // นับวันแบนลดที่นี่แทน (ทุกทีมที่มีนัดแข่งวันนี้ วันละครั้งแน่นอน) แทนที่จะพึ่งเฉพาะตอนลงแข่งสดของทีมเรา —
+      // กันบั๊กที่เจอจริง: ถ้าใช้โหมดเดินหน้าเร็ว/จำลองอัตโนมัติแทนลงแข่งสด นัดแบนไม่เคยลดเลย
+      // freshlySuspendedIds กันไม่ให้คนเพิ่งโดนแบนจากแมตช์วันนี้เองถูกลดโทษเหลือ 0 ทันที
+      if ((p.suspendedMatches || 0) > 0 && teamsPlayingToday.has(p.teamId) && !(freshlySuspendedIds && freshlySuspendedIds.has(p.id))) {
+        p.suspendedMatches = Math.max(0, p.suspendedMatches - 1);
       }
     });
     if (headMedLongClears.length) {
@@ -4240,9 +4568,27 @@ export default function App({ onMigrateToServer } = {}) {
     }
     if (c.day === 15 && c.sockerCupSeason !== c.season) c = runSockerCup(c);
     if (c.day > 0 && c.day % 28 === 0) c = runMonthlyAwards(c);
-    while (c.transferList.length < 8) c.transferList.push(genTransferListing(c.teams, c.userTeamId));
+    while (c.transferList.length < 8) c.transferList.push(genTransferListing(c.teams, c.userTeamId, c));
     reconcileInactiveLegends(c);
     c.players.filter((p) => p.isLegend && p.teamId === c.userTeamId).forEach((p) => { p.lastOwnerActivityDay = c.day; });
+
+    const roadmapTick = runDailyRoadmapTick(c, uT, { genScoutFind });
+    if (roadmapTick.logs?.length) c.log = [...roadmapTick.logs, ...c.log];
+    if (roadmapTick.reports?.length && c.marketScout) {
+      const maxFinds = 3 + c.marketScout.grade;
+      roadmapTick.reports.forEach((find) => {
+        if ((c.scoutFinds || []).length < maxFinds) {
+          c.scoutFinds.push(find);
+          c.log = [`🔭 รายงานโซน ${find.zoneLabel || ""}: ${find.name} (OVR ${find.rating})`, ...c.log];
+        }
+      });
+    }
+    if (roadmapTick.sacked) {
+      c.managerSacked = true;
+      c.sackReason = roadmapTick.reason || "บอร์ดไล่ออก";
+      c.log = [`🚪 ${c.sackReason}`, ...c.log];
+    }
+
     c.day += 1;
     resetDailyStaffDraws(c);
     return c;
@@ -4501,7 +4847,7 @@ export default function App({ onMigrateToServer } = {}) {
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       const t = c.teams.find((tm) => tm.id === c.userTeamId);
-      const sq = squadOf(c.userTeamId, c).filter((p) => p.injuryDays <= 0);
+      const sq = squadOf(c.userTeamId, c).filter((p) => p.injuryDays <= 0 && (p.suspendedMatches || 0) <= 0);
       const mp = managerPlanProfile(t);
       t.formation = recommendFormation(t, sq);
       c.lineups[c.userTeamId] = getBestXI(sq, t.formation);
@@ -4684,30 +5030,67 @@ export default function App({ onMigrateToServer } = {}) {
         const delta = won ? rand(2, 6) + moraleBonus : draw ? 0 : -(rand(2, 6) - Math.floor(moraleBonus / 2));
         p.morale = clamp(p.morale + delta, 10, 99);
       });
+      if (m.home === c.userTeamId || m.away === c.userTeamId) {
+        const userSquad = uIsHome ? homeSquad : awaySquad;
+        const oppSquad = uIsHome ? awaySquad : homeSquad;
+        const userXI = uIsHome ? finalHomeXI : finalAwayXI;
+        const oppTeam = uIsHome ? a : h;
+        const userAvail = userSquad.filter((p) => p.injuryDays <= 0);
+        const oppAvail = oppSquad.filter((p) => p.injuryDays <= 0);
+        const oppXI = getBestXI(oppAvail, oppTeam.formation);
+        const prep = c.matchPrep || defaultMatchPrep();
+        const familiarityMult = familiarityMultiplier(
+          c.tacticFamiliarity && c.tacticFamiliarity.formation === uT.formation ? c.tacticFamiliarity.matches : 0
+        );
+        let userCtx = buildMatchContext(uT, userAvail, userXI, oppTeam.formation, uIsHome, uT.chemistry, userSlotAssignMap(c));
+        let oppCtx = buildMatchContext(oppTeam, oppAvail, oppXI, uT.formation, !uIsHome, oppTeam.chemistry);
+        userCtx = applyMatchPrepToContext(userCtx, prep, { team: uT, squad: userAvail, xiIds: userXI, familiarityMult });
+        const { xgHome, xgAway } = expectedGoalsFull(uIsHome ? userCtx : oppCtx, uIsHome ? oppCtx : userCtx);
+        const xgUs = uIsHome ? xgHome : xgAway;
+        const xgThem = uIsHome ? xgAway : xgHome;
+        recordMatchXg(c, {
+          xgUs, xgThem,
+          homeGoals: uIsHome ? homeGoals : awayGoals,
+          awayGoals: uIsHome ? awayGoals : homeGoals,
+          day: c.day,
+          opponent: oppTeam,
+        });
+        const derbyDelta = derbyMoraleBonus(c, m.home, m.away, won);
+        if (derbyDelta) {
+          c.players.filter((p) => p.teamId === c.userTeamId).forEach((p) => {
+            p.morale = clamp(p.morale + derbyDelta, 10, 99);
+          });
+          if (isDerbyMatch(c, m.home, m.away)) {
+            c.log = [`⚔️ ดาร์บี้! มูด ${derbyDelta >= 0 ? "+" : ""}${derbyDelta}`, ...c.log];
+          }
+        }
+      }
       updateTacticFamiliarity(c, uT.formation, uT.manager);
       if (c.matchPrep) c.matchPrep = { ...c.matchPrep, markPlayerId: null };
-      // เดินโทษแบนของคนที่ติดแบน "ก่อน" แมตช์นี้อยู่แล้วก่อน (นับว่ารับโทษนัดนี้ไปแล้ว) —
-      // ต้องทำก่อนตั้งแบนใหม่จาก cardEvents ด้านล่าง ไม่งั้นคนเพิ่งโดนแดงนัดนี้จะถูกลดโทษเหลือ 0 ทันที
-      c.players.filter((p) => p.teamId === c.userTeamId && (p.suspendedMatches || 0) > 0)
-        .forEach((p) => { p.suspendedMatches -= 1; });
-      // ประมวลผลใบเหลือง/แดงสะสมจากแมตช์นี้ — เฉพาะผู้เล่นทีมผู้ใช้ (v1 scope)
+      // ประมวลผลใบเหลือง/แดงสะสมจากแมตช์นี้ — ใช้กับผู้เล่นทั้ง 2 ทีม (ไม่ใช่แค่ทีมผู้ใช้) เพราะภาพ
+      // ใบแดง/เหลืองที่โชว์ระหว่างแข่งเป็นของทั้งสองทีม ถ้าใช้ได้แค่ทีมเราจะดูเหมือนคู่แข่งโดนใบแดง
+      // แต่ไม่มีผลแบนจริง (บั๊กที่เจอจริง) — เดินโทษแบนเก่าทำที่ finalizeDayExtras ด้านล่างแทน
+      // (ส่ง freshlySuspendedIds กันคนเพิ่งโดนแดงนัดนี้ถูกลดโทษเหลือ 0 ทันทีในฟังก์ชันเดียวกัน)
+      const freshlySuspendedIds = new Set();
       cardEvents.forEach(({ playerId, red }) => {
-        const p = c.players.find((pl) => pl.id === playerId && pl.teamId === c.userTeamId);
+        const p = c.players.find((pl) => pl.id === playerId);
         if (!p) return;
         if (red) {
           p.suspendedMatches = Math.max(p.suspendedMatches || 0, 1);
+          freshlySuspendedIds.add(p.id);
           c.log = [`🟥 ${p.name} โดนแบน 1 นัดจากใบแดง`, ...c.log];
         } else {
           p.seasonYellows = (p.seasonYellows || 0) + 1;
           if (p.seasonYellows >= 5) {
             p.seasonYellows = 0;
             p.suspendedMatches = Math.max(p.suspendedMatches || 0, 1);
+            freshlySuspendedIds.add(p.id);
             c.log = [`🟨 ${p.name} ใบเหลืองครบ 5 ใบ — โดนแบน 1 นัด (รีเซ็ตตัวนับ)`, ...c.log];
           }
         }
       });
       c.liveMatch = null;
-      finalizeDayExtras(c);
+      finalizeDayExtras(c, freshlySuspendedIds);
       return c;
     });
   }
@@ -4728,9 +5111,12 @@ export default function App({ onMigrateToServer } = {}) {
       const uT = c.teams.find((t) => t.id === c.userTeamId);
       const negPct = enrichedManagerPlan(c, uT).negotiationPct;
       const finalFee = Math.round(f.buyFee * (1 - negPct));
+      const ffpCheck = canAffordTransferFfp(c, finalFee);
+      if (!ffpCheck.ok) { c.log = [`⚠️ ${ffpCheck.reason}`, ...c.log]; return c; }
       if (c.budget < finalFee) return c;
       c.budget -= finalFee;
-      c.players.push({
+      recordTransferSpend(c, finalFee);
+      const newPl = enrichPlayerContract({
         id: f.playerId,
         name: f.name,
         nationality: f.nationality,
@@ -4756,12 +5142,63 @@ export default function App({ onMigrateToServer } = {}) {
         role: "balanced",
         contractEndsDay: c.day + rand(120, 280),
       });
+      c.players.push(newPl);
       c.scoutFinds.splice(idx, 1);
       registerNewSquadPlayer(c, f.playerId);
       c.log = [`✅ ซื้อ ${f.name} จากรายงานแมวมอง — ค่าตัว ${formatMoney(finalFee)}${negPct > 0 ? ` (ลด ${Math.round(negPct * 100)}% จากผจก.)` : ""} · ดูที่แท็บแทคติก`, ...c.log];
       return c;
     });
     showToast(`${findName || "นักเตะ"} เข้าทีมแล้ว — ดูที่แท็บแทคติก > ตัวสำรอง`);
+  }
+
+  function handlePressChoice(choiceId) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      applyPressChoice(c, choiceId);
+      return c;
+    });
+  }
+
+  function handleConversationResolve(accept) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      resolvePlayerConversation(c, accept);
+      return c;
+    });
+  }
+
+  function handleAssignScoutZone(zoneId) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      assignScoutZone(c, zoneId);
+      const zone = SCOUT_ZONES.find((z) => z.id === zoneId);
+      const on = c.scoutNetwork.assignments.some((a) => a.zoneId === zoneId && a.active);
+      c.log = [`🔭 โซนสเกาต์ ${zone?.label || zoneId}: ${on ? "เปิด" : "ปิด"}`, ...c.log];
+      return c;
+    });
+  }
+
+  function handleAddShadowTarget(position) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      addShadowTarget(c, { position, minRating: 58, maxAge: 27, note: `เป้า ${position}` });
+      c.log = [`📋 เพิ่มเป้าแผนเงา: ${position} OVR≥58`, ...c.log];
+      return c;
+    });
+  }
+
+  function handleSetDelegation(key) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      ensureRoadmapFields(c);
+      c.delegation[key] = c.delegation[key] === "auto" ? "manual" : "auto";
+      return c;
+    });
+  }
+
+  function handleRestartAfterSack() {
+    resetCareer();
+    showToast("เริ่มใหม่ — สร้างสโมสรใหม่ได้จากเมนู");
   }
 
   function manualScoutSearch() {
@@ -4788,9 +5225,17 @@ export default function App({ onMigrateToServer } = {}) {
   function placeBid(listingId, wage, fee) {
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
+      if (!resolveMarketOpen(c)) return prev; // กันเผื่อ market ปิดไปแล้วแต่ยังมี event ค้างมาถึง handler นี้
       const l = c.transferList.find((x) => x.listingId === listingId);
       if (!l) return c;
-      if (fee > c.budget) return c;
+      // กันงบติดลบตอนประมูลชนะหลายรายการพร้อมกัน — ต้องเผื่อเงินที่ "จอง" ไว้กับ bid สูงสุดของเรา
+      // ในรายการอื่นที่ยังไม่ปิดด้วย ไม่ใช่แค่เช็คงบปัจจุบันเทียบกับ fee รายการนี้รายการเดียว
+      const reservedElsewhere = c.transferList
+        .filter((x) => x.listingId !== listingId && x.topBid?.isUser)
+        .reduce((s, x) => s + x.topBid.fee, 0);
+      if (fee > c.budget - reservedElsewhere) return c;
+      const ffpCheck = canAffordTransferFfp(c, fee);
+      if (!ffpCheck.ok) return c;
       const valid = wage > l.topBid.wage || (wage === l.topBid.wage && fee > l.topBid.fee);
       if (!valid) return c;
       l.topBid = { wage, fee, bidder: "คุณ", isUser: true };
@@ -4807,18 +5252,30 @@ export default function App({ onMigrateToServer } = {}) {
         if (Date.now() < l.endsAt) return true;
         changed = true;
         if (l.topBid.isUser) {
+          // กันงบติดลบ: ถ้างบไม่พอจริงตอนปิดประมูล (เช่นชนะหลายรายการพร้อมกันจนเกินงบ) ให้เสียสิทธิ์
+          // รายการนี้แทนที่จะหักจนติดลบ — ป้องกันชั้นสุดท้ายเผื่อ placeBid หลุดรอดมาได้จากเคสที่ไม่คาดคิด
+          if (l.topBid.fee > c.budget) {
+            c.log = [`⚠️ งบไม่พอตอนปิดประมูล ${l.name} (ต้องการ ${formatMoney(l.topBid.fee)}) — เสียสิทธิ์ประมูลรายการนี้`, ...c.log];
+            return false;
+          }
+          const ffpCheck = canAffordTransferFfp(c, l.topBid.fee);
+          if (!ffpCheck.ok) {
+            c.log = [`⚠️ ${ffpCheck.reason} — เสียสิทธิ์ประมูล ${l.name}`, ...c.log];
+            return false;
+          }
           ensureDetailedPos(l);
-          const newPlayer = {
+          const newPlayer = enrichPlayerContract({
             id: l.id, name: l.name, position: l.position, pos: l.pos, altPos: l.altPos || [],
             age: l.age, attrs: l.attrs, attack: l.attack, defense: l.defense, rating: l.rating,
             potential: l.potential, value: l.topBid.fee, wage: l.topBid.wage, morale: 75,
             teamId: c.userTeamId, stamina: 90, injuryDays: 0, appearHistory: [],
             careerGoals: 0, seasonGoals: 0, careerApps: 0, role: "balanced",
             contractEndsDay: c.day + rand(150, 400),
-          };
+          });
           ensureDetailedPos(newPlayer);
           c.players.push(newPlayer);
           c.budget -= l.topBid.fee;
+          recordTransferSpend(c, l.topBid.fee);
           registerNewSquadPlayer(c, newPlayer.id);
           c.log = [`✅ ชนะประมูล ${l.name} (${playerPosTH(l)}) ค่าตัว ${formatMoney(l.topBid.fee)} ค่าเหนื่อย ${formatMoney(l.topBid.wage)}/วัน · ดูที่แท็บแทคติก`, ...c.log];
         } else {
@@ -4826,7 +5283,7 @@ export default function App({ onMigrateToServer } = {}) {
         }
         return false;
       });
-      if (changed) while (c.transferList.length < 8) c.transferList.push(genTransferListing(c.teams, c.userTeamId));
+      if (changed) while (c.transferList.length < 8) c.transferList.push(genTransferListing(c.teams, c.userTeamId, c));
       return changed ? c : prev;
     });
   }
@@ -5143,22 +5600,26 @@ export default function App({ onMigrateToServer } = {}) {
   /* ---------- staff card gacha ---------- */
   function pullStaffCards(tierKey = "bronze") {
     const tier = STAFF_PACK_TIERS[tierKey] || STAFF_PACK_TIERS.bronze;
-    const freeLeft = career?.staffFreeDrawsLeft ?? 0;
-    const tickets = career?.staffDrawTickets ?? 0;
-    // สิทธิ์ฟรีรายวันใช้ได้เฉพาะซอง Bronze เท่านั้น — Silver/Gold ต้องจ่ายตั๋วเสมอไม่ว่าจะเหลือสิทธิ์ฟรีอยู่หรือไม่
-    const canFree = tier.freeEligible && freeLeft > 0;
-    const canTicket = tickets >= tier.ticketCost;
-    if (!canFree && !canTicket) {
-      showToast(canFree === false && tier.ticketCost > 1
-        ? `ตั๋วไม่พอ — ซอง ${tier.label} ใช้ ${tier.ticketCost} ตั๋ว (มี ${tickets})`
-        : "ไม่มีสิทธิ์เปิดการ์ด — ใช้ฟรีหมดแล้วและไม่มีตั๋ว");
-      return;
-    }
     const pulled = Array.from({ length: CARDS_PER_STAFF_PULL }, () => genStaffCard(null, null, tier.weights));
     const mergeOut = { attempts: [] };
+    // เช็คสิทธิ์ฟรี/ตั๋วและหักออกจาก "prev" ภายใน updateCareer เท่านั้น (ไม่ใช้ค่า career จาก closure ข้างนอก)
+    // กันบั๊กที่เจอจริง: เปิดซองได้ (การ์ดเข้ากระเป๋า) แต่ตัวนับตั๋ว/สิทธิ์ฟรีไม่ลด เพราะ canFree/canTicket
+    // เดิมคำนวณจากค่า career ตอนคลิก ซึ่งอาจไม่ตรงกับค่าล่าสุดตอน updateCareer ทำงานจริง
+    const pullOut = { applied: false, usedFree: false, reason: null };
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       ensureStaffCardFields(c);
+      const freeLeft = c.staffFreeDrawsLeft || 0;
+      const tickets = c.staffDrawTickets || 0;
+      // สิทธิ์ฟรีรายวันใช้ได้เฉพาะซอง Bronze เท่านั้น — Silver/Gold ต้องจ่ายตั๋วเสมอไม่ว่าจะเหลือสิทธิ์ฟรีอยู่หรือไม่
+      const canFree = tier.freeEligible && freeLeft > 0;
+      const canTicket = tickets >= tier.ticketCost;
+      if (!canFree && !canTicket) {
+        pullOut.reason = canFree === false && tier.ticketCost > 1
+          ? `ตั๋วไม่พอ — ซอง ${tier.label} ใช้ ${tier.ticketCost} ตั๋ว (มี ${tickets})`
+          : "ไม่มีสิทธิ์เปิดการ์ด — ใช้ฟรีหมดแล้วและไม่มีตั๋ว";
+        return prev;
+      }
       c.staffCardBag = [...c.staffCardBag, ...pulled];
       const { removeIds, newCards, attempts } = computeAutoMergeAttempts(c.staffCardBag, c.autoMergeTiers);
       if (attempts.length) {
@@ -5170,8 +5631,9 @@ export default function App({ onMigrateToServer } = {}) {
       c.lastStaffPull = pulled
         .map((card) => c.staffCardBag.find((b) => b.cardId === card.cardId))
         .filter(Boolean);
-      if (canFree) c.staffFreeDrawsLeft -= 1;
+      if (canFree) { c.staffFreeDrawsLeft -= 1; pullOut.usedFree = true; }
       else c.staffDrawTickets -= tier.ticketCost;
+      pullOut.applied = true;
       c.log = [`🃏 เปิดซอง ${tier.label} ${pulled.length} ใบ (${canFree ? "ฟรี" : `ใช้ ${tier.ticketCost} ตั๋ว`})`, ...c.log];
       if (attempts.length) {
         const ok = attempts.filter((a) => a.success).length;
@@ -5179,19 +5641,31 @@ export default function App({ onMigrateToServer } = {}) {
       }
       return c;
     });
-    showToast(`เปิดซอง ${tier.label} ได้การ์ด ${pulled.length} ใบ! (${canFree ? "ฟรี" : `ใช้ ${tier.ticketCost} ตั๋ว`})`);
+    if (!pullOut.applied) {
+      showToast(pullOut.reason || "เปิดซองไม่ได้");
+      return false;
+    }
+    showToast(`เปิดซอง ${tier.label} ได้การ์ด ${pulled.length} ใบ! (${pullOut.usedFree ? "ฟรี" : `ใช้ ${tier.ticketCost} ตั๋ว`})`);
     if (mergeOut.attempts.length) setMergeReport({ attempts: mergeOut.attempts, auto: true });
+    return true;
   }
 
-  function mergeStaffCards(type, stars) {
+  function mergeStaffCards(type, stars, pickedCardIds = null) {
     const mergeOut = { applied: false, attempts: null };
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       ensureStaffCardFields(c);
       if (stars >= 7) return prev;
-      const matches = c.staffCardBag.filter((card) => card.type === type && card.stars === stars);
+      const matches = c.staffCardBag.filter((card) => card.type === type && card.stars === stars && !card.locked);
       if (matches.length < MERGE_CARD_COUNT) return prev;
-      const removeSet = new Set(matches.slice(0, MERGE_CARD_COUNT).map((card) => card.cardId));
+      // ถ้าผู้เล่นติ๊กเลือกการ์ดเองมา ใช้ตามนั้น (ต้องครบจำนวนและตรงชนิด/ดาวเป๊ะ) ไม่งั้นหยิบ N ใบแรกเหมือนเดิม
+      let chosenIds = matches.slice(0, MERGE_CARD_COUNT).map((card) => card.cardId);
+      if (Array.isArray(pickedCardIds) && pickedCardIds.length === MERGE_CARD_COUNT) {
+        const matchIds = new Set(matches.map((card) => card.cardId));
+        const validPick = pickedCardIds.every((id) => matchIds.has(id));
+        if (validPick) chosenIds = pickedCardIds;
+      }
+      const removeSet = new Set(chosenIds);
       const chance = mergeSuccessChance(stars);
       const success = Math.random() < chance;
       const upgraded = success ? genStaffCard(type, stars + 1) : null;
@@ -5239,6 +5713,18 @@ export default function App({ onMigrateToServer } = {}) {
       const c = JSON.parse(JSON.stringify(prev));
       ensureStaffCardFields(c);
       c.autoMergeTiers[stars] = !c.autoMergeTiers[stars];
+      return c;
+    });
+  }
+
+  /** ล็อก/ปลดล็อกการ์ดสตาฟใบเดียว — การ์ดที่ล็อกจะไม่ถูกดึงไปรวม ทั้งอัตโนมัติและตอนกด "รวม" แบบหยิบให้ */
+  function toggleStaffCardLock(cardId) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      ensureStaffCardFields(c);
+      const card = c.staffCardBag.find((cd) => cd.cardId === cardId);
+      if (!card) return prev;
+      card.locked = !card.locked;
       return c;
     });
   }
@@ -5569,7 +6055,29 @@ export default function App({ onMigrateToServer } = {}) {
   /* ============================== RENDER ============================== */
   if (loading) return <div style={{ minHeight: "100vh", background: C.pitchDark, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}><div style={{ color: C.chalk, fontFamily: FM_FONT }}>{loadMsg}</div><div style={{ fontSize: 11, color: C.textDim }}>ครั้งแรกอาจใช้เวลา 5–15 วินาที</div></div>;
   if (!splashDone) return <SplashScreen />;
-  if (!gameEntered) return <TitleScreen onEnter={() => setGameEntered(true)} hasProfile={!!profile} hasCareer={!!career} profile={profile} career={career} toast={toast} />;
+  if (!gameEntered) {
+    return (
+      <TitleScreen
+        onEnter={() => setGameEntered(true)}
+        hasProfile={!!profile}
+        hasCareer={!!career}
+        profile={profile}
+        career={career}
+        accountUser={accountUser}
+        onOpenAuth={onOpenAuth}
+        onLogout={onLogout}
+      />
+    );
+  }
+  if (!profile && !introDone) {
+    return (
+      <IntroCutscene
+        username={accountUser?.username}
+        introStorageKey={saveKeysRef.current.introKey}
+        onComplete={() => setIntroDone(true)}
+      />
+    );
+  }
   if (!profile) return <ProfileSetup onSave={saveProfile} booting={booting} toast={toast} />;
   if (!career) return <ClubCreator profile={profile} onCreate={startCareer} booting={booting} toast={toast} />;
 
@@ -5598,7 +6106,7 @@ export default function App({ onMigrateToServer } = {}) {
   const matchAdvice = opponent
     ? getManagerMatchAdvice(uTeam, uSquad, xi, opponent, oppSquadRaw, isHome)
     : null;
-  const xiPicked = xi.filter((id) => uSquad.find((p) => p.id === id && p.injuryDays <= 0)).length;
+  const xiPicked = xi.filter((id) => uSquad.find((p) => p.id === id && p.injuryDays <= 0 && (p.suspendedMatches || 0) <= 0)).length;
   const xiAfterFill = fillLineupGaps(uSquad, xi, uTeam.formation).length;
   const canKickoff = xiAfterFill >= MIN_XI_SIZE;
   const injuredCount = uSquadRaw.filter((p) => p.injuryDays > 0).length;
@@ -5619,7 +6127,8 @@ export default function App({ onMigrateToServer } = {}) {
       <div className="fc-game-bg" style={{ backgroundImage: `url(${BRAND_LOGIN_BG})` }} aria-hidden />
       <div className="fc-game-noise" aria-hidden />
       <div className="fc-game-content">
-      <FMHeader uTeam={uTeam} career={career} userLeague={userLeague} budget={career.budget} wageBill={wageBill} sockerCoins={profile?.sockerCoins || 0} onOpenShop={() => setTab("shop")} uiLang={uiLang} />
+      <BetaStrip />
+      <FMHeader uTeam={uTeam} career={career} userLeague={userLeague} budget={career.budget} wageBill={wageBill} sockerCoins={profile?.sockerCoins || 0} onOpenShop={() => setTab("shop")} uiLang={uiLang} accountUser={accountUser} onLogout={onLogout} />
 
       {toast && <div className="fc-toast">{toast}</div>}
 
@@ -5645,6 +6154,12 @@ export default function App({ onMigrateToServer } = {}) {
         />
       )}
       {mergeReport && <MergeResultModal report={mergeReport} onClose={() => setMergeReport(null)} />}
+      {career?.flashWorldNewsId && (
+        <WorldNewsFlash
+          item={career.worldNews?.find((w) => w.id === career.flashWorldNewsId)}
+          onClose={dismissWorldNewsFlash}
+        />
+      )}
 
       {career.liveMatch && <LiveMatchModal career={career} liveMatch={career.liveMatch} userAutoMode={uTeam.autoMode} onFinish={finishLiveMatch} suggestTacticSwitch={suggestTacticSwitch} />}
 
@@ -5659,7 +6174,14 @@ export default function App({ onMigrateToServer } = {}) {
             onSetMentality={setMatchPrepMentality} onToggleInstruction={toggleMatchPrepInstruction}
             onSetTeamTalk={setMatchPrepTeamTalk} onUpgradeSponsor={upgradeSponsor}
             onApplySuggested={applySuggestedPrep} onGoClub={() => setTab("club")}
-            onSetPrepField={setMatchPrepField} onBoardMove={moveBoardPiece} />
+            onSetPrepField={setMatchPrepField} onBoardMove={moveBoardPiece}
+            onMarkNewsRead={markWorldNewsRead}
+            onPressChoice={handlePressChoice}
+            onConversationResolve={handleConversationResolve}
+            onAssignScoutZone={handleAssignScoutZone}
+            onAddShadowTarget={handleAddShadowTarget}
+            onSetDelegation={handleSetDelegation}
+            onRestartAfterSack={handleRestartAfterSack} />
         )}
         {tab === "club" && (
           <ClubHubView career={career} uTeam={uTeam} standings={standings} seasonOver={seasonOver}
@@ -5805,6 +6327,7 @@ export default function App({ onMigrateToServer } = {}) {
             onHire={requestHireFromStaffCard}
             onAutoMerge={runAutoMergeNow}
             onToggleAutoTier={toggleAutoMergeTier}
+            onToggleLock={toggleStaffCardLock}
           />
         )}
         {tab === "staffguide" && <StaffGuideView career={career} uiLang={uiLang} />}
@@ -5817,7 +6340,19 @@ export default function App({ onMigrateToServer } = {}) {
             onBuyItemToBag={buyShopItemToBag}
           />
         )}
-        {tab === "settings" && <SettingsView career={career} onReset={resetCareer} onEnterOnline={enterOnlineMode} uiLang={uiLang} onSetUiLang={setUiLang} />}
+        {tab === "settings" && (
+          <SettingsView
+            career={career}
+            onReset={resetCareer}
+            onEnterOnline={enterOnlineMode}
+            uiLang={uiLang}
+            onSetUiLang={setUiLang}
+            accountUser={accountUser}
+            onOpenAuth={onOpenAuth}
+            onOpenOnlinePortal={onOpenOnlinePortal}
+            onLogout={onLogout}
+          />
+        )}
         {tab === "feedback" && (
           <FeedbackView uiLang={uiLang} />
         )}
@@ -5881,11 +6416,20 @@ function OnlineCountBadge() {
   );
 }
 
-function TitleScreen({ onEnter, hasProfile, hasCareer, profile, career }) {
+function TitleScreen({
+  onEnter,
+  hasProfile,
+  hasCareer,
+  profile,
+  career,
+  accountUser,
+  onOpenAuth,
+  onLogout,
+}) {
   const teamName = hasCareer ? career?.teams?.find((t) => t.id === career.userTeamId)?.name : null;
   const [shareMsg, setShareMsg] = useState(null);
   const isWeb = typeof window !== "undefined" && window.location.protocol.startsWith("http");
-  const playUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
+  const playUrl = typeof window !== "undefined" ? window.location.origin + "/play" : "";
 
   async function shareLink() {
     const text = `ลองเล่น ${GAME_NAME} — ${GAME_TAGLINE}`;
@@ -5895,52 +6439,79 @@ function TitleScreen({ onEnter, hasProfile, hasCareer, profile, career }) {
         return;
       }
       await navigator.clipboard.writeText(playUrl);
-      setShareMsg("คัดลอกลิงก์แล้ว — ส่งให้เพื่อนได้เลย!");
+      setShareMsg("คัดลอกลิงก์แล้ว");
     } catch {
-      setShareMsg("ไม่สามารถแชร์ได้ — คัดลอก URL จากแถบที่อยู่ด้านบน");
+      setShareMsg("คัดลอก URL จากแถบด้านบน");
     }
     setTimeout(() => setShareMsg(null), 2800);
   }
 
   return (
     <LoginBackdrop>
-      <span className="fc-eyebrow">🧪 เวอร์ชันทดลอง — เล่นฟรี ไม่ต้องสมัคร</span>
+      {accountUser ? (
+        <span className="fc-eyebrow">
+          ยินดีต้อนรับ · @{accountUser.username || accountUser.displayName || "ผู้เล่น"}
+        </span>
+      ) : (
+        <span className="fc-eyebrow">Game ID · สมัครฟรี · เซฟผูกบัญชี</span>
+      )}
       <OnlineCountBadge />
       <img src={BRAND_SPLASH_LOGO} alt={GAME_NAME} className="fc-title-logo" />
       <p className="fc-title-tagline">{GAME_TAGLINE}</p>
-      <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 28, lineHeight: 1.55 }}>
-        สร้างสโมสร → วันมีนัดกด <b style={{ color: C.chalk }}>▶ ลงสนาม</b> · เซฟอัตโนมัติในเบราว์เซอร์นี้
+      <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 20, lineHeight: 1.55, maxWidth: 340, textAlign: "center" }}>
+        ระบบเดียวกับออนไลน์ — ตอนนี้แข่งกับบอทจนกว่าจะมีผู้เล่นครบ
       </div>
 
       {hasCareer && teamName && (
         <div className="fc-save-card">
-          {profile?.avatar} {profile?.name} · {teamName} · ฤดูกาล {career.season} วันที่ {career.day}
+          {profile?.avatar} {profile?.name} · {teamName} · ฤดูกาล {career.season} วัน {career.day}
         </div>
       )}
 
-      <button
-        type="button"
-        className="fc-btn fc-btn--primary"
-        onClick={onEnter}
-        style={{ width: "min(320px, 90vw)", fontSize: 16, padding: "16px 0", letterSpacing: 2 }}
-      >
-        ▶ {hasCareer ? "เข้าเล่น" : "ลองเล่นเลย"}
-      </button>
+      {!accountUser ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "min(320px, 90vw)" }}>
+          <button type="button" className="fc-btn fc-btn--primary" onClick={() => onOpenAuth?.(true)}>
+            สมัคร Game ID ฟรี
+          </button>
+          <button type="button" className="fc-btn fc-btn--ghost" onClick={() => onOpenAuth?.(false)}>
+            เข้าสู่ระบบ
+          </button>
+        </div>
+      ) : (
+        <>
+          <button
+            type="button"
+            className="fc-btn fc-btn--primary"
+            onClick={onEnter}
+            style={{ width: "min(320px, 90vw)", fontSize: 16, padding: "16px 0", letterSpacing: 2 }}
+          >
+            ▶ {hasCareer ? "เข้าเล่น" : "เริ่มเล่น"}
+          </button>
+          <button
+            type="button"
+            className="fc-btn fc-btn--ghost"
+            onClick={() => onLogout?.()}
+            style={{ width: "min(320px, 90vw)", fontSize: 12, padding: "12px 0", marginTop: 10 }}
+          >
+            ออกจากระบบ
+          </button>
+        </>
+      )}
 
-      {isWeb && (
+      {isWeb && accountUser && (
         <button
           type="button"
           className="fc-btn fc-btn--ghost"
           onClick={shareLink}
           style={{ width: "min(320px, 90vw)", fontSize: 12, padding: "12px 0", marginTop: 10 }}
         >
-          🔗 แชร์ลิงก์ให้เพื่อนลองเล่น
+          🔗 แชร์ลิงก์ให้เพื่อน
         </button>
       )}
       {shareMsg && <div style={{ fontSize: 11, color: C.good, marginTop: 8 }}>{shareMsg}</div>}
 
-      <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 20, maxWidth: 340, lineHeight: 1.55 }}>
-        โหมดออนไลน์แข่งกับผู้เล่นจริงกำลังพัฒนา — ตอนนี้เล่นโลกจำลองกับบอทได้เต็มรูปแบบ
+      <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 20, maxWidth: 340, lineHeight: 1.55, textAlign: "center" }}>
+        v{GAME_VERSION} · {BETA_TEST ? "Test Beta" : "Play"}
       </div>
     </LoginBackdrop>
   );
@@ -5973,11 +6544,15 @@ function ProfileSetup({ onSave, booting, toast }) {
               <button key={a} onClick={() => setAvatar(a)} style={{ fontSize: 22, padding: "10px 0", borderRadius: 10, border: `2px solid ${avatar === a ? C.amber : C.steel}`, background: avatar === a ? "rgba(224,164,88,.15)" : C.panel2, cursor: "pointer" }}>{a}</button>
             ))}
           </div>
-          <button type="button" disabled={!canSave} onClick={() => onSave({ name: name.trim(), avatar, sockerCoins: SOCKER_COIN_WELCOME, inventory: {}, shopBuyDay: "", shopBuyCount: 0 })} style={{ ...fmBtnPrimary(), ...(canSave ? {} : { background: "#2a3530", color: C.textDim, cursor: "not-allowed", opacity: 0.75 }) }}>
+          <button type="button" disabled={!canSave} onClick={() => onSave({ name: name.trim(), avatar, sockerCoins: STARTER_MASTER_COINS, inventory: {}, shopBuyDay: "", shopBuyCount: 0, uiLang: getDefaultGameUiLang() })} style={{ ...fmBtnPrimary(), ...(canSave ? {} : { background: "#2a3530", color: C.textDim, cursor: "not-allowed", opacity: 0.75 }) }}>
             {booting ? "กำลังเตรียม..." : "เข้าสู่ระบบ"}
           </button>
           {!name.trim() && <div style={{ fontSize: 10, color: C.textDim, marginTop: 8, textAlign: "center" }}>พิมพ์ชื่อผู้จัดการก่อน แล้วกดปุ่ม</div>}
-          <div style={{ fontSize: 10, color: C.gold, marginTop: 10, textAlign: "center" }}>🎁 ผู้เล่นใหม่ได้ Socker Coin {SOCKER_COIN_WELCOME} เหรียญ</div>
+          <div style={{ fontSize: 10, color: C.gold, marginTop: 10, textAlign: "center" }}>
+            {BETA_TEST
+              ? `🎁 Beta Test — Master Coin ${STARTER_MASTER_COINS} · งบสโมสรเริ่ม ${formatMoney(STARTING_BUDGET)}`
+              : `🎁 ผู้เล่นใหม่ได้ Master Coin ${STARTER_MASTER_COINS} เหรียญ`}
+          </div>
         </Panel>
       </div>
     </LoginBackdrop>
@@ -6770,6 +7345,7 @@ function MatchBriefingPanel({ scout, matchPrep, onSetMentality, onToggleInstruct
                   <span style={{ fontWeight: 600 }}>{p.name}{p.isLegend ? " ⭐" : ""}</span>
                   <span style={{ color: playerPosColor(p), fontSize: 10 }}>{playerPosTH(p)}</span>
                   {p.injuryDays > 0 && <span style={{ fontSize: 9, color: C.crimson }}>🤕</span>}
+                  {(p.suspendedMatches || 0) > 0 && <span style={{ fontSize: 9, color: C.amber }}>🚫</span>}
                 </div>
               ))}
             </div>
@@ -7207,18 +7783,184 @@ function ClubHubView({ career, uTeam, standings, seasonOver, onUpgradeSponsor, o
   );
 }
 
+/* ============================== ROADMAP TIER A/B — Dashboard widgets ============================== */
+function RoadmapDashboardPanel({
+  career, uTeam, onPressChoice, onConversationResolve, onAssignScoutZone,
+  onAddShadowTarget, onSetDelegation, onRestartAfterSack,
+}) {
+  const ffp = career.ffp || {};
+  const board = career.board || {};
+  const xgHist = career.xgHistory || [];
+  const rivals = career.rivals || [];
+  const assignments = career.scoutNetwork?.assignments || [];
+  const shadowTargets = career.shadowSquad?.targets || [];
+  const shadowAlerts = career.shadowSquad?.marketAlerts || [];
+  const delegation = career.delegation || {};
+  const wc = career.worldCupEvent || {};
+  const bTeam = career.bTeam || {};
+
+  if (career.managerSacked) {
+    return (
+      <Panel accent={C.crimson} style={{ padding: 14 }}>
+        <SectionLabel sub={career.sackReason || "บอร์ดไล่ออกจากตำแหน่ง"}>🚪 จบอาชีพผู้จัดการ</SectionLabel>
+        <p style={{ fontSize: 12, color: C.textDim, margin: "8px 0 12px", lineHeight: 1.5 }}>
+          ความพอใจบอร์ดและผลงานไม่ถึงเป้า — เริ่มสโมสรใหม่เพื่อลองอีกครั้ง
+        </p>
+        <button type="button" onClick={onRestartAfterSack} style={fmBtnPrimary()}>เริ่มอาชีพใหม่</button>
+      </Panel>
+    );
+  }
+
+  return (
+    <>
+      {career.pendingPress && (
+        <Panel accent={C.blue} style={{ padding: 12 }}>
+          <SectionLabel sub="เลือกแถลงข่าว — มีผลมูด/แฟน/บอร์ด">📰 สื่อถามความเห็น</SectionLabel>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+            {career.pendingPress.choices.map((ch) => (
+              <button key={ch.id} type="button" onClick={() => onPressChoice(ch.id)} style={fmBtnGhost({ flex: "1 1 120px" })}>
+                {ch.label}
+              </button>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {career.pendingConversation && (
+        <Panel accent={C.purple} style={{ padding: 12 }}>
+          <SectionLabel sub={career.pendingConversation.label}>💬 {career.pendingConversation.playerName} อยากคุย</SectionLabel>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button type="button" onClick={() => onConversationResolve(true)} style={fmBtnPrimary({ flex: 1 })}>ตกลง</button>
+            <button type="button" onClick={() => onConversationResolve(false)} style={fmBtnGhost({ flex: 1 })}>ปฏิเสธ</button>
+          </div>
+        </Panel>
+      )}
+
+      <Panel accent={C.steelLight} style={{ padding: 12 }}>
+        <SectionLabel sub="FFP · บอร์ด · xG · โซนสเกาต์ · แผนเงา · มอบหมายสตาฟ">📋 ระบบสโมสร (Roadmap A/B)</SectionLabel>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 10 }}>
+          <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+            <div style={{ fontSize: 9, color: C.textDim }}>FFP โอน</div>
+            <div style={{ fontFamily: MONO_FONT, fontSize: 12, fontWeight: 700, color: ffp.blocked ? C.crimson : C.chalk }}>
+              {Math.round((ffp.seasonSpend || 0) / 1000)}K / {Math.round((ffp.cap || 0) / 1000)}K
+            </div>
+          </div>
+          <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+            <div style={{ fontSize: 9, color: C.textDim }}>เสี่ยงไล่ออก</div>
+            <div style={{ fontFamily: MONO_FONT, fontSize: 12, fontWeight: 700, color: (board.sackRisk || 0) >= 60 ? C.crimson : C.amber }}>
+              {board.sackRisk ?? 0}%
+            </div>
+          </div>
+          <div style={{ background: C.panel2, borderRadius: 6, padding: 8, border: `1px solid ${C.steel}` }}>
+            <div style={{ fontSize: 9, color: C.textDim }}>xG ล่าสุด</div>
+            <div style={{ fontFamily: MONO_FONT, fontSize: 12, fontWeight: 700, color: C.chalk }}>
+              {career.lastMatchXg
+                ? `${career.lastMatchXg.xgUs}-${career.lastMatchXg.xgThem} (${career.lastMatchXg.goalsUs}-${career.lastMatchXg.goalsThem})`
+                : "—"}
+            </div>
+          </div>
+        </div>
+
+        {xgHist.length > 0 && (
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 8, lineHeight: 1.6 }}>
+            {xgHist.slice(0, 5).map((x, i) => (
+              <div key={i}>ว.{x.day} vs {x.opponent}: xG {x.xgUs}-{x.xgThem} · สกอร์ {x.goalsUs}-{x.goalsThem}</div>
+            ))}
+          </div>
+        )}
+
+        {rivals.length > 0 && (
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 8 }}>
+            ⚔️ คู่แข่ง: {rivals.map((r) => r.short || r.name).join(" · ")}
+          </div>
+        )}
+
+        {wc.phase && wc.phase !== "idle" && (
+          <div style={{ fontSize: 10, color: C.gold, marginBottom: 8 }}>
+            🏆 {wc.name || "World Cup"} — {wc.phase === "registration" ? "เปิดรับสมัคร" : wc.phase}
+          </div>
+        )}
+
+        <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6 }}>🔭 โซนสเกาต์ (ส่งตามลีก)</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          {SCOUT_ZONES.map((z) => {
+            const on = assignments.some((a) => a.zoneId === z.id && a.active);
+            return (
+              <button key={z.id} type="button" onClick={() => onAssignScoutZone(z.id)}
+                style={fmBtnGhost({ fontSize: 9, padding: "4px 8px", opacity: on ? 1 : 0.55, borderColor: on ? C.blue : C.steel })}>
+                {z.label}{on ? " ✓" : ""}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+          {["GK", "DF", "MF", "FW"].map((pos) => (
+            <button key={pos} type="button" onClick={() => onAddShadowTarget(pos)}
+              style={fmBtnGhost({ fontSize: 9, padding: "4px 8px" })}>
+              + เป้า {pos}
+            </button>
+          ))}
+        </div>
+        {shadowTargets.length > 0 && (
+          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6 }}>
+            แผนเงา: {shadowTargets.map((t) => `${t.position}≥${t.minRating}`).join(" · ")}
+          </div>
+        )}
+        {shadowAlerts.length > 0 && (
+          <div style={{ fontSize: 10, color: C.good, marginBottom: 8 }}>
+            🔔 ตลาดตรงเป้า: {shadowAlerts[0].playerName} (OVR {shadowAlerts[0].rating})
+          </div>
+        )}
+
+        <div style={{ fontSize: 10, color: C.textDim, marginBottom: 4 }}>มอบหมายสตาฟ</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {[
+            ["press", "แถลงข่าว"],
+            ["market", "ตลาด"],
+            ["training", "ฝึก"],
+          ].map(([key, label]) => (
+            <button key={key} type="button" onClick={() => onSetDelegation(key)}
+              style={fmBtnGhost({
+                fontSize: 9, padding: "4px 8px",
+                borderColor: delegation[key] === "auto" ? C.good : C.steel,
+              })}>
+              {label}: {delegation[key] === "auto" ? "ออโต้" : "เอง"}
+            </button>
+          ))}
+        </div>
+
+        {bTeam.reserveIds?.length > 0 && (
+          <div style={{ fontSize: 10, color: C.textDim, marginTop: 8 }}>
+            B-team สำรอง: {bTeam.reserveIds.length} คน (อายุ ≤21)
+          </div>
+        )}
+      </Panel>
+    </>
+  );
+}
+
 /* ============================== DASHBOARD (HOME) — FM Mobile ============================== */
-function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seasonOver, onAdvance, onKickoff, onGoTactics, onGoManager, xiPicked, xiAfterFill, canKickoff, injuredCount, onNewSeason, matchScout, matchPrep, onSetMentality, onToggleInstruction, onSetTeamTalk, onUpgradeSponsor, onApplySuggested, onGoClub, onSetPrepField, onBoardMove }) {
+function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seasonOver, onAdvance, onKickoff, onGoTactics, onGoManager, xiPicked, xiAfterFill, canKickoff, injuredCount, onNewSeason, matchScout, matchPrep, onSetMentality, onToggleInstruction, onSetTeamTalk, onUpgradeSponsor, onApplySuggested, onGoClub, onSetPrepField, onBoardMove, onMarkNewsRead, onPressChoice, onConversationResolve, onAssignScoutZone, onAddShadowTarget, onSetDelegation, onRestartAfterSack }) {
   const posInTable = standings.findIndex((s) => s.team.id === uTeam.id) + 1;
   const recentResults = getRecentMatchResults(career, uTeam.division, uTeam.id, 8);
-  const newsLogs = career.log.filter((l) => !isMatchLogLine(l)).slice(0, 6);
-  const [feedTab, setFeedTab] = useState("results");
   const [boardOpen, setBoardOpen] = useState(false);
   const userRow = standings.find((s) => s.team.id === uTeam.id);
   const dashSquad = career.players.filter((p) => p.teamId === uTeam.id);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <RoadmapDashboardPanel
+        career={career} uTeam={uTeam}
+        onPressChoice={onPressChoice}
+        onConversationResolve={onConversationResolve}
+        onAssignScoutZone={onAssignScoutZone}
+        onAddShadowTarget={onAddShadowTarget}
+        onSetDelegation={onSetDelegation}
+        onRestartAfterSack={onRestartAfterSack}
+      />
+
       {/* Hero: นัดวันนี้ */}
       <Panel accent={C.amber} style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ padding: "10px 12px 0" }}>
@@ -7274,6 +8016,11 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
             <button type="button" onClick={onAdvance} style={fmBtnGhost({ width: "100%" })}>ข้ามวัน</button>
           </div>
         )}
+      </Panel>
+
+      {/* ข่าวสารหน้าหลัก — FM style */}
+      <Panel accent={C.good} style={{ padding: 0, overflow: "hidden" }}>
+        <HomeNewsPanel career={career} onMarkRead={onMarkNewsRead} />
       </Panel>
 
       <Panel accent={C.gold} style={{ cursor: onGoClub ? "pointer" : "default" }} onClick={onGoClub}>
@@ -7350,47 +8097,28 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
         </div>
       </Panel>
 
-      {/* ผล + ข่าว (แท็บย่อย) */}
+      {/* ผลล่าสุด */}
       <Panel style={{ padding: 0 }}>
-        <div style={{ display: "flex", borderBottom: `1px solid ${C.steel}` }}>
-          {[
-            { id: "results", label: "ผลล่าสุด" },
-            { id: "news", label: "ข่าว" },
-          ].map((t) => (
-            <button key={t.id} type="button" onClick={() => setFeedTab(t.id)} style={{
-              flex: 1, padding: "8px 0", background: "transparent", border: "none", cursor: "pointer",
-              fontSize: 11, fontWeight: 600, fontFamily: FM_FONT,
-              color: feedTab === t.id ? C.amber : C.textDim,
-              borderBottom: feedTab === t.id ? `2px solid ${C.amber}` : "2px solid transparent",
-            }}>{t.label}</button>
-          ))}
+        <div style={{ padding: "10px 12px 0" }}>
+          <SectionLabel>ผลแข่งล่าสุด</SectionLabel>
         </div>
         <div style={{ padding: "8px 12px", maxHeight: 200, overflowY: "auto" }}>
-          {feedTab === "results" && (
-            recentResults.length === 0
-              ? <div style={{ fontSize: 11, color: C.textDim }}>ยังไม่มีผลแข่ง</div>
-              : recentResults.map((r, i) => (
-                <div key={i} style={{
-                  display: "grid", gridTemplateColumns: "28px 1fr auto 1fr 16px", alignItems: "center", gap: 4,
-                  fontSize: 11, fontFamily: MONO_FONT, padding: "5px 0",
-                  borderBottom: i < recentResults.length - 1 ? `1px solid ${C.steel}` : "none",
-                  background: r.isUser ? C.fmRowHi : "transparent",
-                }}>
-                  <span style={{ fontSize: 9, color: C.textDim }}>D{r.day}</span>
-                  <span style={{ textAlign: "right", color: r.homeGoals > r.awayGoals ? C.chalk : C.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.home.short}</span>
-                  <span style={{ color: C.amber, fontWeight: 700, padding: "0 4px" }}>{r.homeGoals}-{r.awayGoals}</span>
-                  <span style={{ color: r.awayGoals > r.homeGoals ? C.chalk : C.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.away.short}</span>
-                  <span>{r.isUser ? "★" : ""}</span>
-                </div>
-              ))
-          )}
-          {feedTab === "news" && (
-            newsLogs.length === 0
-              ? <div style={{ fontSize: 11, color: C.textDim }}>ยังไม่มีข่าว</div>
-              : newsLogs.map((l, i) => (
-                <div key={i} style={{ fontSize: 11, color: i === 0 ? C.chalk : C.textDim, lineHeight: 1.5, padding: "4px 0", borderBottom: i < newsLogs.length - 1 ? `1px solid ${C.steel}` : "none" }}>{l}</div>
-              ))
-          )}
+          {recentResults.length === 0
+            ? <div style={{ fontSize: 11, color: C.textDim }}>ยังไม่มีผลแข่ง</div>
+            : recentResults.map((r, i) => (
+              <div key={i} style={{
+                display: "grid", gridTemplateColumns: "28px 1fr auto 1fr 16px", alignItems: "center", gap: 4,
+                fontSize: 11, fontFamily: MONO_FONT, padding: "5px 0",
+                borderBottom: i < recentResults.length - 1 ? `1px solid ${C.steel}` : "none",
+                background: r.isUser ? C.fmRowHi : "transparent",
+              }}>
+                <span style={{ fontSize: 9, color: C.textDim }}>D{r.day}</span>
+                <span style={{ textAlign: "right", color: r.homeGoals > r.awayGoals ? C.chalk : C.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.home.short}</span>
+                <span style={{ color: C.amber, fontWeight: 700, padding: "0 4px" }}>{r.homeGoals}-{r.awayGoals}</span>
+                <span style={{ color: r.awayGoals > r.homeGoals ? C.chalk : C.textDim, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.away.short}</span>
+                <span>{r.isUser ? "★" : ""}</span>
+              </div>
+            ))}
         </div>
       </Panel>
 
@@ -7603,7 +8331,13 @@ function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, 
             {p.name}
             {p.isLegend && <span style={{ fontSize: 9, background: C.gold, color: "#0b2318", borderRadius: 4, padding: "1px 5px" }}>⭐ {t(uiLang, "player.legend")}</span>}
             {isXI && <span style={{ fontSize: 9, background: C.good, color: "#08150e", borderRadius: 4, padding: "1px 5px" }}>{t(uiLang, "player.xiBadge")}</span>}
-            {p.injuryDays > 0 && <span style={{ fontSize: 9, background: C.crimson, color: "#fff", borderRadius: 4, padding: "1px 5px" }}>{t(uiLang, "player.injuredBadge")} {p.injuryDays}{t(uiLang, "player.days")}</span>}
+            {p.injuryDays > 0 && (
+              <span style={{ fontSize: 9, background: C.crimson, color: "#fff", borderRadius: 4, padding: "1px 5px" }}>
+                {t(uiLang, "player.injuredBadge")}
+                {p.injurySeverity && INJURY_SEVERITY[p.injurySeverity] ? ` ${INJURY_SEVERITY[p.injurySeverity].label}` : ""} {p.injuryDays}{t(uiLang, "player.days")}
+              </span>
+            )}
+            {(p.suspendedMatches || 0) > 0 && <span style={{ fontSize: 9, background: C.amber, color: "#2b1c00", borderRadius: 4, padding: "1px 5px" }}>🚫 ติดแบน {p.suspendedMatches} นัด</span>}
             <span style={{ fontSize: 9, background: STATUS_COLOR[p.status], color: "#08150e", borderRadius: 4, padding: "1px 5px" }}>{STATUS_TH[p.status]}</span>
             {daysLeft != null && <span style={{ fontSize: 9, background: contractColor, color: "#08150e", borderRadius: 4, padding: "1px 5px" }}>{t(uiLang, "player.contract")} {daysLeft > 0 ? `${daysLeft}${t(uiLang, "player.days")}` : t(uiLang, "player.expired")}</span>}
           </div>
@@ -7676,9 +8410,10 @@ function ShirtToken({ player, teamColor, slotPos, size = 46, ghost }) {
   const oopMult = playerOopMult(player, slotPos);
   const oop = slotPos && oopMult < 0.995;
   const hurt = player.injuryDays > 0;
+  const banned = (player.suspendedMatches || 0) > 0;
   const lastName = player.name.split(" ")[1] || player.name;
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: size + 20, opacity: hurt && !ghost ? 0.45 : 1, pointerEvents: "none" }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: size + 20, opacity: (hurt || banned) && !ghost ? 0.45 : 1, pointerEvents: "none" }}>
       <div style={{ position: "relative", width: size, height: size, borderRadius: "50%", border: `2.5px solid ${oop ? C.crimson : ratingRing}`, background: "radial-gradient(circle at 35% 30%, rgba(255,255,255,.12), rgba(0,0,0,.35))", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: ghost ? "0 8px 20px rgba(0,0,0,.6)" : "0 2px 6px rgba(0,0,0,.4)" }}>
         <svg width={size * 0.72} height={size * 0.72} viewBox="0 0 64 64">
           <path d="M22 8 L32 13 L42 8 L57 17 L50 31 L44 27 L44 56 L20 56 L20 27 L14 31 L7 17 Z"
@@ -7686,6 +8421,7 @@ function ShirtToken({ player, teamColor, slotPos, size = 46, ghost }) {
           <text x="32" y="44" textAnchor="middle" fontSize="21" fontWeight="800" fill="#fff" fontFamily="ui-monospace, monospace">{player.rating}</text>
         </svg>
         {hurt && <div style={{ position: "absolute", top: -4, right: -4, fontSize: 13 }}>🤕</div>}
+        {!hurt && banned && <div style={{ position: "absolute", top: -4, right: -4, fontSize: 13 }}>🚫</div>}
         {player.isLegend && <div style={{ position: "absolute", top: -5, left: -5, fontSize: 11 }}>⭐</div>}
       </div>
       <div style={{ width: size - 4, height: 3, borderRadius: 2, background: "#0a1611", marginTop: 2, overflow: "hidden" }}>
@@ -7981,7 +8717,7 @@ function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onAutoPick, o
             {p ? (
               <>
                 <div style={{ fontSize: 11.5, fontWeight: tier === "xi" ? 700 : 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {p.name}{p.injuryDays > 0 && " 🤕"}{p.isLegend && " ⭐"}{isNew && <span style={{ color: C.amber, fontSize: 9 }}> NEW</span>}
+                  {p.name}{p.injuryDays > 0 && " 🤕"}{p.injuryDays <= 0 && (p.suspendedMatches || 0) > 0 && " 🚫"}{p.isLegend && " ⭐"}{isNew && <span style={{ color: C.amber, fontSize: 9 }}> NEW</span>}
                 </div>
                 <div style={{ fontSize: 8, color: oop ? C.crimson : C.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {oop
@@ -8997,7 +9733,7 @@ function KickoffWhistleBanner() {
   );
 }
 
-function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTacticSwitch }) {
+function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTacticSwitch, fullOnlineMode = false }) {
   const homeTeam = career.teams.find((t) => t.id === liveMatch.home);
   const awayTeam = career.teams.find((t) => t.id === liveMatch.away);
   const homeSquad = career.players.filter((p) => p.teamId === liveMatch.home);
@@ -9009,7 +9745,8 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   const [homeGoals, setHomeGoals] = useState(0);
   const [awayGoals, setAwayGoals] = useState(0);
   const [events, setEvents] = useState([]);
-  const [speed, setSpeed] = useState(1);
+  const [speed, setSpeed] = useState(fullOnlineMode ? 1 : 1);
+  const effectiveSpeed = fullOnlineMode ? 1 : speed;
   // ก่อนเขี่ยเปิดเกม: รายชื่อผู้เล่น(บ้าน) → รายชื่อผู้เล่น(เยือน) → เดินออกอุโมง → รอนกหวีด → เล่นจริง
   // เกมค้าง (paused=true) ตลอดจนกว่านกหวีดจะจบ ใช้ paused ตัวเดิมที่คุมลูป sim อยู่แล้ว ไม่ต้องเพิ่มธงใหม่
   const [preMatchPhase, setPreMatchPhase] = useState("lineup-home");
@@ -9426,7 +10163,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
     const iv = setInterval(() => {
       tickRef.current += 1;
       setClock((c) => {
-        const next = c + 1 * speed;
+        const next = c + 1 * effectiveSpeed;
         if (next >= HALF_SECONDS) {
           if (half === 1) {
             setPaused(true);
@@ -9483,7 +10220,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
 
       // corners / fouls flavor stats
       // ×speed ชดเชยจำนวนติ๊กที่หายไปตอนเร่งความเร็ว (เร็ว 6 เท่า = ติ๊กน้อยลง 6 เท่า) — จำนวน event ต่อแมตช์คงที่ทุกความเร็ว
-      if (tickRef.current % 5 === 0 && Math.random() < Math.min(0.8, 0.06 * speed)) {
+      if (tickRef.current % 5 === 0 && Math.random() < Math.min(0.8, 0.06 * effectiveSpeed)) {
         const cornerHome = Math.random() < homePressure;
         if (cornerHome) setStats((s) => ({ ...s, cornersH: s.cornersH + 1 }));
         else setStats((s) => ({ ...s, cornersA: s.cornersA + 1 }));
@@ -9493,7 +10230,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           startCornerScene(ambC, cornerHome ? "home" : "away");
         }
       }
-      if (tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.14 * speed)) {
+      if (tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.14 * effectiveSpeed)) {
         const awayFouled = Math.random() < homePressure;
         if (awayFouled) setStats((s) => ({ ...s, foulsA: s.foulsA + 1 }));
         else setStats((s) => ({ ...s, foulsH: s.foulsH + 1 }));
@@ -9536,7 +10273,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       const inBox = bs.px > 74 || bs.px < 26;
       const highlightBias = getLiveHighlightBias(homeGoals, awayGoals, gameMin);
       const shotBase = (inBox ? 0.16 : inAttThird ? 0.1 : 0.035) * highlightBias;
-      const shotChance = Math.min(0.85, (shotBase + Math.abs(pr) * 0.05) * speed);
+      const shotChance = Math.min(0.85, (shotBase + Math.abs(pr) * 0.05) * effectiveSpeed);
       if (tickRef.current % 3 === 0 && Math.random() < shotChance) {
         const scoreProb = attackingHome ? xgHome / 40 : xgAway / 40;
         const zone = { inBox, inAttThird };
@@ -9618,9 +10355,9 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           if (sug && sug !== curF) { setF(sug); setEvents((e) => [`🔄 ${gameMin}' ${team.short} ปรับเป็น ${sug}!`, ...e]); }
         });
       }
-    }, Math.max(180, 420 / speed));
+    }, Math.max(180, 420 / effectiveSpeed));
     return () => clearInterval(iv);
-  }, [half, paused, ended, speed, homeGoals, awayGoals, homeXI, awayXI, homeFormation, awayFormation]);
+  }, [half, paused, ended, effectiveSpeed, homeGoals, awayGoals, homeXI, awayXI, homeFormation, awayFormation]);
 
   const gameMinuteDisplay = Math.round((half === 1 ? 0 : 45) + (clock / HALF_SECONDS) * 45);
   const possTotal = possession.homeTicks + possession.awayTicks;
@@ -9841,10 +10578,14 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
 
         <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <button type="button" onClick={() => setPaused((p) => !p)} disabled={halftimeOpen} style={{ ...btnStyle(C.steel, C.chalk), flex: 1, minWidth: 90, opacity: halftimeOpen ? 0.5 : 1 }}>{paused ? "▶ เล่นต่อ" : "⏸ หยุด"}</button>
-          <button type="button" onClick={() => setSpeed((s) => (s === 1 ? 3 : s === 3 ? 6 : 1))} disabled={halftimeOpen} style={{ ...btnStyle(C.amber, "#0b2318"), flex: 1, minWidth: 90, opacity: halftimeOpen ? 0.5 : 1 }}>ความเร็ว x{speed}</button>
+          {!fullOnlineMode && (
+            <button type="button" onClick={() => setSpeed((s) => (s === 1 ? 3 : s === 3 ? 6 : 1))} disabled={halftimeOpen} style={{ ...btnStyle(C.amber, "#0b2318"), flex: 1, minWidth: 90, opacity: halftimeOpen ? 0.5 : 1 }}>ความเร็ว x{speed}</button>
+          )}
           <button type="button" onClick={toggleCrowdMute} style={{ ...btnStyle(crowdMuted ? C.steel : C.good, crowdMuted ? C.textDim : "#0b2318"), flex: 1, minWidth: 90 }} title="เสียงกองเชียในสนาม">{crowdMuted ? "🔇 ปิดเสียง" : "🔊 กองเชีย"}</button>
           <button type="button" onClick={() => setShowSubs((s) => !s)} style={{ ...btnStyle(showSubs ? C.purple : C.steel, showSubs ? "#fff" : C.chalk), flex: 1, minWidth: 90 }}>{showSubs ? "ซ่อนเปลี่ยนตัว" : "เปลี่ยนตัว"} ({subsUsed}/5)</button>
-          <button type="button" onClick={skipToFullTime} disabled={halftimeOpen} style={{ ...btnStyle("transparent", C.textDim), flex: 1, minWidth: 90, border: `1px dashed ${C.steel}`, opacity: halftimeOpen ? 0.5 : 1 }}>⏭ จบเกม (เบต้า)</button>
+          {!fullOnlineMode && (
+            <button type="button" onClick={skipToFullTime} disabled={halftimeOpen} style={{ ...btnStyle("transparent", C.textDim), flex: 1, minWidth: 90, border: `1px dashed ${C.steel}`, opacity: halftimeOpen ? 0.5 : 1 }}>⏭ จบเกม (เบต้า)</button>
+          )}
         </div>
         {crowdNeedsUnlock && !crowdMuted && (
           <div style={{ textAlign: "center", marginBottom: 8 }}>
@@ -11178,11 +11919,54 @@ function AcademyView({ career, budget, onHireScout, onHireScoutCard, onHireAcade
 }
 
 /* ============================== SETTINGS ============================== */
-function SettingsView({ career, onReset, onEnterOnline, uiLang = "th", onSetUiLang }) {
+function SettingsView({ career, onReset, onEnterOnline, uiLang = "th", onSetUiLang, accountUser, onOpenAuth, onOpenOnlinePortal, onLogout }) {
   const [confirming, setConfirming] = useState(false);
   const fin = computeTeamFinances(career);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel accent={accountUser ? C.good : C.purple}>
+        <SectionLabel>บัญชีออนไลน์</SectionLabel>
+        {accountUser ? (
+          <>
+            <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.65, marginBottom: 10 }}>
+              {accountUser.displayName || accountUser.username || accountUser.email}
+              {accountUser.username && (
+                <>
+                  <br />
+                  <span style={{ fontFamily: MONO_FONT, fontSize: 11, color: C.amber }}>@{accountUser.username}</span>
+                </>
+              )}
+              {accountUser.email && !accountUser.username && (
+                <>
+                  <br />
+                  <span style={{ fontFamily: MONO_FONT, fontSize: 11 }}>{accountUser.email}</span>
+                </>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => onEnterOnline?.()} style={{ ...btnStyle(C.good, "#08150e"), flex: 1, minWidth: 140 }}>
+                🌐 ลีกออนไลน์
+              </button>
+              <button type="button" onClick={() => onLogout?.()} style={{ ...btnStyle(C.crimson, C.chalk), flex: 1, minWidth: 120 }}>
+                ออกจากระบบ
+              </button>
+            </div>
+            <div style={{ fontSize: 10, color: C.textDim, marginTop: 8, lineHeight: 1.5 }}>
+              ออกจากระบบแล้วกลับหน้าแรก · เซฟเกมยังอยู่ในเบราว์เซอร์ — ล็อกอิน Game ID เดิมเพื่อเล่นต่อ
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.65, marginBottom: 10 }}>
+              บัญชี Game ID จำเป็นสำหรับการเล่น · ออกจากระบบแล้วต้อง login ใหม่เพื่อเข้าเกม
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" onClick={() => onOpenAuth?.(false)} style={{ ...btnStyle(C.steel, C.chalk), flex: 1 }}>เข้าสู่ระบบ</button>
+              <button type="button" onClick={() => onOpenAuth?.(true)} style={{ ...btnStyle(C.amber, "#050608"), flex: 1 }}>สมัคร Game ID</button>
+            </div>
+          </>
+        )}
+      </Panel>
       <SandboxModePanel career={career} onEnterOnline={onEnterOnline} />
       <Panel accent={C.good}>
         <SectionLabel>{t(uiLang, "settings.language")}</SectionLabel>
@@ -11416,6 +12200,13 @@ function StaffPackOpenSequence({ tierDef, cards, onDone }) {
     return () => clearTimeout(t);
   }, [phase, revealedCount, snapshotCards.length]);
 
+  // กันเหนียว: ถ้ามีสาเหตุอะไรก็ตามทำให้ phase ไม่ไปถึง "done" เอง (เช่นบั๊กที่ยังไม่รู้จัก)
+  // บังคับให้ปุ่ม "ปิด" โผล่แน่ๆ หลังผ่านไป 7 วิ จะได้ไม่มีทางค้างจนกดปิดไม่ได้อีก
+  useEffect(() => {
+    const t = setTimeout(() => setPhase((p) => (p === "done" ? p : "done")), 7000);
+    return () => clearTimeout(t);
+  }, []);
+
   const charging = phase === "charging";
   const bursting = phase === "bursting";
   const showCards = phase === "revealing" || phase === "done";
@@ -11477,9 +12268,13 @@ function StaffPackOpenSequence({ tierDef, cards, onDone }) {
               </div>
             ))}
           </div>
-          {phase === "done" && (
+          {phase === "done" ? (
             <button type="button" onClick={onDone} style={{ ...btnStyle(C.amber, "#0b2318"), width: "auto", padding: "10px 24px" }}>
               ปิด
+            </button>
+          ) : (
+            <button type="button" onClick={() => setPhase("done")} style={{ ...btnStyle("transparent", C.textDim), border: `1px solid ${C.steel}`, width: "auto", padding: "6px 14px", fontSize: 10.5 }}>
+              ข้ามอนิเมชัน
             </button>
           )}
         </>
@@ -11645,7 +12440,7 @@ function StaffPackCardFace({ card }) {
 
 /** กองการ์ดในกระเป๋า (type+stars เดียวกัน) — ย่อเหลือ 1 ใบ + ป้าย ×N, กด "ดูทั้งหมด" เพื่อกางดูทุกใบ
  * (จำเป็นเพราะการ์ด MANAGER แต่ละใบสุ่มสเตตัสต่างกันในช่วงเดียวกัน — ใบไหนดีกว่าเลือกจ้างเองได้) */
-function StaffCardStack({ group, career, onHire }) {
+function StaffCardStack({ group, career, onHire, onToggleLock }) {
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? group.cards : group.cards.slice(0, 1);
   return (
@@ -11657,6 +12452,14 @@ function StaffCardStack({ group, career, onHire }) {
           return (
             <div key={card.cardId} style={{ position: "relative", flexShrink: 0 }}>
               <StaffPackCardFace card={card} />
+              {onToggleLock && (
+                <button type="button" onClick={() => onToggleLock(card.cardId)} title={card.locked ? "ปลดล็อก (กันไม่ให้รวม)" : "ล็อกกันรวม"} style={{
+                  position: "absolute", top: 6, left: 6, width: 22, height: 22, borderRadius: "50%", padding: 0,
+                  border: `1px solid ${card.locked ? C.amber : C.steel}`, cursor: "pointer",
+                  background: card.locked ? "rgba(230,180,80,.9)" : "rgba(0,0,0,.55)",
+                  color: card.locked ? "#1a1200" : C.chalk, fontSize: 11, lineHeight: "20px",
+                }}>{card.locked ? "🔒" : "🔓"}</button>
+              )}
               {!expanded && group.count > 1 && (
                 <div style={{
                   position: "absolute", top: 6, right: 6, background: C.pitchDark, color: C.chalk,
@@ -11860,9 +12663,16 @@ function StaffGuideView({ career, uiLang = "th" }) {
   );
 }
 
-function StaffCardsView({ career, uiLang = "th", onPull, onMerge, onHire, onAutoMerge, onToggleAutoTier }) {
+function StaffCardsView({ career, uiLang = "th", onPull, onMerge, onHire, onAutoMerge, onToggleAutoTier, onToggleLock }) {
   const [sub, setSub] = useState("draw");
   const [openingTier, setOpeningTier] = useState(null);
+  // เลือกการ์ดเองสำหรับรวม — key "type_stars" -> Set ของ cardId ที่ติ๊กไว้ (เฉพาะกลุ่มที่มีเกิน MERGE_CARD_COUNT
+  // ใบ ถึงจะมีอะไรให้เลือก ไม่งั้นต้องใช้ทั้งหมดอยู่แล้วไม่มีทางเลือก)
+  const [pickMode, setPickMode] = useState(() => new Set());
+  const [pickedIds, setPickedIds] = useState(() => ({}));
+  // สลับออกจากแท็บ "เปิดการ์ด" ระหว่างที่อนิเมชันเปิดซองค้างอยู่ → ถือว่าปิดไปแล้ว กันปัญหากลับมาแท็บ
+  // เดิมแล้วอนิเมชันเล่นซ้ำ/ค้าง เพราะ openingTier ยังไม่ถูกเคลียร์ตอนสลับแท็บ
+  useEffect(() => { if (sub !== "draw") setOpeningTier(null); }, [sub]);
   const tickets = career.staffDrawTickets || 0;
   const freeLeft = career.staffFreeDrawsLeft || 0;
   const bag = career.staffCardBag || [];
@@ -11929,7 +12739,7 @@ function StaffCardsView({ career, uiLang = "th", onPull, onMerge, onHire, onAuto
                   const canPullThis = canFreeThis || canTicketThis;
                   const oddsHint = tier.weights[6] > 0 ? "มีโอกาสได้ 7★" : tier.weights[0] === 0 ? "การันตีอย่างน้อย 2★" : "คละดาว";
                   return (
-                    <button key={tier.key} type="button" disabled={!canPullThis} onClick={() => { onPull(tier.key); setOpeningTier(tier); }} style={{
+                    <button key={tier.key} type="button" disabled={!canPullThis} onClick={() => { if (onPull(tier.key)) setOpeningTier(tier); }} style={{
                       display: "flex", alignItems: "center", justifyContent: "space-between",
                       padding: "10px 14px", borderRadius: 10, cursor: canPullThis ? "pointer" : "not-allowed",
                       background: canPullThis ? `linear-gradient(135deg, ${tier.color}33, ${tier.color}11)` : "#1a221c",
@@ -11977,7 +12787,7 @@ function StaffCardsView({ career, uiLang = "th", onPull, onMerge, onHire, onAuto
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {typeGroups.map((g) => (
-                    <StaffCardStack key={`${g.type}_${g.stars}`} group={g} career={career} onHire={onHire} />
+                    <StaffCardStack key={`${g.type}_${g.stars}`} group={g} career={career} onHire={onHire} onToggleLock={onToggleLock} />
                   ))}
                 </div>
               )}
@@ -12011,19 +12821,91 @@ function StaffCardsView({ career, uiLang = "th", onPull, onMerge, onHire, onAuto
             <div style={{ fontSize: 12, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
               ใช้การ์ดประเภทเดียวกัน ดาวเดียวกัน <b style={{ color: C.chalk }}>{MERGE_CARD_COUNT} ใบ</b> รวมกัน — ลุ้นเลื่อน 1 ดาว (ไม่ 100%) · 7★ รวมต่อไม่ได้
             </div>
-            {groups.filter((g) => g.count >= MERGE_CARD_COUNT && g.stars < 7).length === 0 ? (
-              <div style={{ fontSize: 12, color: C.textDim }}>ยังไม่มีชุดที่รวมได้ (ต้องมีครบ {MERGE_CARD_COUNT} ใบ)</div>
+            {groups.filter((g) => g.cards.filter((c) => !c.locked).length >= MERGE_CARD_COUNT && g.stars < 7).length === 0 ? (
+              <div style={{ fontSize: 12, color: C.textDim }}>ยังไม่มีชุดที่รวมได้ (ต้องมีครบ {MERGE_CARD_COUNT} ใบที่ไม่ได้ล็อก)</div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {groups.filter((g) => g.count >= MERGE_CARD_COUNT && g.stars < 7).map((g) => (
-                  <div key={`${g.type}_${g.stars}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700 }}>{STAFF_CARD_TYPE_TH[g.type]} {g.stars}★ → {g.stars + 1}★</div>
-                      <div style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT }}>มี {g.count} ใบ · โอกาส {Math.round(mergeSuccessChance(g.stars) * 100)}%</div>
+                {groups.filter((g) => g.cards.filter((c) => !c.locked).length >= MERGE_CARD_COUNT && g.stars < 7).map((g) => {
+                  const key = `${g.type}_${g.stars}`;
+                  const picking = pickMode.has(key);
+                  const rawPicked = pickedIds[key] || new Set();
+                  // เช็คว่าการ์ดที่เคยติ๊กไว้ยังอยู่ในกลุ่มจริงไหม (เผื่อมีรวมอัตโนมัติ/เปิดซองใหม่มาแทรกระหว่างที่
+                  // หน้าต่างนี้เปิดค้างไว้) กันบั๊กที่เจอจริง: เลือกครบ 10 ใบไว้ แต่พอกด "รวม" ระบบไปหยิบ
+                  // การ์ดคนละชุดมารวมแทนแบบเงียบๆ เพราะ id ที่เลือกไว้ค้างไม่ตรงของจริงแล้ว
+                  const liveIds = new Set(g.cards.map((c) => c.cardId));
+                  const picked = new Set([...rawPicked].filter((id) => liveIds.has(id)));
+                  const pickStale = picked.size !== rawPicked.size;
+                  const canConfirmPick = picked.size === MERGE_CARD_COUNT && !pickStale;
+                  const lockedCount = g.cards.filter((c) => c.locked).length;
+                  function togglePicking() {
+                    setPickMode((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(key)) next.delete(key); else next.add(key);
+                      return next;
+                    });
+                    setPickedIds((prev) => ({ ...prev, [key]: new Set() }));
+                  }
+                  function toggleCard(card) {
+                    if (card.locked) return;
+                    setPickedIds((prev) => {
+                      // ใช้ liveIds กรอง prev[key] ทุกครั้งก่อนแก้ไข กัน id เก่าที่หายไปแล้วค้างอยู่ถาวร
+                      const set = new Set([...(prev[key] || [])].filter((id) => liveIds.has(id)));
+                      if (set.has(card.cardId)) {
+                        set.delete(card.cardId);
+                      } else if (set.size < MERGE_CARD_COUNT) {
+                        set.add(card.cardId);
+                      }
+                      return { ...prev, [key]: set };
+                    });
+                  }
+                  function doMerge() {
+                    if (picking && canConfirmPick) {
+                      onMerge(g.type, g.stars, Array.from(picked));
+                    } else {
+                      onMerge(g.type, g.stars);
+                    }
+                    setPickMode((prev) => { const next = new Set(prev); next.delete(key); return next; });
+                    setPickedIds((prev) => ({ ...prev, [key]: new Set() }));
+                  }
+                  return (
+                    <div key={key} style={{ borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}`, overflow: "hidden" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px" }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700 }}>{STAFF_CARD_TYPE_TH[g.type]} {g.stars}★ → {g.stars + 1}★</div>
+                          <div style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT }}>มี {g.count} ใบ{lockedCount > 0 ? ` (ล็อก ${lockedCount})` : ""} · โอกาส {Math.round(mergeSuccessChance(g.stars) * 100)}%</div>
+                        </div>
+                        <button type="button" onClick={togglePicking} style={{ ...btnStyle(picking ? C.amber : C.steel, picking ? "#000" : C.chalk), width: "auto", padding: "7px 10px", fontSize: 10 }}>{picking ? "ยกเลิกเลือก" : "เลือกเอง"}</button>
+                        <button type="button" disabled={picking && !canConfirmPick} onClick={doMerge} style={{ ...btnStyle(C.purple, "#fff"), width: "auto", padding: "7px 12px", fontSize: 10.5, opacity: picking && !canConfirmPick ? 0.45 : 1, cursor: picking && !canConfirmPick ? "not-allowed" : "pointer" }}>รวม</button>
+                      </div>
+                      {picking && (
+                        <div style={{ padding: "0 10px 10px" }}>
+                          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6 }}>ติ๊กเลือก {picked.size}/{MERGE_CARD_COUNT} ใบ</div>
+                          {pickStale && (
+                            <div style={{ fontSize: 9.5, color: C.crimson, marginBottom: 6 }}>⚠️ การ์ดที่เลือกไว้บางใบหายไปแล้ว (ถูกรวม/ใช้ไปแล้ว) — กรุณาเลือกใหม่</div>
+                          )}
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {g.cards.map((card) => {
+                              const on = picked.has(card.cardId);
+                              return (
+                                <label key={card.cardId} style={{
+                                  display: "flex", alignItems: "center", gap: 5, padding: "5px 8px", borderRadius: 6,
+                                  cursor: card.locked ? "not-allowed" : "pointer",
+                                  border: `1px solid ${card.locked ? C.steel : on ? C.amber : C.steel}`,
+                                  background: card.locked ? "rgba(255,255,255,.03)" : on ? "rgba(230,180,80,.15)" : C.panel1 || C.panel2,
+                                  fontSize: 10, fontFamily: MONO_FONT, color: card.locked ? C.textDim : on ? C.amber : C.textDim,
+                                  opacity: card.locked ? 0.55 : 1,
+                                }}>
+                                  <input type="checkbox" checked={on} disabled={card.locked} onChange={() => toggleCard(card)} style={{ margin: 0 }} />
+                                  {card.locked ? "🔒 " : ""}{card.name}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <button type="button" onClick={() => onMerge(g.type, g.stars)} style={{ ...btnStyle(C.purple, "#fff"), width: "auto", padding: "7px 12px", fontSize: 10.5 }}>รวม</button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Panel>
@@ -12258,3 +13140,5 @@ function BottomNav({ tab, setTab, marketOpen, marketSub, setMarketSub, uiLang = 
     </nav>
   );
 }
+
+export { LiveMatchModal };

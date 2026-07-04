@@ -1,38 +1,45 @@
-import React, { useState } from "react";
+import React, { useCallback } from "react";
 import LocalGame from "@game";
-import OnlinePortal from "./OnlinePortal.jsx";
-import { migrateCareerToServer } from "./lib/online-migrate.js";
+import { useAccount } from "./AccountContext.jsx";
+import { useSiteLocale } from "./SiteLocaleContext.jsx";
+import { bootstrapOnlineFromCareer } from "./lib/online-session.js";
+import AuthRequiredScreen from "./AuthRequiredScreen.jsx";
 
-/**
- * ขั้นที่ 1: เกมเต็มในโลกจำลอง (ฝึกเล่นกับบอท)
- * ขั้นที่ 2: ครบ 50M → ย้ายไปเซิร์ฟเวอร์แข่งกับผู้เล่นจริง
- */
+/** ระบบหลัก = football-manager.jsx เกมเดียว — ต้องล็อกอินก่อนเสมอ (บังคับที่นี่ ไม่ใช่ตัวเลือกใน
+ * TitleScreen) แล้วเซฟ career ของเกมจะซิงก์ขึ้นเซิร์ฟเวอร์ผูกกับบัญชีนี้ */
 export default function ShellApp() {
-  const [mode, setMode] = useState(() => {
-    const saved = localStorage.getItem("siam_play_mode");
-    const hasToken = Boolean(localStorage.getItem("siam_token"));
-    if (saved === "online" && hasToken) return "online";
-    if (saved === "online" && !hasToken) localStorage.setItem("siam_play_mode", "sandbox");
-    return "sandbox";
-  });
+  const { user, loading, logoutToHome, openAuth } = useAccount();
+  const { t } = useSiteLocale();
 
-  if (mode === "online") {
+  const handleLogout = useCallback(() => {
+    if (!window.confirm(t("shell.logoutConfirm"))) return;
+    logoutToHome();
+  }, [logoutToHome, t]);
+
+  const syncOnlineServer = useCallback(async (career) => {
+    if (!career) return;
+    await bootstrapOnlineFromCareer(career);
+    localStorage.setItem("siam_play_mode", "online");
+  }, []);
+
+  if (loading) {
     return (
-      <OnlinePortal
-        onPracticeAgain={() => {
-          localStorage.setItem("siam_play_mode", "sandbox");
-          setMode("sandbox");
-        }}
-      />
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#050608", color: "#9aa3ad" }}>
+        {t("shell.loading")}
+      </div>
     );
+  }
+
+  if (!user) {
+    return <AuthRequiredScreen />;
   }
 
   return (
     <LocalGame
-      onMigrateToServer={async (career, email) => {
-        await migrateCareerToServer(career, email);
-        setMode("online");
-      }}
+      accountUser={user}
+      onOpenAuth={openAuth}
+      onSyncOnlineServer={syncOnlineServer}
+      onLogout={handleLogout}
     />
   );
 }

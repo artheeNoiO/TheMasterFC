@@ -30,7 +30,7 @@ echo.
 echo [2/2] Deploying to Cloudflare Pages (dist + functions)...
 echo First time: browser opens for Cloudflare login.
 echo Project name: themasterfc
-echo KV binding: ONLINE_KV (ตั้งใน Cloudflare Dashboard แล้ว)
+echo KV binding: ONLINE_KV (auth + online count ใช้ KV ตัวเดียวกัน)
 echo.
 
 cd /d "%~dp0client"
@@ -51,5 +51,7 @@ echo.
 echo SUCCESS!
 echo Next: Cloudflare Dashboard - Workers and Pages - themasterfc - Custom domains
 echo Add: www.themasterfc.com and themasterfc.com
+echo.
+echo Online mode: run Setup-Online-Bridge.bat once, then set same GAME_PROVISION_SECRET on Render
 echo.
 pause

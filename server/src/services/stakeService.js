@@ -64,10 +64,11 @@ function managerFromCard(card) {
   };
 }
 
-function entryStanding(e) {
+function entryStanding(e, viewerUserId) {
   return {
     entryId: e.id, name: e.name, shortCode: e.shortCode, primaryColor: e.primaryColor,
-    isBot: e.isBot, userId: e.userId,
+    // ไม่ส่ง userId ดิบออกไป (เป็น credential ที่ปลอมโทเคนได้) — ส่งเฉพาะ flag ว่าเป็นแถวของผู้ดูเองหรือไม่
+    isBot: e.isBot, isYou: Boolean(viewerUserId) && e.userId === viewerUserId,
     played: e.played, w: e.w, d: e.d, l: e.l, gf: e.gf, ga: e.ga, gd: e.gf - e.ga, pts: e.pts,
     prize: e.prize, finalPos: e.finalPos, squadValue: e.squadValue, autoMode: e.autoMode,
   };
@@ -98,7 +99,7 @@ export async function getStakeStatus(userId) {
   let my = null;
   if (myEntry) {
     const lg = myEntry.league;
-    const standings = sortEntries(lg.entries).map((e, i) => ({ pos: i + 1, ...entryStanding(e) }));
+    const standings = sortEntries(lg.entries).map((e, i) => ({ pos: i + 1, ...entryStanding(e, userId) }));
     let nextMatch = null;
     let lastResults = [];
     if (lg.status === "running") {

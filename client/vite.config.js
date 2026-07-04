@@ -23,6 +23,7 @@ export default defineConfig({
       "@tracker": path.resolve(root, "../tracker-pitch.jsx"),
       "@worldcup": path.resolve(root, "../world-cup-event.js"),
       "@roadmap": path.resolve(root, "../features-roadmap.js"),
+      "@roadmapfx": path.resolve(root, "../roadmap-features.js"),
       "@nat": path.resolve(root, "../player-nationalities.js"),
       "@i18n": path.resolve(root, "../game-i18n.js"),
       "@club": path.resolve(root, "../club-systems.js"),
@@ -31,6 +32,9 @@ export default defineConfig({
       "@training": path.resolve(root, "../training-system.js"),
       "@feedback": path.resolve(root, "../feedback-board.jsx"),
       "@stadium": path.resolve(root, "../stadium-progression.js"),
+      "@save": path.resolve(root, "src/lib/save-keys.js"),
+      "@beta": path.resolve(root, "src/BetaBanner.jsx"),
+      "@locale": path.resolve(root, "src/lib/site-locale.js"),
     },
   },
 });

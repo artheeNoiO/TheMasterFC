@@ -9,7 +9,10 @@ datasource db {
 
 model User {
   id               String    @id
-  email            String    @unique
+  username         String?   @unique
+  email            String?   @unique
+  passwordHash     String?
+  authProvider     String    @default("local")
   displayName      String?
   playMode         String    @default("sandbox")
   onlineUnlocked   Boolean   @default(false)
@@ -19,16 +22,17 @@ model User {
 }
 
 model LeagueShard {
-  id             String   @id @default(cuid())
-  name           String
-  division       Int      @default(1)
-  seasonNumber   Int      @default(1)
-  dayNumber      Int      @default(1)
-  isFull         Boolean  @default(false)
-  legendLeagueId String?
-  clubs          Club[]
-  matches        Match[]
-  createdAt      DateTime @default(now())
+  id               String   @id @default(cuid())
+  name             String
+  division         Int      @default(1)
+  seasonNumber     Int      @default(1)
+  dayNumber        Int      @default(1)
+  isFull           Boolean  @default(false)
+  legendLeagueId   String?
+  clubs            Club[]
+  matches          Match[]
+  transferListings TransferListing[]
+  createdAt        DateTime @default(now())
 }
 
 model Club {
@@ -177,4 +181,36 @@ model StakeMatch {
   awayGoals   Int?
 
   @@index([leagueId, round])
+}
+
+/** ตลาดซื้อขายนักเตะออนไลน์ — ประมูลแบบนับถอยหลัง (สไตล์ Top Eleven)
+ * sourceClubId = null → NPC/ฟรีเอเจนต์ (ตลาดคึกคักเองแม้คนเล่นออนไลน์พร้อมกันน้อย) */
+model TransferListing {
+  id           String      @id @default(cuid())
+  shardId      String
+  shard        LeagueShard @relation(fields: [shardId], references: [id], onDelete: Cascade)
+  playerId     String      @unique
+  sourceClubId String?
+  askingFee    Int
+  topBidderId  String?
+  topBidWage   Int?
+  topBidFee    Int?
+  status       String      @default("open") // open | sold | expired
+  endsAt       DateTime
+  createdAt    DateTime    @default(now())
+  bids         Bid[]
+
+  @@index([shardId, status])
+}
+
+model Bid {
+  id           String          @id @default(cuid())
+  listingId    String
+  listing      TransferListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  bidderClubId String
+  wageOffer    Int
+  feeOffer     Int
+  createdAt    DateTime        @default(now())
+
+  @@index([listingId])
 }

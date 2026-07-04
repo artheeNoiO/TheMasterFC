@@ -274,7 +274,7 @@ function Dashboard({ club, playMode, onlineUnlocked, onRefresh }) {
           <tbody>
             {table.map((row, i) => (
               <tr key={row.clubId} style={{
-                background: row.club.userId ? "rgba(224,164,88,.1)" : "transparent",
+                background: row.club.isYou ? "rgba(224,164,88,.1)" : "transparent",
                 borderTop: `1px solid ${C.steel}`,
               }}>
                 <td>{i + 1}</td>
@@ -609,7 +609,7 @@ function StakeLeaguePanel({ club, onRefreshClub }) {
           <tbody>
             {my.standings.map((row) => (
               <tr key={row.entryId} style={{
-                background: row.userId && !row.isBot && row.entryId === my.entry.id ? "rgba(224,164,88,.12)" : "transparent",
+                background: row.isYou && !row.isBot && row.entryId === my.entry.id ? "rgba(224,164,88,.12)" : "transparent",
                 borderTop: `1px solid ${C.steel}`,
               }}>
                 <td>{row.pos}</td>

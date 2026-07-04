@@ -11,6 +11,43 @@ import {
 } from "@siam/game-engine";
 import { prisma } from "../db.js";
 import { reclaimInactiveLegends } from "./legendService.js";
+import { DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY } from "../../../game-version.js";
+import {
+  initRoadmapForNewClub,
+  getRoadmapPayload,
+  applyOnlineMatchRoadmap,
+  applyOnlineDailyRoadmap,
+  applyOnlineSeasonEndRoadmap,
+  patchOnlineInjurySeverity,
+  storePendingXg,
+  consumePendingXg,
+  handleRoadmapAction,
+} from "./roadmapService.js";
+
+/** กัน day-tick ถี่เกิน (in-process + cron backup ใช้ร่วมกัน) */
+const lastShardDayTick = new Map();
+
+function calendarDayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function parseGameState(json) {
+  if (!json) return {};
+  try { return JSON.parse(json); } catch { return {}; }
+}
+
+/** รีเซ็ตสิทธิ์เปิดการ์ดรายวัน (100 ครั้ง/วันตามปฏิทินจริง) */
+export function syncDailyStaffDraws(gameState) {
+  const gs = { ...gameState };
+  const today = calendarDayKey();
+  if (gs.staffFreeDrawResetDate !== today) {
+    gs.staffFreeDrawsLeft = DAILY_STAFF_CARD_DRAWS;
+    gs.staffFreeDrawResetDate = today;
+  }
+  if (gs.staffFreeDrawsLeft == null) gs.staffFreeDrawsLeft = DAILY_STAFF_CARD_DRAWS;
+  if (gs.staffDrawTickets == null) gs.staffDrawTickets = 0;
+  return gs;
+}
 
 function parseManager(json) {
   if (!json) return null;
@@ -61,6 +98,22 @@ export function computeClubFinances(club, players) {
   return { squadValue, budget, teamValue, unlockTarget: 50_000_000 };
 }
 
+async function loadShardStandings(shardId) {
+  return prisma.standing.findMany({
+    where: { club: { shardId } },
+    include: { club: { select: { id: true, userId: true, isBot: true } } },
+  });
+}
+
+async function loadShardMeta(shardId) {
+  const [shard, clubs, standings] = await Promise.all([
+    prisma.leagueShard.findUnique({ where: { id: shardId } }),
+    prisma.club.findMany({ where: { shardId } }),
+    loadShardStandings(shardId),
+  ]);
+  return { shard, clubs, standings };
+}
+
 export async function getClubForUser(userId) {
   const club = await prisma.club.findFirst({
     where: { userId },
@@ -71,9 +124,36 @@ export async function getClubForUser(userId) {
     },
   });
   if (!club) return null;
+
+  let gs = syncDailyStaffDraws(parseGameState(club.gameStateJson));
+  const prevJson = club.gameStateJson || "{}";
+  const { shard, clubs, standings } = await loadShardMeta(club.shardId);
+  if (!gs.roadmap?.roadmapV12) {
+    gs = initRoadmapForNewClub(club, shard, clubs);
+  }
+  const nextJson = JSON.stringify(gs);
+  if (nextJson !== prevJson) {
+    await prisma.club.update({
+      where: { id: club.id },
+      data: { gameStateJson: nextJson },
+    });
+  }
+
   const finances = computeClubFinances(club, club.players);
   const lineup = club.lineupJson ? JSON.parse(club.lineupJson) : [];
-  return { ...club, lineup, finances };
+  const roadmap = getRoadmapPayload({ ...club, gameStateJson: nextJson }, shard, clubs, standings);
+  return {
+    ...club,
+    lineup,
+    finances,
+    roadmap,
+    staffDraws: {
+      freeLeft: gs.staffFreeDrawsLeft,
+      dailyLimit: DAILY_STAFF_CARD_DRAWS,
+      tickets: gs.staffDrawTickets,
+      resetDate: gs.staffFreeDrawResetDate,
+    },
+  };
 }
 
 export async function updateClubTactics(userId, { formation, lineup, autoMode, gameState }) {
@@ -95,95 +175,100 @@ export async function createClubForUser(userId, config) {
   const existing = await prisma.club.findFirst({ where: { userId } });
   if (existing) throw new Error("มีสโมสรแล้ว");
 
-  let shard = await prisma.leagueShard.findFirst({
-    where: { isFull: false },
-    include: { clubs: { include: { standing: true, players: true } } },
-  });
-
-  if (!shard || shard.clubs.length >= TEAMS_PER_SHARD) {
-    const world = createShardWithUserClub(config);
-    shard = await prisma.leagueShard.create({
-      data: {
-        id: world.shard.id,
-        name: world.shard.name,
-        division: world.shard.division,
-        seasonNumber: world.shard.seasonNumber,
-        dayNumber: world.shard.dayNumber,
-        isFull: true,
-        clubs: {
-          create: world.clubs.map((c) => ({
-            id: c.id,
-            userId: c.id === world.userClubId ? userId : null,
-            name: c.name,
-            shortCode: c.shortCode,
-            logoIndex: c.logoIndex,
-            primaryColor: c.primaryColor,
-            secondaryColor: c.secondaryColor,
-            shirtColor: c.shirtColor ?? null,
-            shortsColor: c.shortsColor ?? null,
-            budget: c.budget,
-            tier: c.tier,
-            formation: c.formation,
-            chemistry: c.chemistry,
-            isBot: c.isBot,
-            managerJson: JSON.stringify(c.manager),
-            players: {
-              create: c.players.map((p) => ({
-                id: p.id,
-                name: p.name,
-                position: p.position,
-                age: p.age,
-                attrs: JSON.stringify(p.attrs),
-                attack: p.attack,
-                defense: p.defense,
-                rating: p.rating,
-                potential: p.potential,
-                value: p.value,
-                wage: p.wage,
-                morale: p.morale,
-                stamina: p.stamina,
-                injuryDays: p.injuryDays,
-                careerGoals: p.careerGoals,
-                careerApps: p.careerApps,
-                role: p.role,
-                contractEndsDay: p.contractEndsDay,
-              })),
-            },
-            standing: {
-              create: {
-                played: c.standing.played,
-                w: c.standing.w,
-                d: c.standing.d,
-                l: c.standing.l,
-                gf: c.standing.gf,
-                ga: c.standing.ga,
-                pts: c.standing.pts,
-              },
-            },
-          })),
-        },
-        matches: {
-          create: world.fixtures.flatMap((round) =>
-            round.matches.map((m) => ({
-              dayNumber: round.day,
-              homeClubId: m.homeClubId,
-              awayClubId: m.awayClubId,
+  const world = createShardWithUserClub(config);
+  await prisma.leagueShard.create({
+    data: {
+      id: world.shard.id,
+      name: world.shard.name,
+      division: world.shard.division,
+      seasonNumber: world.shard.seasonNumber,
+      dayNumber: world.shard.dayNumber,
+      isFull: true,
+      clubs: {
+        create: world.clubs.map((c) => ({
+          id: c.id,
+          userId: c.id === world.userClubId ? userId : null,
+          name: c.name,
+          shortCode: c.shortCode,
+          logoIndex: c.logoIndex,
+          primaryColor: c.primaryColor,
+          secondaryColor: c.secondaryColor,
+          shirtColor: c.shirtColor ?? null,
+          shortsColor: c.shortsColor ?? null,
+          budget: c.budget,
+          tier: c.tier,
+          formation: c.formation,
+          chemistry: c.chemistry,
+          isBot: c.isBot,
+          managerJson: JSON.stringify(c.manager),
+          gameStateJson: JSON.stringify(syncDailyStaffDraws({})),
+          players: {
+            create: c.players.map((p) => ({
+              id: p.id,
+              name: p.name,
+              position: p.position,
+              age: p.age,
+              attrs: JSON.stringify(p.attrs),
+              attack: p.attack,
+              defense: p.defense,
+              rating: p.rating,
+              potential: p.potential,
+              value: p.value,
+              wage: p.wage,
+              morale: p.morale,
+              stamina: p.stamina,
+              injuryDays: p.injuryDays,
+              careerGoals: p.careerGoals,
+              careerApps: p.careerApps,
+              role: p.role,
+              contractEndsDay: p.contractEndsDay,
             })),
-          ),
-        },
+          },
+          standing: {
+            create: {
+              played: c.standing.played,
+              w: c.standing.w,
+              d: c.standing.d,
+              l: c.standing.l,
+              gf: c.standing.gf,
+              ga: c.standing.ga,
+              pts: c.standing.pts,
+            },
+          },
+        })),
       },
-      include: { clubs: true },
+      matches: {
+        create: world.fixtures.flatMap((round) =>
+          round.matches.map((m) => ({
+            dayNumber: round.day,
+            homeClubId: m.homeClubId,
+            awayClubId: m.awayClubId,
+          })),
+        ),
+      },
+    },
+    include: { clubs: true },
+  });
+  return prisma.club.findFirst({
+    where: { userId },
+    include: { shard: true, standing: true, players: true },
+  }).then(async (club) => {
+    if (!club) return null;
+    const { shard, clubs, standings } = await loadShardMeta(club.shardId);
+    const gs = initRoadmapForNewClub(club, shard, clubs);
+    await prisma.club.update({
+      where: { id: club.id },
+      data: { gameStateJson: JSON.stringify(syncDailyStaffDraws(gs)) },
     });
-    return prisma.club.findFirst({
-      where: { userId },
-      include: { shard: true, standing: true, players: true },
-    }).then((club) => club ? { ...club, finances: computeClubFinances(club, club.players) } : null);
-  }
-
-  throw new Error("Shard join not implemented in MVP — new shard created instead");
+    await prisma.user.update({
+      where: { id: userId },
+      data: { onlineUnlocked: true, playMode: "online", onlineUnlockedAt: new Date() },
+    });
+    return { ...club, finances: computeClubFinances(club, club.players) };
+  });
 }
 
-export async function getLeagueTable(shardId) {
+export async function getLeagueTable(shardId, viewerUserId) {
   const standings = await prisma.standing.findMany({
     where: { club: { shardId } },
     include: { club: true },
@@ -198,7 +283,8 @@ export async function getLeagueTable(shardId) {
       shortCode: s.club.shortCode,
       primaryColor: s.club.primaryColor,
       isBot: s.club.isBot,
-      userId: s.club.userId,
+      // ไม่ส่ง userId ดิบออกไป (เป็น credential ที่ปลอมโทเคนได้) — ส่งเฉพาะ flag ว่าเป็นแถวของผู้ดูเองหรือไม่
+      isYou: Boolean(viewerUserId) && s.club.userId === viewerUserId,
     },
   }));
 }
@@ -207,13 +293,315 @@ export async function getTodayMatches(shardId, dayNumber) {
   return prisma.match.findMany({
     where: { shardId, dayNumber },
     include: {
-      homeClub: { select: { id: true, name: true, shortCode: true, primaryColor: true } },
-      awayClub: { select: { id: true, name: true, shortCode: true, primaryColor: true } },
+      homeClub: { select: { id: true, name: true, shortCode: true, primaryColor: true, userId: true, isBot: true } },
+      awayClub: { select: { id: true, name: true, shortCode: true, primaryColor: true, userId: true, isBot: true } },
     },
   });
 }
 
-export async function runDayTickForShard(shardId) {
+function matchHasHuman(match, clubsById) {
+  const home = clubsById[match.homeClubId];
+  const away = clubsById[match.awayClubId];
+  return Boolean(home && away && (!home.isBot || !away.isBot));
+}
+
+async function loadShardContext(shardId) {
+  const clubs = await prisma.club.findMany({
+    where: { shardId },
+    include: { players: true, standing: true },
+  });
+  const clubsById = Object.fromEntries(clubs.map((c) => [c.id, c]));
+  const allPlayers = clubs.flatMap((c) => c.players.map(playerToEngine));
+  return { clubs, clubsById, allPlayers };
+}
+
+async function simulateAndPersistMatch(match, clubsById, allPlayers, { homeXI, awayXI, homeGoals, awayGoals }) {
+  const homeClub = clubsById[match.homeClubId];
+  const awayClub = clubsById[match.awayClubId];
+  const homeSquad = allPlayers.filter((p) => p.clubId === match.homeClubId);
+  const awaySquad = allPlayers.filter((p) => p.clubId === match.awayClubId);
+  const hXI = homeXI || getBestXI(homeSquad, homeClub.formation);
+  const aXI = awayXI || getBestXI(awaySquad, awayClub.formation);
+  let hg = homeGoals;
+  let ag = awayGoals;
+  if (hg == null || ag == null) {
+    ({ homeGoals: hg, awayGoals: ag } = simulateInstant(
+      clubToEngine(homeClub), homeSquad, hXI,
+      clubToEngine(awayClub), awaySquad, aXI,
+      homeClub.chemistry, awayClub.chemistry,
+    ));
+  }
+
+  await prisma.match.update({
+    where: { id: match.id },
+    data: { played: true, homeGoals: hg, awayGoals: ag },
+  });
+  await prisma.standing.update({
+    where: { id: homeClub.standing.id },
+    data: applyStandingResult(homeClub.standing, hg, ag),
+  });
+  await prisma.standing.update({
+    where: { id: awayClub.standing.id },
+    data: applyStandingResult(awayClub.standing, ag, hg),
+  });
+  homeClub.standing = { ...homeClub.standing, ...applyStandingResult(homeClub.standing, hg, ag) };
+  awayClub.standing = { ...awayClub.standing, ...applyStandingResult(awayClub.standing, ag, hg) };
+  applyMatchWear(homeSquad, hXI);
+  applyMatchWear(awaySquad, aXI);
+  return { homeGoals: hg, awayGoals: ag, homeXI: hXI, awayXI: aXI };
+}
+
+async function runRoadmapForHumanClubs(shardId, fn) {
+  const { shard, clubs, standings } = await loadShardMeta(shardId);
+  for (const c of clubs.filter((cl) => !cl.isBot && cl.userId)) {
+    const gs = fn(c, shard, clubs, standings);
+    if (gs) {
+      await prisma.club.update({
+        where: { id: c.id },
+        data: { gameStateJson: JSON.stringify(syncDailyStaffDraws(gs)) },
+      });
+    }
+  }
+}
+
+/** จำลองเฉพาะแมตช์บอท vs บอท ของวันนั้น */
+export async function simBotOnlyMatchesOnDay(shardId, dayNumber) {
+  const { clubsById, allPlayers } = await loadShardContext(shardId);
+  const matches = await prisma.match.findMany({
+    where: { shardId, dayNumber, played: false },
+  });
+  let simmed = 0;
+  for (const match of matches) {
+    if (matchHasHuman(match, clubsById)) continue;
+    await simulateAndPersistMatch(match, clubsById, allPlayers, {});
+    simmed += 1;
+  }
+  if (simmed) await persistPlayers(allPlayers);
+  return simmed;
+}
+
+async function tryCompleteShardDay(shardId, dayNumber) {
+  const remaining = await prisma.match.count({
+    where: { shardId, dayNumber, played: false },
+  });
+  if (remaining > 0) return { advanced: false, remaining };
+
+  const { allPlayers } = await loadShardContext(shardId);
+  recoverStaminaAll(allPlayers);
+  await persistPlayers(allPlayers);
+
+  await runRoadmapForHumanClubs(shardId, (club, shard, clubs, standings) =>
+    applyOnlineDailyRoadmap(club, shard, clubs, standings),
+  );
+
+  const shard = await prisma.leagueShard.findUnique({ where: { id: shardId } });
+  if (isSeasonComplete(shard.dayNumber)) {
+    await startNewSeason(shardId);
+    return { advanced: true, action: "new_season" };
+  }
+  await prisma.leagueShard.update({
+    where: { id: shardId },
+    data: { dayNumber: shard.dayNumber + 1 },
+  });
+  return { advanced: true, action: "advanced_day", day: shard.dayNumber + 1 };
+}
+
+function serializePlayerForClient(p) {
+  return {
+    ...p,
+    attrs: typeof p.attrs === "string" ? JSON.parse(p.attrs) : p.attrs,
+    teamId: p.clubId,
+  };
+}
+
+function serializeClubForLive(club) {
+  const lineup = club.lineupJson ? JSON.parse(club.lineupJson) : [];
+  return {
+    id: club.id,
+    name: club.name,
+    short: club.shortCode,
+    shortCode: club.shortCode,
+    color: club.primaryColor,
+    primaryColor: club.primaryColor,
+    secondaryColor: club.secondaryColor,
+    shirtColor: club.shirtColor || club.primaryColor,
+    shortsColor: club.shortsColor || "#0b2318",
+    formation: club.formation,
+    chemistry: club.chemistry,
+    autoMode: club.autoMode,
+    isBot: club.isBot,
+    manager: parseManager(club.managerJson),
+    lineup,
+    players: club.players.map(serializePlayerForClient),
+  };
+}
+
+export async function getUserMatchToday(userId) {
+  const club = await getClubForUser(userId);
+  if (!club) return null;
+  const day = club.shard.dayNumber;
+  const matches = await prisma.match.findMany({
+    where: {
+      shardId: club.shardId,
+      dayNumber: day,
+      OR: [{ homeClubId: club.id }, { awayClubId: club.id }],
+    },
+    include: {
+      homeClub: { include: { players: true } },
+      awayClub: { include: { players: true } },
+    },
+  });
+  const match = matches.find((m) => !m.played) || matches[0] || null;
+  if (!match) return { club, day, season: club.shard.seasonNumber, match: null, played: true };
+  return {
+    club,
+    day,
+    season: club.shard.seasonNumber,
+    match,
+    played: match.played,
+    isHome: match.homeClubId === club.id,
+  };
+}
+
+function resolveLockedXI(club, players) {
+  const lineup = club.lineupJson ? JSON.parse(club.lineupJson) : [];
+  return lineup.length ? lineup.slice(0, 11) : getBestXI(players, club.formation);
+}
+
+/** ก่อนแมตช์สด — จำลองบอทที่เหลือในวันนี้ แล้วคืนข้อมูลแมตช์ของผู้เล่น */
+export async function prepareUserLiveMatch(userId) {
+  const club = await getClubForUser(userId);
+  if (!club) throw new Error("ไม่พบสโมสร");
+  await simBotOnlyMatchesOnDay(club.shardId, club.shard.dayNumber);
+
+  const state = await getUserMatchToday(userId);
+  if (!state?.match) throw new Error("ไม่มีแมตช์วันนี้");
+  if (state.match.played) throw new Error("แมตช์วันนี้จบแล้ว — รอ cron ขึ้นวันถัดไป");
+
+  const homeClub = state.match.homeClub;
+  const awayClub = state.match.awayClub;
+  const homePlayers = homeClub.players.map(serializePlayerForClient);
+  const awayPlayers = awayClub.players.map(serializePlayerForClient);
+  const homeXI = resolveLockedXI(homeClub, homePlayers);
+  const awayXI = resolveLockedXI(awayClub, awayPlayers);
+
+  // ตัดสินผลจริง "ตอนนี้เลย" ฝั่งเซิร์ฟเวอร์ แล้วล็อกลงแมตช์ทันที (played ยังเป็น false) — กันบั๊ก/ช่องโหว่
+  // เดิมที่ finish รับ homeGoals/awayGoals จาก client แล้วเชื่อตรงๆ (ปลอมสกอร์ชนะได้ทุกนัดจาก devtools)
+  // เรียก kickoff ซ้ำ (รีเฟรช/กลับเข้ามาใหม่ก่อนกด finish) จะได้สกอร์เดิมที่ล็อกไว้แล้ว ไม่สุ่มใหม่ทุกครั้ง
+  let homeGoals = state.match.homeGoals;
+  let awayGoals = state.match.awayGoals;
+  if (homeGoals == null || awayGoals == null) {
+    const result = simulateInstant(
+      clubToEngine(homeClub), homePlayers, homeXI,
+      clubToEngine(awayClub), awayPlayers, awayXI,
+      homeClub.chemistry, awayClub.chemistry,
+    );
+    homeGoals = result.homeGoals;
+    awayGoals = result.awayGoals;
+    await prisma.match.update({
+      where: { id: state.match.id },
+      data: { homeGoals, awayGoals },
+    });
+    if (state.isHome || state.match.awayClubId === club.id) {
+      let gs = syncDailyStaffDraws(parseGameState(club.gameStateJson));
+      gs = storePendingXg(gs, state.match.id, result.xgHome, result.xgAway);
+      await prisma.club.update({
+        where: { id: club.id },
+        data: { gameStateJson: JSON.stringify(gs) },
+      });
+    }
+  }
+
+  return {
+    matchId: state.match.id,
+    day: state.day,
+    season: state.season,
+    isHome: state.isHome,
+    homeClub: serializeClubForLive({ ...homeClub, lineup: homeXI }),
+    awayClub: serializeClubForLive({ ...awayClub, lineup: awayXI }),
+    liveMatch: {
+      matchId: state.match.id,
+      day: state.day,
+      home: homeClub.id,
+      away: awayClub.id,
+      homeFormation: homeClub.formation,
+      awayFormation: awayClub.formation,
+      homeXI,
+      awayXI,
+      resultPreview: { homeGoals, awayGoals },
+    },
+  };
+}
+
+/** บันทึกผลแมตช์สด — สกอร์ต้องถูกล็อกไว้แล้วตอน kickoff (prepareUserLiveMatch) เท่านั้น
+ * ไม่รับ homeGoals/awayGoals/homeXI/awayXI จาก client อีกต่อไป (เคยเป็นช่องโหว่ปลอมสกอร์) */
+export async function finishUserLiveMatch(userId, matchId) {
+  const club = await getClubForUser(userId);
+  if (!club) throw new Error("ไม่พบสโมสร");
+
+  const match = await prisma.match.findUnique({ where: { id: matchId } });
+  if (!match || match.shardId !== club.shardId) throw new Error("ไม่พบแมตช์");
+  if (match.played) throw new Error("แมตช์นี้จบแล้ว");
+  if (match.homeClubId !== club.id && match.awayClubId !== club.id) {
+    throw new Error("ไม่ใช่แมตช์ของคุณ");
+  }
+  if (match.homeGoals == null || match.awayGoals == null) {
+    throw new Error("แมตช์นี้ยังไม่ได้เริ่ม (ต้องกด kickoff ก่อน)");
+  }
+
+  const { clubsById, allPlayers } = await loadShardContext(club.shardId);
+  const homeClub = clubsById[match.homeClubId];
+  const awayClub = clubsById[match.awayClubId];
+  const homeSquad = allPlayers.filter((p) => p.clubId === match.homeClubId);
+  const awaySquad = allPlayers.filter((p) => p.clubId === match.awayClubId);
+  const homeXI = resolveLockedXI(homeClub, homeSquad);
+  const awayXI = resolveLockedXI(awayClub, awaySquad);
+  const homeGoals = match.homeGoals;
+  const awayGoals = match.awayGoals;
+
+  const prevInjury = new Map(allPlayers.map((p) => [p.id, p.injuryDays || 0]));
+  await simulateAndPersistMatch(match, clubsById, allPlayers, { homeXI, awayXI, homeGoals, awayGoals });
+  allPlayers.forEach((p) => {
+    if (p.clubId === club.id) patchOnlineInjurySeverity(p, prevInjury.get(p.id));
+  });
+  await persistPlayers(allPlayers);
+
+  let gs = syncDailyStaffDraws(parseGameState(club.gameStateJson));
+  const { xgHome, xgAway, gs: gs2 } = consumePendingXg(gs, matchId);
+  gs = gs2;
+  const { shard, clubs, standings } = await loadShardMeta(club.shardId);
+  gs = applyOnlineMatchRoadmap(club, shard, clubs, standings, {
+    match, homeGoals, awayGoals, xgHome, xgAway,
+  });
+  await prisma.club.update({
+    where: { id: club.id },
+    data: { gameStateJson: JSON.stringify(syncDailyStaffDraws(gs)) },
+  });
+
+  const dayResult = await tryCompleteShardDay(club.shardId, match.dayNumber);
+  return {
+    ok: true,
+    score: { homeGoals, awayGoals },
+    dayResult,
+    roadmap: getRoadmapPayload({ ...club, gameStateJson: JSON.stringify(gs) }, shard, clubs, standings),
+  };
+}
+
+/**
+ * Cron day-tick: บอทแข่งกันเอง + จำลองทีมผู้เล่นถ้ายังไม่ได้เล่นสด (offline)
+ * autoSimHuman=false → รอแมตช์สด (ใช้ dev เท่านั้น)
+ */
+export async function runDayTickForShard(shardId, { autoSimHuman = true, force = false } = {}) {
+  const now = Date.now();
+  const last = lastShardDayTick.get(shardId) || 0;
+  if (!force && now - last < MS_PER_GAME_DAY) {
+    return {
+      shardId,
+      action: "throttled",
+      waitMs: MS_PER_GAME_DAY - (now - last),
+    };
+  }
+
   const shard = await prisma.leagueShard.findUnique({ where: { id: shardId } });
   if (!shard) return { skipped: true };
 
@@ -222,66 +610,39 @@ export async function runDayTickForShard(shardId) {
     return { shardId, action: "new_season" };
   }
 
+  const { clubsById, allPlayers } = await loadShardContext(shardId);
   const matches = await prisma.match.findMany({
     where: { shardId, dayNumber: shard.dayNumber, played: false },
   });
   if (matches.length === 0) {
-    await prisma.leagueShard.update({
-      where: { id: shardId },
-      data: { dayNumber: shard.dayNumber + 1 },
-    });
-    return { shardId, action: "advanced_day", day: shard.dayNumber + 1 };
+    return tryCompleteShardDay(shardId, shard.dayNumber).then((r) => ({
+      shardId, action: r.action || "already_clear", day: r.day,
+    }));
   }
 
-  const clubs = await prisma.club.findMany({
-    where: { shardId },
-    include: { players: true, standing: true },
-  });
-  const clubsById = Object.fromEntries(clubs.map((c) => [c.id, c]));
-  const allPlayers = clubs.flatMap((c) => c.players.map(playerToEngine));
-
+  let simmed = 0;
+  let waitingLive = 0;
   for (const match of matches) {
-    const homeClub = clubsById[match.homeClubId];
-    const awayClub = clubsById[match.awayClubId];
-    const homeSquad = allPlayers.filter((p) => p.clubId === match.homeClubId);
-    const awaySquad = allPlayers.filter((p) => p.clubId === match.awayClubId);
-    const homeXI = getBestXI(homeSquad, homeClub.formation);
-    const awayXI = getBestXI(awaySquad, awayClub.formation);
-    const { homeGoals, awayGoals } = simulateInstant(
-      clubToEngine(homeClub), homeSquad, homeXI,
-      clubToEngine(awayClub), awaySquad, awayXI,
-      homeClub.chemistry, awayClub.chemistry,
-    );
-
-    await prisma.match.update({
-      where: { id: match.id },
-      data: { played: true, homeGoals, awayGoals },
-    });
-
-    const homeStand = homeClub.standing;
-    const awayStand = awayClub.standing;
-    await prisma.standing.update({
-      where: { id: homeStand.id },
-      data: applyStandingResult(homeStand, homeGoals, awayGoals),
-    });
-    await prisma.standing.update({
-      where: { id: awayStand.id },
-      data: applyStandingResult(awayStand, awayGoals, homeGoals),
-    });
-
-    applyMatchWear(homeSquad, homeXI);
-    applyMatchWear(awaySquad, awayXI);
+    const human = matchHasHuman(match, clubsById);
+    if (human && !autoSimHuman) {
+      waitingLive += 1;
+      continue;
+    }
+    await simulateAndPersistMatch(match, clubsById, allPlayers, {});
+    simmed += 1;
   }
+  if (simmed) await persistPlayers(allPlayers);
 
-  recoverStaminaAll(allPlayers);
-  await persistPlayers(allPlayers);
-
-  await prisma.leagueShard.update({
-    where: { id: shardId },
-    data: { dayNumber: shard.dayNumber + 1 },
-  });
-
-  return { shardId, action: "simulated", day: shard.dayNumber, matches: matches.length };
+  const dayResult = await tryCompleteShardDay(shardId, shard.dayNumber);
+  lastShardDayTick.set(shardId, Date.now());
+  return {
+    shardId,
+    action: dayResult.advanced ? dayResult.action : "waiting_live",
+    day: shard.dayNumber,
+    simmed,
+    waitingLive,
+    remaining: dayResult.remaining,
+  };
 }
 
 function applyStandingResult(standing, gf, ga) {
@@ -320,10 +681,28 @@ async function startNewSeason(shardId) {
   });
 
   const shard = await prisma.leagueShard.findUnique({ where: { id: shardId } });
+  await runRoadmapForHumanClubs(shardId, (club, sh, clubs, standings) =>
+    applyOnlineSeasonEndRoadmap(club, sh, clubs, standings),
+  );
   await prisma.leagueShard.update({
     where: { id: shardId },
     data: { seasonNumber: shard.seasonNumber + 1, dayNumber: 1 },
   });
+}
+
+export async function patchUserRoadmap(userId, action, payload) {
+  const club = await prisma.club.findFirst({
+    where: { userId },
+    include: { shard: true, players: true, standing: true },
+  });
+  if (!club) throw new Error("ไม่พบสโมสร");
+  const { shard, clubs, standings } = await loadShardMeta(club.shardId);
+  const gs = handleRoadmapAction(club, shard, clubs, standings, action, payload);
+  await prisma.club.update({
+    where: { id: club.id },
+    data: { gameStateJson: JSON.stringify(syncDailyStaffDraws(gs)) },
+  });
+  return getRoadmapPayload({ ...club, gameStateJson: JSON.stringify(gs) }, shard, clubs, standings);
 }
 
 export async function runDayTickAll() {

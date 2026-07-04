@@ -45,7 +45,7 @@ export async function migrateCareerToServer(career, email) {
 }
 
 /** สรุปมูลค่าแบบเดียวกับเกมหลัก (ย่อ) — server ตรวจซ้ำที่ unlock-online */
-function computeTeamValueFromCareer(c) {
+export function computeTeamValueFromCareer(c) {
   const userId = c.userTeamId;
   const squad = c.players.filter((p) => p.teamId === userId);
   const squadValue = squad.reduce((s, p) => s + (p.value || 0), 0);

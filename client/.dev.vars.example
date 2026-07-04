@@ -1,0 +1,3 @@
+# สำหรับ wrangler pages dev เท่านั้น — copy เป็น .dev.vars
+GAME_API_URL=https://api.themasterfc.com
+GAME_PROVISION_SECRET=same-as-server-env

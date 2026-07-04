@@ -1,4 +1,5 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { requireAuth } from "../middleware/auth.js";
 import {
   getStakeStatus,
@@ -10,6 +11,14 @@ import { prisma } from "../db.js";
 
 const router = Router();
 
+const joinLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "ส่งคำขอถี่เกินไป กรุณาลองใหม่ภายหลัง" },
+});
+
 /* สถานะลีคเดิมพันของฉัน + ลีคที่เปิดรับสมัคร */
 router.get("/status", requireAuth, async (req, res) => {
   try {
@@ -20,7 +29,7 @@ router.get("/status", requireAuth, async (req, res) => {
 });
 
 /* สมัครเข้าลีค: { playerIds: string[], managerCard: {...}, formation } */
-router.post("/join", requireAuth, async (req, res) => {
+router.post("/join", requireAuth, joinLimiter, async (req, res) => {
   try {
     res.json(await joinStakeLeague(req.user.id, req.body || {}));
   } catch (e) {
