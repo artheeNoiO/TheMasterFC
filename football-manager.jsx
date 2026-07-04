@@ -52,6 +52,12 @@ import {
   migrateLegacySavesToUser, rememberLastUsername,
 } from "@save";
 import {
+  fetchMyShardClub, fetchShardRoster, fetchMyOffers,
+  sendPlayerOffer as sendOnlinePlayerOffer, acceptOffer as acceptOnlineOffer,
+  rejectOffer as rejectOnlineOffer, counterOffer as counterOnlineOffer,
+  cancelMyOffer as cancelOnlineOffer,
+} from "@onlineneg";
+import {
   createAmbientPitchState, advanceAmbientPitch, ambientAsBallSim,
   computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene, startPenaltyScene,
   slotToPitchAmbient,
@@ -6161,7 +6167,7 @@ export default function App({
         />
       )}
 
-      {career.liveMatch && <LiveMatchModal career={career} liveMatch={career.liveMatch} userAutoMode={uTeam.autoMode} onFinish={finishLiveMatch} suggestTacticSwitch={suggestTacticSwitch} />}
+      {career.liveMatch && <LiveMatchModal career={career} liveMatch={career.liveMatch} userAutoMode={uTeam.autoMode} onFinish={finishLiveMatch} suggestTacticSwitch={suggestTacticSwitch} fullOnlineMode={career.playMode === "online"} />}
 
       <div className="fc-main-wrap">
         {tab === "dashboard" && <SandboxModePanel career={career} onEnterOnline={enterOnlineMode} compact />}
@@ -6282,7 +6288,10 @@ export default function App({
             onSignProspect={signProspect} onLoanOut={loanOutPlayer} onSellAcademy={sellAcademyPlayer} onPromote={promotePlayer} />
         )}
         {tab === "more" && (
-          <MoreView setTab={setTab} marketOpen={marketOpen} />
+          <MoreView setTab={setTab} marketOpen={marketOpen} isOnline={career.playMode === "online"} />
+        )}
+        {tab === "onlinemarket" && (
+          <OnlineMarketView uiLang={uiLang} />
         )}
         {tab === "table" && (
           <TableView
@@ -13060,9 +13069,224 @@ function FeedbackView({ uiLang = "th" }) {
   );
 }
 
+/* ============================== ตลาดออนไลน์ (เสนอซื้อนักเตะตรง สไตล์ Top Eleven) ============================== */
+/** ปุ่มใหญ่ ชัด สีสื่อความหมาย — เขียว=เสนอ/รับ, แดง=ปฏิเสธ, ส้ม=ต่อรอง (ตามที่ user ขอ) */
+function OnlineActionBtn({ tone = "good", children, ...props }) {
+  const color = tone === "good" ? C.good : tone === "bad" ? C.crimson : C.amber;
+  return (
+    <button type="button" {...props} style={{
+      flex: 1, padding: "10px 8px", borderRadius: 10, cursor: "pointer",
+      fontSize: 12, fontWeight: 800, border: "none",
+      background: color, color: tone === "warn" ? "#2b1c00" : "#08150e",
+      opacity: props.disabled ? 0.5 : 1,
+    }}>
+      {children}
+    </button>
+  );
+}
+
+function OnlinePlayerRow({ player, right }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
+      <div style={{ width: 30, textAlign: "center", fontSize: 12, fontWeight: 800, color: starColor(Math.max(1, Math.round((player.rating || 50) / 15))) }}>{player.rating}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{player.name}</div>
+        <div style={{ fontSize: 9.5, color: C.textDim, fontFamily: MONO_FONT }}>{playerPosTH ? playerPosTH(player) : player.position} · อายุ {player.age}</div>
+      </div>
+      {right}
+    </div>
+  );
+}
+
+function OnlineOfferForm({ player, onSubmit, onCancel }) {
+  const [fee, setFee] = useState(String(player.value || 0));
+  const [wage, setWage] = useState(String(player.wage || 0));
+  return (
+    <div style={{ padding: 10, borderRadius: 8, background: C.panel1 || "#0e1712", border: `1px solid ${C.amber}`, marginTop: 6 }}>
+      <div style={{ fontSize: 11, color: C.textDim, marginBottom: 6 }}>เสนอซื้อ {player.name}</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 9.5, color: C.textDim, marginBottom: 3 }}>ค่าตัว (฿)</div>
+          <input value={fee} onChange={(e) => setFee(e.target.value.replace(/[^0-9]/g, ""))} style={{ width: "100%", padding: "7px 8px", borderRadius: 6, border: `1px solid ${C.steel}`, background: C.panel2, color: C.chalk, fontSize: 12 }} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 9.5, color: C.textDim, marginBottom: 3 }}>ค่าเหนื่อย/วัน (฿)</div>
+          <input value={wage} onChange={(e) => setWage(e.target.value.replace(/[^0-9]/g, ""))} style={{ width: "100%", padding: "7px 8px", borderRadius: 6, border: `1px solid ${C.steel}`, background: C.panel2, color: C.chalk, fontSize: 12 }} />
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <OnlineActionBtn tone="neutral" onClick={onCancel} style={{ background: C.steel, color: C.chalk }}>ยกเลิก</OnlineActionBtn>
+        <OnlineActionBtn tone="good" onClick={() => onSubmit({ feeOffer: Number(fee) || 0, wageOffer: Number(wage) || 0 })}>ส่งข้อเสนอ</OnlineActionBtn>
+      </div>
+    </div>
+  );
+}
+
+function OnlineMarketView({ uiLang = "th" }) {
+  const [myClub, setMyClub] = useState(null);
+  const [roster, setRoster] = useState([]);
+  const [offers, setOffers] = useState({ sent: [], received: [] });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState(null);
+  const [offeringPlayerId, setOfferingPlayerId] = useState(null);
+  const [counteringId, setCounteringId] = useState(null);
+  const [expandedClub, setExpandedClub] = useState(null);
+
+  async function loadAll() {
+    setLoading(true);
+    setError("");
+    try {
+      const club = await fetchMyShardClub();
+      setMyClub(club);
+      if (club) {
+        const [r, o] = await Promise.all([fetchShardRoster(club.shardId), fetchMyOffers()]);
+        setRoster(r);
+        setOffers(o);
+      }
+    } catch (e) {
+      setError(e.message || "โหลดตลาดออนไลน์ไม่สำเร็จ");
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  async function runAction(id, fn) {
+    setBusyId(id);
+    setError("");
+    try {
+      await fn();
+      await loadAll();
+    } catch (e) {
+      setError(e.message || "ทำรายการไม่สำเร็จ");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  if (loading) return <Panel><div style={{ fontSize: 12, color: C.textDim, textAlign: "center", padding: 20 }}>กำลังโหลดตลาดออนไลน์...</div></Panel>;
+
+  if (!myClub) {
+    return (
+      <Panel>
+        <SectionLabel sub="ต้องเข้าสู่โลกออนไลน์ก่อนถึงจะเสนอซื้อนักเตะทีมอื่นได้">🤝 ตลาดออนไลน์</SectionLabel>
+        <div style={{ fontSize: 12, color: C.textDim }}>ยังไม่ได้เชื่อมต่อสโมสรออนไลน์ — ไปที่ "ตั้งค่า" แล้วกด "เข้าสู่โลกออนไลน์" ก่อนครับ</div>
+      </Panel>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel style={{ border: `1px solid ${C.amber}` }}>
+        <SectionLabel style={{ color: C.amber }} sub="เสนอซื้อนักเตะทีมอื่นได้ตรงๆ แม้ไม่ได้ประกาศขาย · เปิดเฉพาะช่วงพักฟื้น 20:00-09:00 น.">🤝 ตลาดออนไลน์</SectionLabel>
+        <div style={{ fontSize: 11.5, fontFamily: MONO_FONT, color: C.textDim }}>งบสโมสรออนไลน์ <b style={{ color: C.good }}>{formatMoney(myClub.budget)}</b></div>
+      </Panel>
+
+      {error && <div style={{ fontSize: 11, color: C.crimson, padding: "8px 10px", borderRadius: 8, background: "rgba(193,68,14,.15)" }}>{error}</div>}
+
+      {offers.received.length > 0 && (
+        <Panel style={{ border: `1px solid ${C.good}` }}>
+          <SectionLabel style={{ color: C.good }}>📥 ข้อเสนอที่ได้รับ ({offers.received.length})</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {offers.received.map((o) => (
+              <div key={o.id}>
+                <OnlinePlayerRow player={o.player} right={
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: C.good }}>{formatMoney(o.status === "countered" ? o.counterFee : o.feeOffer)}</div>
+                    <div style={{ fontSize: 9, color: C.textDim }}>จาก {o.fromClub?.name}</div>
+                  </div>
+                } />
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <OnlineActionBtn tone="good" disabled={busyId === o.id} onClick={() => runAction(o.id, () => acceptOnlineOffer(o.id))}>✅ รับข้อเสนอ</OnlineActionBtn>
+                  <OnlineActionBtn tone="warn" disabled={busyId === o.id} onClick={() => setCounteringId(counteringId === o.id ? null : o.id)}>🔁 ต่อรอง</OnlineActionBtn>
+                  <OnlineActionBtn tone="bad" disabled={busyId === o.id} onClick={() => runAction(o.id, () => rejectOnlineOffer(o.id))}>❌ ปฏิเสธ</OnlineActionBtn>
+                </div>
+                {counteringId === o.id && (
+                  <OnlineOfferForm
+                    player={{ ...o.player, value: o.feeOffer, wage: o.wageOffer }}
+                    onCancel={() => setCounteringId(null)}
+                    onSubmit={({ feeOffer, wageOffer }) => {
+                      setCounteringId(null);
+                      runAction(o.id, () => counterOnlineOffer(o.id, { counterFee: feeOffer, counterWage: wageOffer }));
+                    }}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {offers.sent.length > 0 && (
+        <Panel>
+          <SectionLabel sub="รอทีมเจ้าของตอบรับ/ปฏิเสธ/ต่อรอง">📤 ข้อเสนอที่ส่งไป ({offers.sent.length})</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {offers.sent.map((o) => (
+              <div key={o.id}>
+                <OnlinePlayerRow player={o.player} right={
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: C.amber }}>{formatMoney(o.status === "countered" ? o.counterFee : o.feeOffer)}</div>
+                    <div style={{ fontSize: 9, color: C.textDim }}>{o.status === "countered" ? "โดนต่อรอง" : "รอตอบรับ"} · {o.toClub?.name}</div>
+                  </div>
+                } />
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  {o.status === "countered" && (
+                    <OnlineActionBtn tone="good" disabled={busyId === o.id} onClick={() => runAction(o.id, () => sendOnlinePlayerOffer({ playerId: o.player.id, feeOffer: o.counterFee, wageOffer: o.counterWage }))}>✅ รับราคาต่อรอง</OnlineActionBtn>
+                  )}
+                  <OnlineActionBtn tone="bad" disabled={busyId === o.id} onClick={() => runAction(o.id, () => cancelOnlineOffer(o.id))}>ยกเลิกข้อเสนอ</OnlineActionBtn>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      <Panel>
+        <SectionLabel sub="แตะทีมเพื่อดูรายชื่อนักเตะแล้วเสนอซื้อได้เลย">🔎 หาผู้เล่นทีมอื่น</SectionLabel>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {roster.map((club) => (
+            <div key={club.id}>
+              <button type="button" onClick={() => setExpandedClub(expandedClub === club.id ? null : club.id)} style={{
+                width: "100%", textAlign: "left", padding: "9px 10px", borderRadius: 8, cursor: "pointer",
+                background: C.panel2, border: `1px solid ${C.steel}`, color: C.chalk, display: "flex", justifyContent: "space-between",
+              }}>
+                <span style={{ fontSize: 12, fontWeight: 700 }}>{club.isBot ? "🤖 " : "👤 "}{club.name}</span>
+                <span style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT }}>{club.players.length} คน {expandedClub === club.id ? "▲" : "▼"}</span>
+              </button>
+              {expandedClub === club.id && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6, paddingLeft: 6 }}>
+                  {club.players.map((p) => (
+                    <div key={p.id}>
+                      <OnlinePlayerRow player={p} right={
+                        <OnlineActionBtn tone="good" onClick={() => setOfferingPlayerId(offeringPlayerId === p.id ? null : p.id)} style={{ flex: "none", padding: "6px 10px", fontSize: 10.5 }}>เสนอซื้อ</OnlineActionBtn>
+                      } />
+                      {offeringPlayerId === p.id && (
+                        <OnlineOfferForm
+                          player={p}
+                          onCancel={() => setOfferingPlayerId(null)}
+                          onSubmit={({ feeOffer, wageOffer }) => {
+                            setOfferingPlayerId(null);
+                            runAction(p.id, () => sendOnlinePlayerOffer({ playerId: p.id, feeOffer, wageOffer }));
+                          }}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
 /* ============================== MORE MENU ============================== */
-function MoreView({ setTab, marketOpen }) {
+function MoreView({ setTab, marketOpen, isOnline }) {
   const items = [
+    ...(isOnline ? [{ id: "onlinemarket", label: "ตลาดออนไลน์", desc: "เสนอซื้อนักเตะทีมอื่นโดยตรง", icon: "🤝" }] : []),
     { id: "profile", label: "โปรไฟล์สโมสร", desc: "ถ้วยรางวัล · สถิติทุกฤดูกาล", icon: "🏆" },
     { id: "club", label: "สโมสร", desc: "แฟนบอล · สปอนเซอร์ · การเงิน", icon: "🏟️" },
     { id: "staffcards", label: "การ์ดสตาฟ", desc: "สุ่ม · กระเป๋า · รวมการ์ด", icon: "🎴" },

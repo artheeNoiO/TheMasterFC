@@ -35,6 +35,7 @@ export default defineConfig({
       "@save": path.resolve(root, "src/lib/save-keys.js"),
       "@beta": path.resolve(root, "src/BetaBanner.jsx"),
       "@locale": path.resolve(root, "src/lib/site-locale.js"),
+      "@onlineneg": path.resolve(root, "src/lib/online-negotiations.js"),
     },
   },
 });
