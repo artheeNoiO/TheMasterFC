@@ -1,8 +1,9 @@
-/** Shared auth helpers for Cloudflare Pages Functions (Web Crypto PBKDF2). */
+/** Shared auth helpers for Cloudflare Pages Functions (Web Crypto PBKDF2 + HMAC). */
 
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,16}$/;
 const MIN_PASSWORD = 6;
 const PBKDF2_ITERATIONS = 100_000;
+const TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 วัน — เท่ากับฝั่ง server/src/lib/auth-token.js
 
 export function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -110,10 +111,67 @@ export async function saveUser(kv, user) {
   if (user.username) await kv.put(`auth:name:${user.username}`, user.id);
 }
 
-export function parseBearerToken(request) {
+function toBase64Url(bytes) {
+  let str = btoa(String.fromCharCode(...bytes));
+  return str.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromBase64Url(str) {
+  let s = str.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+}
+
+async function importHmacKey(env) {
+  const secret = env.AUTH_TOKEN_SECRET;
+  if (!secret) {
+    throw new Error("AUTH_TOKEN_SECRET ยังไม่ได้ตั้งค่าใน Cloudflare Pages (Settings → Environment variables)");
+  }
+  return crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"],
+  );
+}
+
+/** ออก token เซ็นด้วย HMAC-SHA256 (รูปแบบเดียวกับ server/src/lib/auth-token.js — ใช้ secret
+ * เดียวกัน (AUTH_TOKEN_SECRET) แล้ว token จากที่นี่จะใช้กับ Render/home-server API ได้ตรงๆ ด้วย)
+ * แทนที่ token เดิม `game:<userId>` ที่ไม่ได้เซ็นอะไรเลย ใครก็ปลอมได้ */
+export async function signAuthTokenCf(env, userId) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = { userId, iat: now, exp: now + TOKEN_TTL_SECONDS };
+  const payloadB64 = toBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
+  const key = await importHmacKey(env);
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payloadB64));
+  return `${payloadB64}.${toBase64Url(new Uint8Array(sig))}`;
+}
+
+async function verifyAuthTokenCf(env, token) {
+  if (!token || typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [payloadB64, sigB64] = parts;
+  try {
+    const key = await importHmacKey(env);
+    const sig = fromBase64Url(sigB64);
+    const ok = await crypto.subtle.verify("HMAC", key, sig, new TextEncoder().encode(payloadB64));
+    if (!ok) return null;
+    const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(payloadB64)));
+    if (!payload?.userId || typeof payload.exp !== "number") return null;
+    if (Math.floor(Date.now() / 1000) >= payload.exp) return null;
+    return payload.userId;
+  } catch {
+    return null;
+  }
+}
+
+/** คืน userId ถ้า token เซ็นถูกต้องและยังไม่หมดอายุ, มิฉะนั้น null — ต้อง await (เดิมเคยเป็น sync
+ * ที่แค่ตัดคำว่า "game:" ออกแล้วเชื่อส่วนที่เหลือทันที ปลอม token ได้ทุกคน) */
+export async function parseBearerToken(request, env) {
   const header = request.headers.get("authorization") || "";
   if (!header.startsWith("Bearer ")) return null;
   const token = header.slice(7);
-  if (!token.startsWith("game:")) return null;
-  return token.slice(5);
+  return verifyAuthTokenCf(env, token);
 }

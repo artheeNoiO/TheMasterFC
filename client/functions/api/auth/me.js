@@ -12,7 +12,7 @@ export async function onRequestGet(context) {
     return json({ error: "ระบบ auth ยังไม่พร้อม (ไม่มี KV binding)" }, 503);
   }
 
-  const userId = parseBearerToken(context.request);
+  const userId = await parseBearerToken(context.request, context.env);
   if (!userId) return json({ error: "ต้องล็อกอินก่อน" }, 401);
 
   const row = await loadUserById(kv, userId);

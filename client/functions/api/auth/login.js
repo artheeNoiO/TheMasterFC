@@ -3,6 +3,7 @@ import {
   json,
   loadUserByUsername,
   normalizeUsername,
+  signAuthTokenCf,
   toPublicUser,
   verifyPassword,
 } from "../../lib/auth-cf.js";
@@ -28,9 +29,10 @@ export async function onRequestPost(context) {
     const ok = await verifyPassword(password, row.passwordHash);
     if (!ok) return json({ error: "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" }, 401);
 
-    return json({ user: toPublicUser(row), token: `game:${row.id}` });
+    const token = await signAuthTokenCf(context.env, row.id);
+    return json({ user: toPublicUser(row), token });
   } catch (e) {
     console.error("auth/login", e);
-    return json({ error: "เข้าสู่ระบบไม่สำเร็จ" }, 500);
+    return json({ error: e.message || "เข้าสู่ระบบไม่สำเร็จ" }, 500);
   }
 }

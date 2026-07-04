@@ -49,7 +49,7 @@ import IntroCutscene, { INTRO_SEEN_KEY } from "./intro-cutscene.jsx";
 import { buildNewClubWorldNews, WorldNewsFlash, HomeNewsPanel } from "./world-news.jsx";
 import {
   careerSaveKey, profileSaveKey, introSeenKey,
-  migrateLegacySavesToUser, rememberLastUsername,
+  rememberLastUsername,
 } from "@save";
 import {
   fetchMyShardClub, fetchShardRoster, fetchMyOffers,
@@ -3949,7 +3949,9 @@ export default function App({
     setCareer(null);
     setIntroDone(false);
     setSplashDone(false);
-    migrateLegacySavesToUser(saveUsername);
+    // ห้ามเรียก migrateLegacySavesToUser(saveUsername) ตรงนี้ — เคยเป็นบั๊กจริง: มันก็อปปี้เซฟเก่า
+    // แบบไม่ผูก username (career_v3/profile_v1 ตัวเปล่าจากยุคก่อนมีระบบบัญชี) ให้กับ "ทุกไอดีใหม่"
+    // ที่ล็อกอินครั้งแรกบนเบราว์เซอร์เดียวกัน ทำให้ไอดีใหม่เห็นเซฟของไอดีอื่นที่เคยทดสอบมาก่อน
     rememberLastUsername(saveUsername);
     const profileKey = profileSaveKey(saveUsername);
     const careerKey = careerSaveKey(saveUsername);

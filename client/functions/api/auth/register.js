@@ -4,6 +4,7 @@ import {
   json,
   normalizeUsername,
   saveUser,
+  signAuthTokenCf,
   toPublicUser,
   validatePassword,
   validateUsername,
@@ -44,9 +45,10 @@ export async function onRequestPost(context) {
     };
     await saveUser(kv, user);
 
-    return json({ user: toPublicUser(user), token: `game:${user.id}` }, 201);
+    const token = await signAuthTokenCf(context.env, user.id);
+    return json({ user: toPublicUser(user), token }, 201);
   } catch (e) {
     console.error("auth/register", e);
-    return json({ error: "สมัครสมาชิกไม่สำเร็จ" }, 500);
+    return json({ error: e.message || "สมัครสมาชิกไม่สำเร็จ" }, 500);
   }
 }

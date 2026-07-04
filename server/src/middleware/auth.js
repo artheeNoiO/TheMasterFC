@@ -10,13 +10,6 @@ const supabase = supabaseUrl && supabaseServiceKey
   ? createClient(supabaseUrl, supabaseServiceKey)
   : null;
 
-/** Legacy Cloudflare game:userid token — map to Prisma user id if provisioned */
-function parseGameLegacyToken(token) {
-  if (!token?.startsWith("game:")) return null;
-  const userId = token.slice(5);
-  return userId || null;
-}
-
 async function loadUserById(userId) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return null;
@@ -31,22 +24,16 @@ export async function requireAuth(req, res, next) {
   const token = header.slice(7);
 
   try {
-    // Signed, expiring token (issued by our own server on register/login/dev-register).
+    // Signed, expiring token — เดิมออกโดยเซิร์ฟเวอร์นี้เอง (register/login/dev-register) หรือโดย
+    // Cloudflare Pages Function (client/functions/lib/auth-cf.js) ซึ่งเซ็นด้วย AUTH_TOKEN_SECRET
+    // ตัวเดียวกัน จึง verify ผ่านจุดเดียวกันนี้ได้ตรงๆ — เอา fallback "game:<userId>" แบบไม่เซ็น
+    // ออกแล้ว (เคยเป็นช่องโหว่ปลอม token ได้ทุกคน กันไว้ตอน Cloudflare ยังไม่เซ็น token)
     const userId = verifyAuthToken(token);
     if (userId) {
       const user = await loadUserById(userId);
       if (!user) return res.status(401).json({ error: "ไม่พบผู้ใช้" });
       req.user = user;
       return next();
-    }
-
-    const legacyId = parseGameLegacyToken(token);
-    if (legacyId) {
-      const user = await loadUserById(legacyId);
-      if (user) {
-        req.user = user;
-        return next();
-      }
     }
 
     if (supabase) {

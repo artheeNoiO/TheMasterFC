@@ -35,7 +35,9 @@ export async function ensureOnlineSession() {
   }
 
   const gameToken = getToken();
-  if (!gameToken?.startsWith("game:")) {
+  // token ตอนนี้เป็น HMAC เซ็นแล้ว (ไม่ขึ้นต้นด้วย "game:" อีกต่อไป) — เช็คแค่ว่ามีค่าอยู่
+  // การตรวจลายเซ็น/หมดอายุจริงๆ ทำฝั่งเซิร์ฟเวอร์ตอนเรียก /api/online/session อยู่แล้ว
+  if (!gameToken) {
     throw new Error("ต้องล็อกอิน Game ID ก่อนเข้าโหมดออนไลน์");
   }
 
