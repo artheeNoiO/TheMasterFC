@@ -3899,6 +3899,7 @@ export default function App({
   const [toast, setToast] = useState(null);
   const [now, setNow] = useState(Date.now());
   const [leaguePickOpen, setLeaguePickOpen] = useState(false);
+  const [chosenPlayMode, setChosenPlayMode] = useState(null); // เลือกหลัง login ก่อนสร้างทีมครั้งแรก: "sandbox" | "online"
   const [managerHireConfirm, setManagerHireConfirm] = useState(null);
   const [mergeReport, setMergeReport] = useState(null); // { attempts: [{type, stars, success, card, chance}], auto: bool }
   const [booting, setBooting] = useState(false);
@@ -4222,16 +4223,24 @@ export default function App({
     });
   }
 
-  function startCareer(clubConfig) {
+  function startCareer(clubConfig, mode = "sandbox") {
     if (booting) return;
     setBooting(true);
     setTimeout(() => {
       try {
         const fresh = createNewCareer(clubConfig, profile?.name || accountUser?.username || "ผู้จัดการใหม่");
+        if (mode === "online") {
+          // เลือก "ออนไลน์" ตั้งแต่ตอนเริ่ม — ปลดล็อกทันทีไม่ต้องปั้นมูลค่าทีมถึง 50M ก่อน (เกตนั้นมีไว้
+          // สำหรับคนเริ่มจากโลกจำลองแล้วค่อยเปลี่ยนใจทีหลัง ไม่ใช่คนที่เลือกออนไลน์ตรงๆ ตั้งแต่แรก)
+          fresh.playMode = "online";
+          fresh.onlineUnlocked = true;
+          fresh.onlineUnlockedAt = Date.now();
+          fresh.log = [`🌐 เลือกเริ่มในโลกออนไลน์ตั้งแต่แรก — ลีคเดียวกับผู้เล่นจริง`, ...fresh.log];
+        }
         setCareer(checkOnlineUnlock(fresh));
         persist(fresh);
         setTab("dashboard");
-        showToast("เริ่มอาชีพแล้ว!");
+        showToast(mode === "online" ? "เริ่มอาชีพในโหมดออนไลน์แล้ว!" : "เริ่มอาชีพแล้ว!");
       } catch (e) {
         console.error("startCareer failed", e);
         showToast("สร้างเกมไม่สำเร็จ — ลองใหม่หรือรีเซ็ตเซฟ");
@@ -6085,7 +6094,8 @@ export default function App({
     );
   }
   if (!profile) return <ProfileSetup onSave={saveProfile} booting={booting} toast={toast} />;
-  if (!career) return <ClubCreator profile={profile} onCreate={startCareer} booting={booting} toast={toast} />;
+  if (!career && !chosenPlayMode) return <ModeSelectScreen onChoose={setChosenPlayMode} />;
+  if (!career) return <ClubCreator profile={profile} onCreate={(clubConfig) => startCareer(clubConfig, chosenPlayMode)} booting={booting} toast={toast} />;
 
   const uTeam = userTeam();
   if (!uTeam) {
@@ -6532,6 +6542,41 @@ function SetupToast({ toast }) {
   if (!toast) return null;
   return <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", background: C.crimson, color: C.chalk, padding: "10px 16px", borderRadius: 8, fontSize: 12.5, fontWeight: 600, zIndex: 80, maxWidth: "90vw", textAlign: "center", boxShadow: "0 4px 20px rgba(0,0,0,.4)" }}>{toast}</div>;
 }
+/** เลือกโหมดหลัง login ก่อนสร้างทีมครั้งแรก — โลกจำลอง (โซโล) หรือ ออนไลน์ (ลีค 16 คนจริง) */
+function ModeSelectScreen({ onChoose }) {
+  return (
+    <LoginBackdrop style={{ padding: 20, display: "flex", alignItems: "center" }}>
+      <div style={{ maxWidth: 460, margin: "0 auto", width: "100%" }}>
+        <div style={{ textAlign: "center", marginBottom: 24 }}>
+          <img src={BRAND_SPLASH_LOGO} alt={GAME_NAME} style={{ maxWidth: "min(260px, 72vw)", width: "100%", height: "auto", marginBottom: 10 }} />
+          <div style={{ fontSize: 12.5, color: C.textDim, marginTop: 6 }}>เลือกโหมดที่จะเล่น (เปลี่ยนทีหลังได้ในตั้งค่า)</div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <button type="button" onClick={() => onChoose("sandbox")} style={{
+            textAlign: "left", padding: "18px 16px", borderRadius: 14, cursor: "pointer",
+            background: C.panel2, border: `2px solid ${C.steel}`, color: C.chalk,
+          }}>
+            <div style={{ fontSize: 20, marginBottom: 6 }}>🎮 โลกจำลอง</div>
+            <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.55 }}>
+              เล่นคนเดียวตามจังหวะตัวเอง เร่งความเร็ว/ข้ามแมตช์ได้เต็มที่ เหมาะสำหรับฝึกฝน/ผู้เล่นใหม่
+            </div>
+          </button>
+          <button type="button" onClick={() => onChoose("online")} style={{
+            textAlign: "left", padding: "18px 16px", borderRadius: 14, cursor: "pointer",
+            background: "rgba(224,164,88,.12)", border: `2px solid ${C.amber}`, color: C.chalk,
+          }}>
+            <div style={{ fontSize: 20, marginBottom: 6, color: C.amber }}>🌐 ออนไลน์</div>
+            <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.55 }}>
+              ลีคเดียวกับผู้เล่นจริง 16 คน (บอทเติมที่ว่างช่วงแรก) · เสนอซื้อขายนักเตะตรงกับทีมอื่น ·
+              แข่งขันตามเวลาจริง 9:00-20:00 น. · ห้ามเร่งเวลา/ข้ามแมตช์
+            </div>
+          </button>
+        </div>
+      </div>
+    </LoginBackdrop>
+  );
+}
+
 function ProfileSetup({ onSave, booting, toast }) {
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState(AVATAR_CHOICES[0]);
