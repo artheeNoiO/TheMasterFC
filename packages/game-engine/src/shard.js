@@ -74,7 +74,7 @@ export function createShardWithUserClub(userClubConfig) {
 
 /** ชาร์ดบอทล้วน 16 ทีม ไม่มีผู้เล่นจริงเลย — เปิดไว้เป็น "แชนแนล" รอผู้เล่นจริงเข้ามาแทนที่บอททีละคน
  * (createClubForUser ฝั่งเซิร์ฟเวอร์จะหาชาร์ดที่ isFull=false แล้วสลับบอทตัวหนึ่งเป็นผู้เล่นจริง แทนที่จะสร้างชาร์ดส่วนตัวให้ทุกคน) */
-export function createBotOnlyShard() {
+export function createBotOnlyShard(division = 1) {
   const shardId = uid("shard");
   const bots = BOT_TEAM_DEFS.slice(0, TEAMS_PER_SHARD).map((def, i) => createBotClub(def, shardId, i));
   const clubIds = bots.map((c) => c.id);
@@ -83,13 +83,19 @@ export function createBotOnlyShard() {
     shard: {
       id: shardId,
       name: LEAGUE_NAME,
-      division: 1,
+      division,
       seasonNumber: 1,
       dayNumber: 1,
     },
     clubs: bots,
     fixtures,
   };
+}
+
+/** สโมสรบอทตัวเดียว — ใช้ถมช่องว่างที่เหลือจากทีมที่เลื่อน/ตกชั้นออกจากชาร์ด (กันชาร์ดเหลือไม่ครบ 16) */
+export function createSingleBotClub(shardId, existingShortCodes = []) {
+  const def = BOT_TEAM_DEFS.find((d) => !existingShortCodes.includes(d.short)) || BOT_TEAM_DEFS[0];
+  return createBotClub(def, shardId, existingShortCodes.length);
 }
 
 export function joinOpenShard(existingBots, userClubConfig, shardMeta) {

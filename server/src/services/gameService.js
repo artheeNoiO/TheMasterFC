@@ -7,6 +7,7 @@ import {
   buildSeasonFixtures,
   isSeasonComplete,
   createBotOnlyShard,
+  createSingleBotClub,
   genManager,
   genSquad,
 } from "@siam/game-engine";
@@ -14,7 +15,10 @@ import { prisma } from "../db.js";
 import { reclaimInactiveLegends } from "./legendService.js";
 import { kickOffRoundMatches, finalizeFinishedMatches } from "./liveMatchService.js";
 import { executeAcceptedTransfers } from "./negotiationService.js";
-import { DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY, isMatchWindowOpen, isMarketWindowOpen } from "../../../game-version.js";
+import {
+  DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY, isMatchWindowOpen, isMarketWindowOpen,
+  ENTRY_DIVISION, PROMOTE_COUNT, RELEGATE_COUNT,
+} from "../../../game-version.js";
 import {
   initRoadmapForNewClub,
   getRoadmapPayload,
@@ -206,8 +210,8 @@ function playerCreateData(p) {
 }
 
 /** เปิดชาร์ดบอทล้วนใหม่ (16 ทีม) ไว้เป็น "แชนแนล" รอผู้เล่นจริงมาแทนที่บอททีละคน */
-async function createBotOnlyShardInDb() {
-  const world = createBotOnlyShard();
+async function createBotOnlyShardInDb(division = ENTRY_DIVISION) {
+  const world = createBotOnlyShard(division);
   await prisma.leagueShard.create({
     data: {
       id: world.shard.id,
@@ -262,15 +266,16 @@ export async function createClubForUser(userId, config) {
   const existing = await prisma.club.findFirst({ where: { userId } });
   if (existing) throw new Error("มีสโมสรแล้ว");
 
+  // ผู้เล่นใหม่เริ่มที่ ENTRY_DIVISION (ชั้นล่างสุด) เสมอ — ไต่ขึ้นดิวิชั่นสูงกว่าด้วยผลงานเอา ไม่ใช่เลือกเข้าตรงๆ
   let openBotClub = await prisma.club.findFirst({
-    where: { isBot: true, userId: null, shard: { isFull: false } },
+    where: { isBot: true, userId: null, shard: { isFull: false, division: ENTRY_DIVISION } },
   });
 
   let shardId;
   if (openBotClub) {
     shardId = openBotClub.shardId;
   } else {
-    shardId = await createBotOnlyShardInDb();
+    shardId = await createBotOnlyShardInDb(ENTRY_DIVISION);
     openBotClub = await prisma.club.findFirst({ where: { shardId, isBot: true, userId: null } });
   }
 
@@ -735,7 +740,82 @@ function applyStandingResult(standing, gf, ga) {
   };
 }
 
+/** ย้าย "ตัวตน" ของสโมสรที่เลื่อน/ตกชั้น ไปสวมสล็อตบอทว่างในชาร์ดปลายทาง — id ของแถวไม่ข้ามชาร์ดเลย
+ * (สลับข้อมูลระหว่างแถวแทน) กัน fixtures/ประวัติแมทช์ของทั้งสองชาร์ดเพี้ยน แถวเดิมกลายเป็นบอทใหม่
+ * ถมช่องว่างในชาร์ดเก่าแทนทันที ไม่ต้องรอ bot คนอื่นมาเติม */
+async function relocateClubToDivision(club, targetDivision) {
+  let botSlot = await prisma.club.findFirst({ where: { isBot: true, shard: { division: targetDivision } } });
+  let targetShardId;
+  if (botSlot) {
+    targetShardId = botSlot.shardId;
+  } else {
+    targetShardId = await createBotOnlyShardInDb(targetDivision);
+    botSlot = await prisma.club.findFirst({ where: { shardId: targetShardId, isBot: true } });
+  }
+  if (!botSlot) return null; // เผื่อ edge case หาที่ว่างไม่ได้จริงๆ — ข้ามรอบนี้ไปก่อน ไม่บล็อก rollover ทั้งชาร์ด
+
+  const freshBot = createSingleBotClub(club.shardId, []);
+
+  await prisma.$transaction([
+    prisma.player.deleteMany({ where: { clubId: botSlot.id } }),
+    prisma.player.updateMany({ where: { clubId: club.id }, data: { clubId: botSlot.id } }),
+    // ต้องเคลียร์ userId ของแถวเดิมก่อน (ให้กลายเป็นบอท) แล้วค่อยเซ็ต userId ลงแถวใหม่
+    // ไม่งั้นชน unique constraint เพราะ 2 แถวถือ userId เดียวกันชั่วขณะ
+    prisma.club.update({
+      where: { id: club.id },
+      data: {
+        userId: null, isBot: true,
+        name: freshBot.name, shortCode: freshBot.shortCode, logoIndex: freshBot.logoIndex,
+        primaryColor: freshBot.primaryColor, secondaryColor: freshBot.secondaryColor,
+        shirtColor: null, shortsColor: null,
+        budget: freshBot.budget, tier: freshBot.tier, formation: freshBot.formation, chemistry: freshBot.chemistry,
+        managerJson: JSON.stringify(freshBot.manager), autoMode: true, lineupJson: null,
+        players: { create: freshBot.players.map(playerCreateData) },
+      },
+    }),
+    prisma.club.update({
+      where: { id: botSlot.id },
+      data: {
+        userId: club.userId, name: club.name, shortCode: club.shortCode, logoIndex: club.logoIndex,
+        primaryColor: club.primaryColor, secondaryColor: club.secondaryColor,
+        shirtColor: club.shirtColor, shortsColor: club.shortsColor,
+        budget: club.budget, tier: club.tier, formation: club.formation, chemistry: club.chemistry,
+        isBot: club.isBot, managerJson: club.managerJson, gameStateJson: club.gameStateJson,
+        autoMode: club.autoMode, lineupJson: club.lineupJson,
+      },
+    }),
+    prisma.standing.update({ where: { clubId: botSlot.id }, data: { played: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 } }),
+  ]);
+
+  return { fromShardId: club.shardId, toShardId: targetShardId };
+}
+
+/** เลื่อนชั้น/ตกชั้นตอนจบฤดูกาล — เรียกก่อน rebuild ตาราง/ตกลงเสมอ (ต้องใช้ตารางคะแนน "เก่า" ก่อนรีเซ็ต) */
+export async function applyPromotionRelegation(shardId) {
+  const shard = await prisma.leagueShard.findUnique({ where: { id: shardId } });
+  if (!shard) return;
+  const standings = await prisma.standing.findMany({
+    where: { club: { shardId } },
+    include: { club: true },
+    orderBy: [{ pts: "desc" }, { gf: "desc" }],
+  });
+  if (standings.length < PROMOTE_COUNT + RELEGATE_COUNT) return; // ชาร์ดยังไม่เต็ม 16 — ยังไม่เลื่อน/ตกชั้น
+
+  if (shard.division > 0) {
+    for (const s of standings.slice(0, PROMOTE_COUNT)) {
+      await relocateClubToDivision(s.club, shard.division - 1);
+    }
+  }
+  if (shard.division < ENTRY_DIVISION) {
+    for (const s of standings.slice(-RELEGATE_COUNT)) {
+      await relocateClubToDivision(s.club, shard.division + 1);
+    }
+  }
+}
+
 async function startNewSeason(shardId) {
+  await applyPromotionRelegation(shardId);
+
   // ปิดตลาด — ดีลที่ตกลงกันไว้ระหว่างวัน (accepted_pending) ย้ายทีมจริงพร้อมกันตอนนี้ทีเดียว
   await executeAcceptedTransfers(shardId);
 

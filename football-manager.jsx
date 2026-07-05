@@ -6,7 +6,7 @@ import {
   getRosterForTeam, hasFullRosterLeague, ROSTER_STATS, getRosterForLeague,
 } from "@legend";
 import { starsFromRating, getPlayerStarProfile, STAR_LABEL_TH, STAR_MAX, starWageMultiplier } from "@stars";
-import { GAME_NAME, GAME_TAGLINE, GAME_VERSION, SAVE_VERSION, FEATURES, STARTING_BUDGET, STARTER_MASTER_COINS, BETA_TEST, BETA_STARTING_BUDGET, BETA_STARTER_MASTER_COINS, GAME_DISCORD_URL, GAME_DISCORD_LABEL, GAME_DISCORD_HINT, DAILY_STAFF_CARD_DRAWS, MINUTES_PER_GAME_DAY, MATCH_DAYS_PER_SEASON, GAME_MINUTE_REAL_SECONDS } from "@version";
+import { GAME_NAME, GAME_TAGLINE, GAME_VERSION, SAVE_VERSION, FEATURES, STARTING_BUDGET, STARTER_MASTER_COINS, BETA_TEST, BETA_STARTING_BUDGET, BETA_STARTER_MASTER_COINS, GAME_DISCORD_URL, GAME_DISCORD_LABEL, GAME_DISCORD_HINT, DAILY_STAFF_CARD_DRAWS, MINUTES_PER_GAME_DAY, MATCH_DAYS_PER_SEASON, GAME_MINUTE_REAL_SECONDS, DIVISION_NAMES } from "@version";
 import {
   genPlayerName, pickNationalityForTeam, pickNationality, getNationality,
   formatNationality, ensurePlayerNationality, resolvePlayerNationality,
@@ -13756,6 +13756,11 @@ function OnlineMatchCenterView({ uiLang = "th" }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Panel style={{ border: `1px solid ${C.crimson}` }}>
         <SectionLabel style={{ color: C.crimson }} sub="เตะอัตโนมัติตามเวลาจริง 9:00-20:00 น. — ไม่มีปุ่มกดคิกอฟ ไม่มีเร่งเวลา">🔴 แข่งขันสด</SectionLabel>
+        {myClub?.shard && (
+          <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginTop: 2 }}>
+            🏆 {DIVISION_NAMES[myClub.shard.division] ?? `ดิวิชั่น ${myClub.shard.division}`}
+          </div>
+        )}
       </Panel>
       {error && <div style={{ fontSize: 11, color: C.crimson, padding: "8px 10px", borderRadius: 8, background: "rgba(193,68,14,.15)" }}>{error}</div>}
 

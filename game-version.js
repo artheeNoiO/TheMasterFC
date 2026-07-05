@@ -78,6 +78,20 @@ export const MAX_SUBS_PER_MATCH = 5;
 /** เตือนผู้เล่นล่วงหน้ากี่นาทีจริง ก่อนรอบถัดไปมีสิทธิ์คิกอฟ (ดู throttle ของ day-tick) */
 export const PRE_MATCH_REMINDER_MINUTES = 10;
 
+/** ระบบดิวิชั่นออนไลน์ — ดิวิชั่น 0 = สูงสุด (Master League) ไล่ลงไปจนถึงต่ำสุด (entry) ตามธรรมเนียม
+ * เดียวกับที่ sandbox ใช้อยู่แล้ว (division 0 = Master, 1 = Challenger) — โครงสร้างรองรับ 6 ชั้นเต็ม
+ * แต่ตอนนี้ผู้เล่นยังน้อย (Test Beta) เลยเปิดใช้จริงแค่ 2 ชั้นล่างสุดก่อน (ดู ACTIVE_DIVISIONS) ค่อยเปิด
+ * ชั้นบนเพิ่มเมื่อผู้เล่นจริงเยอะขึ้น — ผู้เล่นใหม่เริ่มที่ ENTRY_DIVISION เท่านั้น ไต่ขึ้นด้วยผลงานเอา */
+export const DIVISION_COUNT = 6;
+export const ENTRY_DIVISION = DIVISION_COUNT - 1; // 5 = ต่ำสุด/เริ่มต้น
+export const ACTIVE_DIVISIONS = [5, 4]; // เปิดจริงตอนนี้ — เพิ่มทีละชั้นเมื่อผู้เล่นเยอะขึ้น
+export const DIVISION_NAMES = {
+  0: "Master League", 1: "Elite League", 2: "Championship League",
+  3: "Division 3", 4: "Division 2", 5: "Challenger League",
+};
+export const PROMOTE_COUNT = 2; // อันดับ 1-2 เลื่อนชั้น
+export const RELEGATE_COUNT = 2; // 2 อันดับสุดท้ายตกชั้น
+
 /** ชั่วโมงปัจจุบันตามเวลาไทย (0-23, รวมเศษนาทีเป็นทศนิยม) — ไม่พึ่ง timezone ของเครื่อง/เซิร์ฟเวอร์ */
 export function bangkokHourNow(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {
