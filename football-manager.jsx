@@ -57,6 +57,7 @@ import {
   rejectOffer as rejectOnlineOffer, counterOffer as counterOnlineOffer,
   cancelMyOffer as cancelOnlineOffer,
 } from "@onlineneg";
+import { fetchShardLiveMatches } from "@onlinelive";
 import {
   createAmbientPitchState, advanceAmbientPitch, ambientAsBallSim,
   computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene, startPenaltyScene,
@@ -6396,6 +6397,9 @@ export default function App({
         )}
         {tab === "onlinemarket" && (
           <OnlineMarketView uiLang={uiLang} />
+        )}
+        {tab === "onlinelive" && (
+          <OnlineLiveView />
         )}
         {tab === "table" && (
           <TableView
@@ -13443,10 +13447,90 @@ function OnlineMarketView({ uiLang = "th" }) {
   );
 }
 
+/** ดูสกอร์สดของแมทอื่นในชาร์ดเดียวกัน (บอทหรือผู้เล่นจริง) ระหว่างที่ยังไม่ถึงคิวแมทตัวเอง */
+function OnlineLiveView() {
+  const [myClub, setMyClub] = useState(null);
+  const [day, setDay] = useState(null);
+  const [matches, setMatches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  async function loadAll() {
+    setLoading(true);
+    setError("");
+    try {
+      const club = await fetchMyShardClub();
+      setMyClub(club);
+      if (club) {
+        const data = await fetchShardLiveMatches(club.shardId);
+        setDay(data.day);
+        setMatches(data.matches || []);
+      }
+    } catch (e) {
+      setError(e.message || "โหลดสกอร์สดไม่สำเร็จ");
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    loadAll();
+    const id = setInterval(loadAll, 15000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (loading) return <Panel><div style={{ fontSize: 12, color: C.textDim, textAlign: "center", padding: 20 }}>กำลังโหลดสกอร์สด...</div></Panel>;
+
+  if (!myClub) {
+    return (
+      <Panel>
+        <SectionLabel sub="ต้องเข้าสู่โลกออนไลน์ก่อนถึงจะดูแมทของทีมอื่นในชาร์ดได้">📡 ดูสดแมทอื่น</SectionLabel>
+        <div style={{ fontSize: 12, color: C.textDim }}>ยังไม่ได้เชื่อมต่อสโมสรออนไลน์ — ไปที่ "ตั้งค่า" แล้วกด "เข้าสู่โลกออนไลน์" ก่อนครับ</div>
+      </Panel>
+    );
+  }
+
+  const statusLabel = { scheduled: "รอคิกอฟ", live: "🔴 สด", finished: "จบแล้ว" };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel style={{ border: `1px solid ${C.amber}` }}>
+        <SectionLabel style={{ color: C.amber }} sub={`วันที่ ${day ?? "-"} ในชาร์ด · อัปเดตทุก 15 วินาที`}>📡 ดูสดแมทอื่น</SectionLabel>
+      </Panel>
+      {error && <div style={{ fontSize: 11, color: C.crimson, padding: "8px 10px", borderRadius: 8, background: "rgba(193,68,14,.15)" }}>{error}</div>}
+      <Panel>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {matches.length === 0 && <div style={{ fontSize: 12, color: C.textDim, textAlign: "center", padding: 12 }}>ยังไม่มีแมทวันนี้ในชาร์ด</div>}
+          {matches.map((m) => (
+            <div key={m.matchId} style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "9px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}`,
+            }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, flex: 1 }}>
+                {m.home.isBot ? "🤖 " : "👤 "}{m.home.name}
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 800, fontFamily: MONO_FONT, padding: "0 10px", color: m.status === "live" ? C.good : C.chalk }}>
+                {m.homeGoals} - {m.awayGoals}
+              </div>
+              <div style={{ fontSize: 11.5, fontWeight: 700, flex: 1, textAlign: "right" }}>
+                {m.away.name}{m.away.isBot ? " 🤖" : " 👤"}
+              </div>
+              <div style={{ fontSize: 9, color: C.textDim, marginLeft: 10, minWidth: 60, textAlign: "right" }}>
+                {m.status === "live" ? `${statusLabel[m.status]} ${m.minute}'` : statusLabel[m.status] || m.status}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
 /* ============================== MORE MENU ============================== */
 function MoreView({ setTab, marketOpen, isOnline }) {
   const items = [
-    ...(isOnline ? [{ id: "onlinemarket", label: "ตลาดออนไลน์", desc: "เสนอซื้อนักเตะทีมอื่นโดยตรง", icon: "🤝" }] : []),
+    ...(isOnline ? [
+      { id: "onlinemarket", label: "ตลาดออนไลน์", desc: "เสนอซื้อนักเตะทีมอื่นโดยตรง", icon: "🤝" },
+      { id: "onlinelive", label: "ดูสดแมทอื่น", desc: "สกอร์สดทุกแมทในชาร์ดวันนี้", icon: "📡" },
+    ] : []),
     { id: "profile", label: "โปรไฟล์สโมสร", desc: "ถ้วยรางวัล · สถิติทุกฤดูกาล", icon: "🏆" },
     { id: "club", label: "สโมสร", desc: "แฟนบอล · สปอนเซอร์ · การเงิน", icon: "🏟️" },
     { id: "staffcards", label: "การ์ดสตาฟ", desc: "สุ่ม · กระเป๋า · รวมการ์ด", icon: "🎴" },

@@ -13,6 +13,7 @@ import {
 import { prisma } from "../db.js";
 import { reclaimInactiveLegends } from "./legendService.js";
 import { DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY, isMatchWindowOpen } from "../../../game-version.js";
+import { kickOffRoundMatches, computeLiveState } from "./liveMatchService.js";
 import {
   initRoadmapForNewClub,
   getRoadmapPayload,
@@ -563,7 +564,10 @@ export async function prepareUserLiveMatch(userId) {
     awayGoals = result.awayGoals;
     await prisma.match.update({
       where: { id: state.match.id },
-      data: { homeGoals, awayGoals },
+      // stamp kickoffAt/homeXIJson/awayXIJson เหมือน kickOffRoundMatches (liveMatchService.js) —
+      // ให้ computeLiveState คำนวณสถานะสด/finished ของแมทที่ผู้เล่นเล่นเองได้ด้วย กัน day-tick
+      // รอบถัดไปมาจำลองสกอร์ทับซ้ำถ้าผู้เล่นยังไม่กด finish ทัน (ก่อนหน้านี้ status ไม่ถูกอัปเดตเลย)
+      data: { homeGoals, awayGoals, status: "live", kickoffAt: new Date(), homeXIJson: JSON.stringify(homeXI), awayXIJson: JSON.stringify(awayXI) },
     });
     if (state.isHome || state.match.awayClubId === club.id) {
       let gs = syncDailyStaffDraws(parseGameState(club.gameStateJson));
@@ -687,15 +691,38 @@ export async function runDayTickForShard(shardId, { autoSimHuman = true, force =
     }));
   }
 
+  // คิกอฟแมทที่ยังไม่เริ่ม (status "scheduled", ยังไม่มีคนล็อกสกอร์เอง) ให้เดินสดจริงตามเวลา
+  // (ดูได้ผ่าน getShardMatchesToday) แทนจำลองจบทันที — แมทที่ผู้เล่นล็อกไว้เองผ่าน
+  // prepareUserLiveMatch จะไม่ถูกแตะซ้ำ (kickOffRoundMatches กรอง homeGoals:null ออกแล้ว)
+  if (autoSimHuman) await kickOffRoundMatches(shardId, shard.dayNumber);
+  const freshMatches = await prisma.match.findMany({
+    where: { shardId, dayNumber: shard.dayNumber, played: false },
+  });
+
   let simmed = 0;
   let waitingLive = 0;
-  for (const match of matches) {
+  for (const match of freshMatches) {
     const human = matchHasHuman(match, clubsById);
     if (human && !autoSimHuman) {
       waitingLive += 1;
       continue;
     }
-    await simulateAndPersistMatch(match, clubsById, allPlayers, {});
+    if (match.homeGoals == null || match.awayGoals == null) {
+      // เผื่อกรณี autoSimHuman=false ตอน dev แล้วสลับกลับมา true — แมทยังไม่ได้คิกอฟเลย จำลองจบทันทีแบบเดิม
+      await simulateAndPersistMatch(match, clubsById, allPlayers, {});
+      simmed += 1;
+      continue;
+    }
+    if (!computeLiveState(match).finished) {
+      // สกอร์ล็อกไว้แล้วแต่ยังอยู่ในช่วงเวลาแข่งสด (หรือผู้เล่นกำลังเล่นเองอยู่) — รอ tick ถัดไป
+      waitingLive += 1;
+      continue;
+    }
+    const homeXI = match.homeXIJson ? JSON.parse(match.homeXIJson) : undefined;
+    const awayXI = match.awayXIJson ? JSON.parse(match.awayXIJson) : undefined;
+    await simulateAndPersistMatch(match, clubsById, allPlayers, {
+      homeXI, awayXI, homeGoals: match.homeGoals, awayGoals: match.awayGoals,
+    });
     simmed += 1;
   }
   if (simmed) await persistPlayers(allPlayers);

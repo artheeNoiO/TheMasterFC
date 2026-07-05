@@ -60,7 +60,9 @@ function playerToEngine(p) {
 /** คิกอฟทุกแมทของวันนั้นในชาร์ดพร้อมกัน — ล็อก XI, สุ่มจำนวนประตูด้วยโมเดลเดิม (simulateInstant), แจกเป็นนาทีเพื่อเล่นแบบเรียลไทม์ */
 export async function kickOffRoundMatches(shardId, dayNumber) {
   const matches = await prisma.match.findMany({
-    where: { shardId, dayNumber, played: false, status: "scheduled" },
+    // homeGoals: null กัน re-kick แมทที่ผู้เล่นล็อกสกอร์ไปแล้วผ่าน prepareUserLiveMatch
+    // (แมทนั้นยังเป็น status "scheduled" เพราะ prepareUserLiveMatch ไม่แตะฟิลด์นี้เอง)
+    where: { shardId, dayNumber, played: false, status: "scheduled", homeGoals: null },
   });
   if (matches.length === 0) return { kicked: 0 };
 
