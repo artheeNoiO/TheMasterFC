@@ -1,11 +1,24 @@
 # HANDOFF — The Master Football Club (เดิม The Socker Manager / siam-manager-online)
 
-**อัปเดตล่าสุด:** 2026-07-05 18:xx | **Baseline:** `v0.9.0-stable` (commit `69de209`) → ปัจจุบัน `master` @ `bc4850d` | **GAME_VERSION ปัจจุบันในโค้ด:** `0.9.24`
+**อัปเดตล่าสุด:** 2026-07-05 22:xx | **Baseline:** `v0.9.0-stable` (commit `69de209`) → ปัจจุบัน `master` @ `bc4850d` + งานใหม่บน branch `claude/progress-check-bgq007` (ยังไม่ merge) | **GAME_VERSION ปัจจุบันในโค้ด:** `0.9.24`
 
 ## ⚠️ สถานะด่วนที่สุด (อ่านก่อนทำอะไรทั้งหมด)
 1. **กำลังย้าย server จากเครื่องบ้านไป Render + Postgres** — เพิ่ง push `render.yaml` ใหม่ (`bc4850d`, มี `databases` block ผูก `DATABASE_URL` อัตโนมัติ, `buildCommand` ชี้ `schema.postgresql.prisma`) แต่ **ยังไม่ได้ยืนยันว่า deploy ขึ้นจริงหรือยัง** — ต้องเข้า Render Dashboard เช็ค build log + ตั้ง `AUTH_TOKEN_SECRET` เอง (ตอนนี้เป็น `sync:false` ไม่ auto-gen แล้ว) **ให้ตรงกับค่าที่ใช้ฝั่ง Cloudflare Pages** (`client/functions/lib/auth-cf.js`) ไม่งั้น token คนละระบบเซ็น/verify ไม่ตรงกัน → login พังหมด
-2. **ฟิลด์ Match ใหม่ (status/kickoffAt/eventsJson/homeXIJson/awayXIJson/subsJson/subsUsed) + `liveMatchService.js` เขียนเสร็จแล้วแต่ยังไม่ได้ wire เข้า route หรือ `gameService.js` เลย** — เป็นงานสำคัญที่สุดที่ค้างอยู่ตอนนี้ (ดูหัวข้อ "ทำต่อ" ข้อ B ใหม่)
-3. **ระบบ negotiations (เสนอซื้อนักเตะตรง) ตอนนี้เชื่อมครบทั้ง server+client แล้ว** — ใช้งานได้จริงผ่านเมนู "More" ตอน `career.playMode === "online"` (เดิมข้อนี้เป็นงานค้าง ตอนนี้ทำเสร็จแล้ว — ดู "สรุปเซสชันที่ผ่านมา")
+2. **`liveMatchService.js` เชื่อมเข้า `gameService.js`/route แล้ว** (branch `claude/progress-check-bgq007`, ยังไม่ merge เข้า master) — ดูรายละเอียดที่ "สรุปเซสชันนี้ (2026-07-05)" ด้านล่าง ก่อนหน้านี้เขียนไว้แต่ไม่ได้ใช้งานจริง ตอนนี้ day-tick คิกอฟแมทบอทให้เดินสดจริงตามเวลาแล้ว
+3. **ระบบ negotiations (เสนอซื้อนักเตะตรง) เชื่อมครบทั้ง server+client แล้ว** — ใช้งานได้จริงผ่านเมนู "More" ตอน `career.playMode === "online"`
+
+## สรุปเซสชันนี้ (2026-07-05 — เชื่อม liveMatchService เข้า day-tick จริง + ฟีเจอร์ดูสดแมทอื่น)
+
+ทำต่อจากงานค้าง B ในเวอร์ชันก่อนหน้า (ดู commit `162e266`) — `liveMatchService.js`/ฟิลด์ `Match` ใหม่เขียนไว้ตั้งแต่รอบก่อนแต่ไม่มีจุดไหนเรียกใช้เลย รอบนี้ wire เข้าให้ใช้งานได้จริง (อยู่บน branch `claude/progress-check-bgq007`, ยัง**ไม่ได้ merge**เข้า `master`):
+
+- **`runDayTickForShard` (`gameService.js`) เปลี่ยนเป็น 2 เฟส:** เฟส 1 คิกอฟแมทที่ยัง "scheduled" ด้วย `kickOffRoundMatches` (ล็อกสกอร์ทันทีเหมือนเดิม แต่แจกเป็นสคริปต์นาทีให้เดินสดจริง ~6 นาที แทนจบทันที) เฟส 2 หลัง refetch แมท — ถ้า `computeLiveState(match).finished` แล้วค่อย finalize (`played:true`) โดยใช้สกอร์/XI ที่ล็อกไว้ตอนคิกอฟ (**ไม่สุ่มใหม่**)
+- **เจอ+แก้บั๊กแฝงระหว่างทาง:** `prepareUserLiveMatch` เดิมล็อก `homeGoals/awayGoals` ตอนผู้เล่นกด kickoff เอง แต่ไม่เคยเซ็ต `status`/`kickoffAt` เลย — ถ้า day-tick ยิงมาตอนผู้เล่นยังเล่นแมทตัวเองไม่ทันกด finish (ปกติไม่ชนกันเพราะ day-tick ห่าง ~44-96 นาที แต่เป็นไปได้ในทางทฤษฎี) โค้ดเดิมจะสุ่มสกอร์ทับซ้ำเงียบๆ แล้ว mark จบไปเลยโดยผู้เล่นไม่รู้ตัว — แก้แล้วโดยให้ `prepareUserLiveMatch` stamp `status:"live"`/`kickoffAt`/`homeXIJson`/`awayXIJson` เหมือนกับ `kickOffRoundMatches` ทำให้ระบบเดียวกันคุมทั้งสองเคส (ยังคงมี safety-net เดิมไว้: ถ้าผู้เล่นทิ้งแมทค้างจริง หลัง 6 นาทีผ่านไป day-tick จะ finalize ให้อัตโนมัติด้วยสกอร์ที่ล็อกไว้ ไม่ใช่สุ่มใหม่)
+- **`kickOffRoundMatches` (`liveMatchService.js`)** เพิ่มเงื่อนไข `homeGoals: null` กันไป kick-off ซ้ำแมทที่ผู้เล่นล็อกสกอร์เองไปแล้ว
+- **Endpoint ใหม่:** `GET /api/leagues/:shardId/matches/live` (`leagues.js`) → `getShardMatchesToday` คืนสกอร์สดของทุกแมทในชาร์ดวันนั้น (ของทีมอื่นด้วย ไม่ใช่แค่ของตัวเอง)
+- **Client:** `client/src/lib/online-live.js` (`fetchShardLiveMatches`) + component `OnlineLiveView` ใหม่ใน `football-manager.jsx` เข้าถึงผ่านเมนู More → "📡 ดูสดแมทอื่น" (poll ทุก 15 วิ) — ต้องเพิ่ม alias `@onlinelive` ใน `client/vite.config.js` ด้วย
+- **ยืนยันแล้วทั้ง 2 ระดับ:** (1) เรียกฟังก์ชันตรงกับ dev.db จริงผ่านสคริปต์ (freeze นาฬิกาให้อยู่ในช่วง 9-20 น. ด้วย FakeDate เพราะเวลาจริงตอนทดสอบอยู่นอกช่วง) — เช็คว่า day-tick ทันทีหลัง kickoff ไม่ทับสกอร์ที่ล็อกไว้, แมทบอทอื่นคิกอฟสดจริง, backdate 10 นาทีแล้ว day-tick finalize ถูกด้วยสกอร์เดิม (2) รัน server จริงผ่าน HTTP (`node src/index.js` + curl พร้อม auth token เซ็นจริง) เรียก `POST /advance-day` แล้วเช็ค `GET /matches/live` เห็นสถานะ `live` จริงผ่าน route จริงไม่ใช่แค่ unit-level
+- `npm run build -w client` ผ่าน (vite build, ไม่มี error)
+- **ยังไม่ได้ทำ:** merge branch นี้เข้า `master`, ทดสอบ end-to-end จริงบนเว็บ (client จริงคุยกับ endpoint ใหม่ผ่านเบราว์เซอร์), ตัดสินใจว่าจะเปิดให้ "ผู้เล่นเองก็เห็นแมทตัวเองใน `/matches/live` ระหว่างที่ยังไม่ได้กด kickoff" ยังไงให้ดูดี (ตอนนี้ก็เห็นแบบ `scheduled` ปกติเหมือนแมทอื่น ไม่ได้ error)
 
 ## สรุปเซสชันนี้ (2026-07-04, ยาวมาก — สำคัญมาก อ่านให้ครบ)
 
@@ -84,12 +97,13 @@ User สั่ง "เริ่มทำให้หมดเลย ทำไป
 1. ยืนยันว่า Render deploy `render.yaml` ใหม่ (`bc4850d`) ผ่านจริง + ตั้ง `AUTH_TOKEN_SECRET` ให้ตรงกับ Cloudflare Pages เอง (ดูหัวข้อ "สถานะด่วนที่สุด" ด้านบน)
 2. ทดสอบ login/logout/สร้างสโมสรบนเว็บจริงอีกรอบให้แน่ใจ 100% หลัง deploy ใหม่ (เคยพังจากบั๊ก stack-overflow + save leak มาแล้ว แก้แล้วแต่ควรย้ำเช็คทุกครั้งที่ auth/deploy เปลี่ยน)
 
-**B. งานสำคัญที่สุดตอนนี้ — เชื่อม live match เข้ากลไก shard/day-tick จริง:**
-`liveMatchService.js` (สุ่มสคริปต์ประตูล่วงหน้าตอนคิกอฟ, คำนวณสถานะสดจาก elapsed time, รองรับเปลี่ยนตัวกลางคัน) และฟิลด์ `Match` ใหม่ (`status/kickoffAt/eventsJson/homeXIJson/awayXIJson/subsJson/subsUsed`) เขียนเสร็จแล้วใน `162e266` แต่**ยังไม่มีจุดไหนเรียกใช้เลย** (`grep liveMatchService` ในทั้ง `server/src/routes/` และ `gameService.js` ไม่เจอ):
-1. Regenerate Prisma client ให้รู้จักฟิลด์ใหม่ (`npx prisma generate` ทั้ง sqlite dev + postgresql)
-2. Wire `runDayTickForShard`/route ที่เกี่ยวข้องให้สร้าง `Match` แถวจริงพร้อม `kickoffAt`+`eventsJson` ตอนคิกอฟ แทนที่จะคำนวณผลจบทันที
-3. เพิ่ม endpoint ให้ client อ่านสถานะสด (คำนวณจาก elapsed time ผ่าน `liveMatchService`) แทนการจำลองในเครื่อง
-4. เชื่อม `football-manager.jsx` (`career.playMode==="online"`) เข้ากับ `LeagueShard`/`Club` จริงผ่าน flow นี้ — ตอนนี้ยังเป็นแค่ flag ในเครื่อง ไม่ผูกกับฐานข้อมูลจริงระหว่างแมตช์
+**B. เชื่อม live match เข้ากลไก shard/day-tick จริง — ทำเสร็จแล้วบน branch `claude/progress-check-bgq007` (ยังไม่ merge master):**
+- ✅ Regenerate Prisma client (sqlite dev) — postgresql client จะ generate เองตอน Render build (ดู `render.yaml`)
+- ✅ Wire `runDayTickForShard` ให้คิกอฟแมทด้วย `kickOffRoundMatches` จริง (สคริปต์นาที+เดินสด) แทนจำลองจบทันที แล้ว finalize ทีหลังด้วยสกอร์ที่ล็อกไว้
+- ✅ Endpoint ใหม่ `GET /api/leagues/:shardId/matches/live` ให้อ่านสถานะสดของทุกแมทในชาร์ด
+- ✅ Client เชื่อมแล้ว: `online-live.js` + `OnlineLiveView` (เมนู More → "📡 ดูสดแมทอื่น")
+- **ยังไม่ได้ทำ:** merge branch เข้า `master` + ทดสอบผ่านเบราว์เซอร์จริง (ตอนนี้ยืนยันด้วยสคริปต์เรียกฟังก์ชันตรง + curl ผ่าน HTTP เท่านั้น) — ดูรายละเอียดที่ "สรุปเซสชันนี้ (2026-07-05)" ด้านบน
+- **ข้อ 4 เดิม (เชื่อม `football-manager.jsx` เข้ากับ `LeagueShard`/`Club` จริง) ยังไม่ได้ทำ** — งานรอบนี้ทำแค่ให้แมทของชาร์ดเดินสดจริง+ดูได้ ยังไม่ได้แก้ให้ `career.playMode==="online"` ผูกกับข้อมูลชาร์ดแบบเต็มรูปแบบ (ผูกอยู่แล้วบางส่วนผ่าน `fetchMyShardClub`/`prepareUserLiveMatch` ที่มีอยู่ก่อนหน้า)
 
 **C. งานที่เสร็จแล้ว (เดิมอยู่ในคิว ตอนนี้ทำเสร็จแล้ว — เก็บไว้อ้างอิง):**
 - ✅ `client/src/lib/online-negotiations.js` + หน้า `OnlineMarketView` ใน `football-manager.jsx` (เขียว=เสนอ/รับ, แดง=ปฏิเสธ, ส้ม=ต่อรอง) เข้าถึงผ่านเมนู More เมื่อ `career.playMode==="online"` — `293f3ba`
