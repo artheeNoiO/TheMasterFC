@@ -22,3 +22,12 @@ export async function substitutePlayer(matchId, { outPlayerId, inPlayerId }) {
     body: JSON.stringify({ outPlayerId, inPlayerId }),
   });
 }
+
+/** สั่งอารมณ์ทีมกลางแมทสด — attacking | balanced | defensive */
+export async function setMatchMentality(matchId, mentality) {
+  await ensureOnlineSession();
+  return onlineApi(`/api/matches/${matchId}/mentality`, {
+    method: "POST",
+    body: JSON.stringify({ mentality }),
+  });
+}

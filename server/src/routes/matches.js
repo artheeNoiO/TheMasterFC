@@ -11,6 +11,7 @@ import {
   getShardMatchesToday,
   computeLiveState,
   submitSubstitution,
+  setMatchMentality,
 } from "../services/liveMatchService.js";
 import { prisma } from "../db.js";
 
@@ -46,6 +47,10 @@ router.get("/live/:matchId", requireAuth, async (req, res) => {
       matchId: match.id,
       home: match.homeClub,
       away: match.awayClub,
+      homeMentality: match.homeMentality,
+      awayMentality: match.awayMentality,
+      homeSubsUsed: match.homeSubsUsed,
+      awaySubsUsed: match.awaySubsUsed,
       ...computeLiveState(match),
     });
   } catch (err) {
@@ -59,6 +64,18 @@ router.post("/:matchId/substitute", requireAuth, async (req, res) => {
     const { outPlayerId, inPlayerId } = req.body || {};
     if (!outPlayerId || !inPlayerId) return res.status(400).json({ error: "ต้องระบุ outPlayerId และ inPlayerId" });
     const result = await submitSubstitution(req.user.id, req.params.matchId, { outPlayerId, inPlayerId });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/** สั่งอารมณ์ทีมกลางแมทสด (attacking | balanced | defensive) — เฉพาะแมทของทีมตัวเอง */
+router.post("/:matchId/mentality", requireAuth, async (req, res) => {
+  try {
+    const { mentality } = req.body || {};
+    if (!mentality) return res.status(400).json({ error: "ต้องระบุ mentality" });
+    const result = await setMatchMentality(req.user.id, req.params.matchId, mentality);
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });

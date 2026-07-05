@@ -58,7 +58,7 @@ import {
   cancelMyOffer as cancelOnlineOffer,
 } from "@onlineneg";
 import {
-  fetchShardMatchesToday, fetchLiveMatch, substitutePlayer,
+  fetchShardMatchesToday, fetchLiveMatch, substitutePlayer, setMatchMentality as setOnlineMatchMentality,
 } from "@onlinematch";
 import { createOnlineClubDirect } from "@onlinesession";
 import {
@@ -13573,6 +13573,7 @@ function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
   const [subOut, setSubOut] = useState("");
   const [subIn, setSubIn] = useState("");
   const [subBusy, setSubBusy] = useState(false);
+  const [mentalityBusy, setMentalityBusy] = useState(false);
   const pollRef = useRef(null);
 
   async function poll() {
@@ -13611,6 +13612,19 @@ function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
     }
   }
 
+  async function doMentality(m) {
+    setMentalityBusy(true);
+    setError("");
+    try {
+      await setOnlineMatchMentality(matchId, m);
+      await poll();
+    } catch (e) {
+      setError(e.message || "สั่งอารมณ์ทีมไม่สำเร็จ");
+    } finally {
+      setMentalityBusy(false);
+    }
+  }
+
   const isScheduled = state.status === "scheduled";
   return (
     <Panel style={{ border: `1px solid ${state.finished ? C.steel : isScheduled ? C.amber : C.crimson}` }}>
@@ -13639,6 +13653,35 @@ function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
         </div>
       )}
       {error && <div style={{ fontSize: 11, color: C.crimson, marginBottom: 8 }}>{error}</div>}
+      {isMine && !state.finished && !isScheduled && (
+        <div style={{ borderTop: `1px solid ${C.steel}`, paddingTop: 10, marginBottom: mySquad ? 10 : 0 }}>
+          <div style={{ fontSize: 10.5, color: C.textDim, marginBottom: 6 }}>สั่งอารมณ์ทีม</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[
+              { id: "attacking", label: "⚔️ บุก" },
+              { id: "balanced", label: "⚖️ สมดุล" },
+              { id: "defensive", label: "🛡️ รับ" },
+            ].map((opt) => {
+              const current = (isHome ? state.homeMentality : state.awayMentality) || "balanced";
+              const active = current === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  disabled={mentalityBusy || active}
+                  onClick={() => doMentality(opt.id)}
+                  style={{
+                    flex: 1, fontSize: 10.5, padding: "6px 4px", borderRadius: 6, cursor: active ? "default" : "pointer",
+                    background: active ? "rgba(224,164,88,.2)" : C.panel2,
+                    border: `1px solid ${active ? C.amber : C.steel}`,
+                    color: active ? C.amber : C.chalk, fontWeight: active ? 800 : 400,
+                  }}
+                >{opt.label}</button>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {isMine && !state.finished && !isScheduled && mySquad && (
         <div style={{ borderTop: `1px solid ${C.steel}`, paddingTop: 10 }}>
           <div style={{ fontSize: 10.5, color: C.textDim, marginBottom: 6 }}>เปลี่ยนตัว ({(isHome ? state.homeSubsUsed : state.awaySubsUsed) ?? 0}/{MAX_MATCH_SUBS})</div>

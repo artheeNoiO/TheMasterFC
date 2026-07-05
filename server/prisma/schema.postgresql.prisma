@@ -125,6 +125,8 @@ model Match {
   subsJson     String?
   homeSubsUsed Int       @default(0)
   awaySubsUsed Int       @default(0)
+  homeMentality String   @default("balanced")
+  awayMentality String   @default("balanced")
 
   @@index([shardId, dayNumber])
 }

@@ -2,6 +2,10 @@ import { getBestXI, simulateInstant } from "@siam/game-engine";
 import { prisma } from "../db.js";
 import { GAME_MINUTE_REAL_SECONDS, MATCH_REAL_DURATION_MS, MAX_SUBS_PER_MATCH, isMatchWindowOpen } from "../../../game-version.js";
 
+/** อารมณ์ทีมสั่งกลางแมท — คูณเข้ากับจำนวนประตูที่เหลือของทีมตัวเอง (ง่ายและปลอดภัยกว่าไปแก้ formula ใน game-engine) */
+const MENTALITY_OWN_MULT = { attacking: 1.2, balanced: 1, defensive: 0.8 };
+export const MATCH_MENTALITIES = Object.keys(MENTALITY_OWN_MULT);
+
 /** สุ่มนาทีประตู — ครึ่งหลังมีโอกาสถี่กว่าครึ่งแรกเล็กน้อย (t^0.85 เอนไปทาง fromMinute+span) เหมือนจังหวะฟุตบอลจริง */
 function randomGoalMinute(fromMinute) {
   const span = Math.max(1, 90 - fromMinute);
@@ -230,6 +234,62 @@ export async function submitSubstitution(userId, matchId, { outPlayerId, inPlaye
   });
 
   return { ok: true, subsUsed: subsUsed + 1, maxSubs: MAX_SUBS_PER_MATCH };
+}
+
+/** สั่งอารมณ์ทีมกลางแมทสด (บุก/สมดุล/รับ) — ตัดต่อสคริปต์เหตุการณ์ส่วนที่เหลือใหม่ด้วยตัวคูณอารมณ์ทีม
+ * (ประตูที่เกิดไปแล้วคงเดิมเสมอ เหมือน submitSubstitution) */
+export async function setMatchMentality(userId, matchId, mentality) {
+  if (!MATCH_MENTALITIES.includes(mentality)) {
+    throw new Error(`อารมณ์ทีมต้องเป็นหนึ่งใน ${MATCH_MENTALITIES.join(", ")}`);
+  }
+  const club = await prisma.club.findFirst({ where: { userId } });
+  if (!club) throw new Error("ไม่พบสโมสร");
+
+  const match = await prisma.match.findUnique({ where: { id: matchId } });
+  if (!match) throw new Error("ไม่พบแมตช์");
+  if (match.homeClubId !== club.id && match.awayClubId !== club.id) throw new Error("ไม่ใช่แมตช์ของคุณ");
+
+  const live = computeLiveState(match);
+  if (live.status !== "live") throw new Error("แมตช์นี้ไม่ได้กำลังแข่งสดอยู่");
+
+  const isHome = match.homeClubId === club.id;
+
+  const [homeClub, awayClub, homePlayers, awayPlayers] = await Promise.all([
+    prisma.club.findUnique({ where: { id: match.homeClubId } }),
+    prisma.club.findUnique({ where: { id: match.awayClubId } }),
+    prisma.player.findMany({ where: { clubId: match.homeClubId } }),
+    prisma.player.findMany({ where: { clubId: match.awayClubId } }),
+  ]);
+  const homeXI = match.homeXIJson ? JSON.parse(match.homeXIJson) : resolveXI(homeClub, homePlayers.map(playerToEngine));
+  const awayXI = match.awayXIJson ? JSON.parse(match.awayXIJson) : resolveXI(awayClub, awayPlayers.map(playerToEngine));
+
+  const sim = simulateInstant(
+    clubToEngine(homeClub), homePlayers.map(playerToEngine), homeXI,
+    clubToEngine(awayClub), awayPlayers.map(playerToEngine), awayXI,
+    homeClub.chemistry, awayClub.chemistry,
+  );
+
+  const remainingFraction = Math.max(0, (90 - live.minute) / 90);
+  const newHomeMentality = isHome ? mentality : match.homeMentality;
+  const newAwayMentality = isHome ? match.awayMentality : mentality;
+  const remainingHomeGoals = Math.round(sim.homeGoals * remainingFraction * MENTALITY_OWN_MULT[newHomeMentality]);
+  const remainingAwayGoals = Math.round(sim.awayGoals * remainingFraction * MENTALITY_OWN_MULT[newAwayMentality]);
+
+  const pastEvents = live.events;
+  const futureEvents = generateEventScript({
+    homeGoals: remainingHomeGoals, awayGoals: remainingAwayGoals, fromMinute: live.minute,
+  });
+  const newEvents = [...pastEvents, ...futureEvents].sort((a, b) => a.minute - b.minute);
+
+  await prisma.match.update({
+    where: { id: matchId },
+    data: {
+      eventsJson: JSON.stringify(newEvents),
+      ...(isHome ? { homeMentality: mentality } : { awayMentality: mentality }),
+    },
+  });
+
+  return { ok: true, mentality };
 }
 
 /** รายชื่อแมทสด/รอคิกอฟวันนี้ในชาร์ด — ใครก็ดูได้ (สเปคเทตทีมอื่น) */

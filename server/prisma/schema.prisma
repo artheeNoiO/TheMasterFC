@@ -127,6 +127,9 @@ model Match {
   subsJson     String?
   homeSubsUsed Int       @default(0)
   awaySubsUsed Int       @default(0)
+  /** อารมณ์ทีมระหว่างแมท — สั่งเปลี่ยนได้กลางเกม (attacking | balanced | defensive) มีผลกับ xG ส่วนที่เหลือเท่านั้น */
+  homeMentality String   @default("balanced")
+  awayMentality String   @default("balanced")
 
   @@index([shardId, dayNumber])
 }
