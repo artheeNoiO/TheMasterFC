@@ -1,6 +1,7 @@
 import { getBestXI, simulateInstant } from "@siam/game-engine";
 import { prisma } from "../db.js";
 import { GAME_MINUTE_REAL_SECONDS, MATCH_REAL_DURATION_MS, MAX_SUBS_PER_MATCH, isMatchWindowOpen } from "../../../game-version.js";
+import { awardMatchXp } from "./battlePassService.js";
 
 /** อารมณ์ทีมสั่งกลางแมท — คูณเข้ากับจำนวนประตูที่เหลือของทีมตัวเอง (ง่ายและปลอดภัยกว่าไปแก้ formula ใน game-engine) */
 const MENTALITY_OWN_MULT = { attacking: 1.2, balanced: 1, defensive: 0.8 };
@@ -146,6 +147,11 @@ export async function finalizeFinishedMatches(shardId, dayNumber) {
     await prisma.match.update({ where: { id: match.id }, data: { played: true, status: "finished" } });
     await prisma.standing.update({ where: { id: homeClub.standing.id }, data: applyStandingResult(homeClub.standing, match.homeGoals, match.awayGoals) });
     await prisma.standing.update({ where: { id: awayClub.standing.id }, data: applyStandingResult(awayClub.standing, match.awayGoals, match.homeGoals) });
+
+    const homeResult = match.homeGoals > match.awayGoals ? "win" : match.homeGoals < match.awayGoals ? "loss" : "draw";
+    const awayResult = homeResult === "win" ? "loss" : homeResult === "loss" ? "win" : "draw";
+    if (homeClub.userId) await awardMatchXp(homeClub.userId, homeResult);
+    if (awayClub.userId) await awardMatchXp(awayClub.userId, awayResult);
 
     const homeSquad = homeClub.players.map(playerToEngine);
     const awaySquad = awayClub.players.map(playerToEngine);

@@ -10,8 +10,10 @@ import legendRoutes from "./routes/legends.js";
 import stakeRoutes from "./routes/stake.js";
 import negotiationRoutes from "./routes/negotiations.js";
 import feedbackRoutes from "./routes/feedback.js";
+import battlePassRoutes from "./routes/battlepass.js";
 import { runStakeTick } from "./services/stakeService.js";
 import { runDayTickAll } from "./services/gameService.js";
+import { runMonthlyResetIfDue } from "./services/battlePassService.js";
 import {
   MINUTES_PER_GAME_DAY,
   MATCH_DAYS_PER_SEASON,
@@ -54,6 +56,7 @@ app.use("/api/legends", legendRoutes);
 app.use("/api/stake", stakeRoutes);
 app.use("/api/negotiations", negotiationRoutes);
 app.use("/api/feedback", feedbackRoutes);
+app.use("/api/battlepass", battlePassRoutes);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
@@ -77,6 +80,12 @@ if (process.env.DAY_TICK_DISABLED !== "1") {
       if (active.length) console.log("day-tick:", JSON.stringify(active));
     } catch (e) {
       console.error("day-tick error", e);
+    }
+    try {
+      const reset = await runMonthlyResetIfDue();
+      if (reset.ran) console.log("monthly-reset:", JSON.stringify(reset));
+    } catch (e) {
+      console.error("monthly-reset error", e);
     }
   }, DAY_TICK_POLL_MS);
 }

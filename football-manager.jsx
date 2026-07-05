@@ -61,6 +61,7 @@ import {
   fetchShardMatchesToday, fetchLiveMatch, substitutePlayer, setMatchMentality as setOnlineMatchMentality,
 } from "@onlinematch";
 import { createOnlineClubDirect } from "@onlinesession";
+import { fetchBattlePassStatus, claimBattlePassTier as claimOnlineBattlePassTier } from "@battlepass";
 import {
   createAmbientPitchState, advanceAmbientPitch, ambientAsBallSim,
   computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene, startPenaltyScene,
@@ -6414,6 +6415,9 @@ export default function App({
         )}
         {tab === "onlinematch" && (
           <OnlineMatchCenterView uiLang={uiLang} />
+        )}
+        {tab === "battlepass" && (
+          <BattlePassView uiLang={uiLang} />
         )}
         {tab === "table" && (
           <TableView
@@ -13805,11 +13809,122 @@ function OnlineMatchCenterView({ uiLang = "th" }) {
   );
 }
 
+const BP_REWARD_LABEL = {
+  coin: (r) => `💰 Master Coin x${r.amount}`,
+  cosmetic: (r) => `✨ ไอเทมตกแต่ง: ${r.id}`,
+  staffCard: (r) => `🎴 การ์ดสตาฟ (${r.rarity})`,
+};
+
+function BattlePassView() {
+  const [status, setStatus] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [claimingTier, setClaimingTier] = useState(null);
+
+  async function load() {
+    try {
+      const d = await fetchBattlePassStatus();
+      setStatus(d);
+    } catch (e) {
+      setError(e.message || "โหลด Battle Pass ไม่สำเร็จ");
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function handleClaim(tierNumber) {
+    setClaimingTier(tierNumber);
+    try {
+      await claimOnlineBattlePassTier(tierNumber);
+      await load();
+    } catch (e) {
+      setError(e.message || "รับรางวัลไม่สำเร็จ");
+    } finally {
+      setClaimingTier(null);
+    }
+  }
+
+  if (loading) return <Panel><div style={{ fontSize: 12, color: C.textDim, textAlign: "center", padding: 20 }}>กำลังโหลด...</div></Panel>;
+  if (!status) {
+    return (
+      <Panel>
+        <SectionLabel sub="ต้องเข้าสู่โลกออนไลน์ก่อนถึงจะสะสม XP ได้">🎖️ Battle Pass</SectionLabel>
+        {error && <div style={{ fontSize: 11, color: C.crimson }}>{error}</div>}
+      </Panel>
+    );
+  }
+
+  const progressPct = status.nextTierXp
+    ? Math.min(100, Math.round((status.xp / status.nextTierXp) * 100))
+    : 100;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel style={{ border: `1px solid ${C.amber}` }}>
+        <SectionLabel style={{ color: C.amber }} sub={`รอบเดือน ${status.seasonMonth} — รีเซ็ตทุกต้นเดือน (ตารางคะแนนลีคด้วย)`}>🎖️ Battle Pass</SectionLabel>
+        <div style={{ fontSize: 20, fontWeight: 800, color: C.chalk, marginTop: 4 }}>
+          Tier {status.tier} <span style={{ fontSize: 11, color: C.textDim, fontWeight: 500 }}>· {status.xp} XP</span>
+        </div>
+        {status.nextTierXp != null && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ height: 8, borderRadius: 4, background: C.panel2, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${progressPct}%`, background: C.amber, borderRadius: 4 }} />
+            </div>
+            <div style={{ fontSize: 10, color: C.textDim, marginTop: 3 }}>{status.xp} / {status.nextTierXp} XP ถึง tier ถัดไป</div>
+          </div>
+        )}
+        <div style={{ fontSize: 9.5, color: C.textDim, marginTop: 8 }}>
+          ได้ XP จาก: ชนะแมทลีค · เสมอ · แพ้ (น้อยกว่า) · login รายวัน
+        </div>
+      </Panel>
+
+      {error && <div style={{ fontSize: 11, color: C.crimson, padding: "8px 10px", borderRadius: 8, background: "rgba(193,68,14,.15)" }}>{error}</div>}
+
+      <Panel>
+        <SectionLabel sub="ปลดล็อกตาม XP สะสม — กดรับได้ทันทีที่ถึง tier">รางวัลตาม Tier</SectionLabel>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {status.tiers.map((row) => {
+            const unlocked = status.xp >= row.xpRequired;
+            const claimed = status.claimedTiers.includes(row.tier);
+            return (
+              <div key={row.tier} style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                padding: "9px 10px", borderRadius: 8,
+                background: unlocked ? C.panel2 : "rgba(255,255,255,.03)",
+                border: `1px solid ${unlocked ? C.amber : C.steel}`, opacity: unlocked ? 1 : 0.55,
+              }}>
+                <div>
+                  <div style={{ fontSize: 11.5, fontWeight: 700, color: C.chalk }}>Tier {row.tier} <span style={{ fontSize: 9.5, color: C.textDim, fontWeight: 500 }}>({row.xpRequired} XP)</span></div>
+                  <div style={{ fontSize: 10, color: C.textDim, marginTop: 2 }}>{(BP_REWARD_LABEL[row.reward.type] || (() => "รางวัล"))(row.reward)}</div>
+                </div>
+                {claimed ? (
+                  <span style={{ fontSize: 10, color: C.good, fontWeight: 700 }}>✅ รับแล้ว</span>
+                ) : unlocked ? (
+                  <button type="button" disabled={claimingTier === row.tier} onClick={() => handleClaim(row.tier)} style={{
+                    fontSize: 10.5, fontWeight: 700, padding: "6px 12px", borderRadius: 6, cursor: "pointer",
+                    background: C.amber, color: "#1c1305", border: "none",
+                  }}>
+                    {claimingTier === row.tier ? "..." : "รับรางวัล"}
+                  </button>
+                ) : (
+                  <span style={{ fontSize: 10, color: C.textDim }}>🔒</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
 /* ============================== MORE MENU ============================== */
 function MoreView({ setTab, marketOpen, isOnline }) {
   const items = [
     ...(isOnline ? [{ id: "onlinematch", label: "แข่งขันสด", desc: "ดูแมทอัตโนมัติตามเวลาจริง + เปลี่ยนตัว", icon: "🔴" }] : []),
     ...(isOnline ? [{ id: "onlinemarket", label: "ตลาดออนไลน์", desc: "เสนอซื้อนักเตะทีมอื่นโดยตรง", icon: "🤝" }] : []),
+    ...(isOnline ? [{ id: "battlepass", label: "Battle Pass", desc: "XP รายเดือน · รับรางวัลตาม tier", icon: "🎖️" }] : []),
     { id: "profile", label: "โปรไฟล์สโมสร", desc: "ถ้วยรางวัล · สถิติทุกฤดูกาล", icon: "🏆" },
     { id: "club", label: "สโมสร", desc: "แฟนบอล · สปอนเซอร์ · การเงิน", icon: "🏟️" },
     { id: "staffcards", label: "การ์ดสตาฟ", desc: "สุ่ม · กระเป๋า · รวมการ์ด", icon: "🎴" },
@@ -13858,7 +13973,7 @@ function BottomNav({ tab, setTab, marketOpen, marketSub, setMarketSub, uiLang = 
     { id: "squad", label: t(uiLang, "nav.squad"), icon: "👕" },
     { id: "tactics", label: t(uiLang, "nav.tactics"), icon: "☰" },
     { id: "market", label: t(uiLang, "nav.market"), icon: marketOpen ? "●" : "¤", dot: marketOpen },
-    { id: "more", label: t(uiLang, "nav.more"), icon: "⋯", active: ["table", "training", "academy", "settings", "shop", "staffcards", "coach", "medical", "club", "profile", "feedback"].includes(tab) },
+    { id: "more", label: t(uiLang, "nav.more"), icon: "⋯", active: ["table", "training", "academy", "settings", "shop", "staffcards", "coach", "medical", "club", "profile", "feedback", "battlepass"].includes(tab) },
   ];
   return (
     <nav className="fc-bottom-nav">

@@ -2,6 +2,7 @@ import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { requireAuth } from "../middleware/auth.js";
 import { createClubForUser, getClubForUser, updateClubTactics, patchUserRoadmap } from "../services/gameService.js";
+import { awardDailyLoginXp } from "../services/battlePassService.js";
 
 const router = Router();
 
@@ -15,6 +16,7 @@ const createClubLimiter = rateLimit({
 
 router.get("/me", requireAuth, async (req, res) => {
   const club = await getClubForUser(req.user.id);
+  if (club) awardDailyLoginXp(req.user.id).catch((err) => console.error("awardDailyLoginXp error", err));
   res.json({
     club,
     staffDraws: club?.staffDraws,

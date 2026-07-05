@@ -38,6 +38,7 @@ export default defineConfig({
       "@onlineneg": path.resolve(root, "src/lib/online-negotiations.js"),
       "@onlinematch": path.resolve(root, "src/lib/online-match.js"),
       "@onlinesession": path.resolve(root, "src/lib/online-session.js"),
+      "@battlepass": path.resolve(root, "src/lib/battlepass.js"),
     },
   },
 });

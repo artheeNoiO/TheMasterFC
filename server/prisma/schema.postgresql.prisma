@@ -19,6 +19,7 @@ model User {
   onlineUnlockedAt DateTime?
   createdAt        DateTime  @default(now())
   club             Club?
+  battlePass       BattlePassProgress[]
 }
 
 model LeagueShard {
@@ -246,4 +247,25 @@ model PlayerOffer {
 
   @@index([shardId, toClubId, status])
   @@index([shardId, fromClubId, status])
+}
+
+/** ความคืบหน้า Battle Pass ต่อผู้ใช้ต่อเดือน (seasonMonth = "YYYY-MM" ตามเวลาไทย)
+ * ไม่ลบของเดือนเก่าทิ้ง — แค่ query เฉพาะเดือนปัจจุบันเป็นค่าที่ใช้งานจริง (เดือนใหม่ = แถวใหม่โดยธรรมชาติ) */
+model BattlePassProgress {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seasonMonth  String
+  xp           Int      @default(0)
+  claimedTiers String   @default("[]")
+  lastLoginDay String?
+  createdAt    DateTime @default(now())
+
+  @@unique([userId, seasonMonth])
+}
+
+/** ค่ากลางระดับเซิร์ฟเวอร์ — แถวเดียว (id="singleton") เก็บว่ารีเซ็ตรายเดือนล่าสุดทำไปเดือนไหนแล้ว */
+model GameGlobalState {
+  id                    String @id @default("singleton")
+  lastMonthlyResetMonth String?
 }

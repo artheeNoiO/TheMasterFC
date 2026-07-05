@@ -92,6 +92,47 @@ export const DIVISION_NAMES = {
 export const PROMOTE_COUNT = 2; // อันดับ 1-2 เลื่อนชั้น
 export const RELEGATE_COUNT = 2; // 2 อันดับสุดท้ายตกชั้น
 
+/** Battle Pass — รอบเดือนปฏิทิน (ตามเวลาไทย) ไม่ผูกกับรอบดิวิชั่น/ฤดูกาล
+ * XP ได้จาก: ผลแมทลีค (ชนะ/เสมอ/แพ้), login รายวัน — เควสรายวัน/รายสัปดาห์ยังไม่ทำ (รอออกแบบเนื้อหาเควส) */
+export const BP_XP_WIN = 30;
+export const BP_XP_DRAW = 15;
+export const BP_XP_LOSS = 5;
+export const BP_XP_DAILY_LOGIN = 10;
+
+/** ตาราง tier — xpRequired คือ XP สะสมขั้นต่ำที่ปลดล็อก tier นั้น (เรียงจากน้อยไปมาก) */
+export const BATTLE_PASS_TIERS = [
+  { tier: 1, xpRequired: 0, reward: { type: "coin", amount: 50 } },
+  { tier: 2, xpRequired: 100, reward: { type: "coin", amount: 50 } },
+  { tier: 3, xpRequired: 220, reward: { type: "cosmetic", id: "kit_trim_gold" } },
+  { tier: 4, xpRequired: 360, reward: { type: "coin", amount: 100 } },
+  { tier: 5, xpRequired: 520, reward: { type: "staffCard", rarity: "rare" } },
+  { tier: 6, xpRequired: 700, reward: { type: "coin", amount: 100 } },
+  { tier: 7, xpRequired: 900, reward: { type: "cosmetic", id: "crest_effect_flame" } },
+  { tier: 8, xpRequired: 1120, reward: { type: "coin", amount: 150 } },
+  { tier: 9, xpRequired: 1360, reward: { type: "staffCard", rarity: "epic" } },
+  { tier: 10, xpRequired: 1620, reward: { type: "coin", amount: 300 } },
+];
+
+/** เดือนปัจจุบันตามเวลาไทย ในรูป "YYYY-MM" — ใช้เป็น key ของ BattlePassProgress และตัวเทียบรีเซ็ตรายเดือน */
+export function currentSeasonMonth(date = new Date()) {
+  var parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: GAME_TIMEZONE, year: "numeric", month: "2-digit",
+  }).formatToParts(date);
+  var y = parts.find((p) => p.type === "year").value;
+  var m = parts.find((p) => p.type === "month").value;
+  return y + "-" + m;
+}
+
+/** วันที่ปัจจุบันตามเวลาไทย ในรูป "YYYY-MM-DD" — กันเช็ค login ซ้ำวันเดียวกัน */
+export function currentGameDay(date = new Date()) {
+  var parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: GAME_TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date);
+  return parts.find((p) => p.type === "year").value + "-" +
+    parts.find((p) => p.type === "month").value + "-" +
+    parts.find((p) => p.type === "day").value;
+}
+
 /** ชั่วโมงปัจจุบันตามเวลาไทย (0-23, รวมเศษนาทีเป็นทศนิยม) — ไม่พึ่ง timezone ของเครื่อง/เซิร์ฟเวอร์ */
 export function bangkokHourNow(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {
