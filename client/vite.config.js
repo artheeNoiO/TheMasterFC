@@ -36,6 +36,8 @@ export default defineConfig({
       "@beta": path.resolve(root, "src/BetaBanner.jsx"),
       "@locale": path.resolve(root, "src/lib/site-locale.js"),
       "@onlineneg": path.resolve(root, "src/lib/online-negotiations.js"),
+      "@onlinematch": path.resolve(root, "src/lib/online-match.js"),
+      "@onlinesession": path.resolve(root, "src/lib/online-session.js"),
     },
   },
 });

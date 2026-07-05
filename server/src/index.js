@@ -13,7 +13,6 @@ import feedbackRoutes from "./routes/feedback.js";
 import { runStakeTick } from "./services/stakeService.js";
 import { runDayTickAll } from "./services/gameService.js";
 import {
-  MS_PER_GAME_DAY,
   MINUTES_PER_GAME_DAY,
   MATCH_DAYS_PER_SEASON,
   DAILY_STAFF_CARD_DRAWS,
@@ -65,17 +64,21 @@ app.listen(port, () => {
   console.log(`Daily staff card draws: ${DAILY_STAFF_CARD_DRAWS}/calendar day`);
 });
 
-/* League day-tick — จบ 1 ฤดูกาลใน 24 ชม. (~96 นาที/นัด) · cron ภายนอกเป็น backup */
+/* League day-tick — คิกอฟ/ปิดจบแมทตามเวลาจริง (ดู liveMatchService.js) ต้อง poll ถี่กว่า MS_PER_GAME_DAY มาก
+ * เพราะแมทคิกอฟแล้วจบใน ~6 นาทีจริง (MATCH_REAL_DURATION_MS) ไม่ใช่ทันทีเหมือนเดิม — ถ้า poll ทุก
+ * MS_PER_GAME_DAY (~44 นาที) จะปิดจบ/คิกอฟรอบถัดไปช้าไปเกือบเท่าตัว (เคยเป็นแบบนั้นตอนยัง instant-sim
+ * ทุกอย่างในทีเดียว ตอนนี้ต้อง poll ถี่ๆ แล้วปล่อยให้ throttle ภายในของ runDayTickForShard เป็นตัวคุมจังหวะแทน) */
+const DAY_TICK_POLL_MS = 30_000;
 if (process.env.DAY_TICK_DISABLED !== "1") {
   setInterval(async () => {
     try {
       const results = await runDayTickAll();
-      const active = results.filter((r) => r.action && r.action !== "throttled");
+      const active = results.filter((r) => r.action && r.action !== "throttled" && r.action !== "outside_match_window");
       if (active.length) console.log("day-tick:", JSON.stringify(active));
     } catch (e) {
       console.error("day-tick error", e);
     }
-  }, MS_PER_GAME_DAY);
+  }, DAY_TICK_POLL_MS);
 }
 
 /* Stake League real-time tick */

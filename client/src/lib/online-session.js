@@ -107,3 +107,24 @@ export async function bootstrapOnlineDirect() {
   }
   return onlineApi("/api/clubs/me");
 }
+
+/** เลือก "ออนไลน์" ตั้งแต่หน้าสร้างสโมสรครั้งแรก — สร้างสโมสรจริงบนชาร์ดเซิร์ฟเวอร์ทันที
+ * (ไม่ใช่แค่ตั้งค่า playMode="online" ในเซฟโลกจำลองเฉยๆ ซึ่งไม่มีสโมสรจริงอยู่หลังบ้านเลย) */
+export async function createOnlineClubDirect(clubConfig) {
+  await ensureOnlineSession();
+  try {
+    await onlineApi("/api/auth/unlock-online", {
+      method: "POST",
+      body: JSON.stringify({ teamValue: 500_000_000 }),
+    });
+  } catch {
+    /* ปลดล็อกแล้ว */
+  }
+  const existing = await onlineApi("/api/clubs/me");
+  if (existing.club) return existing;
+  await onlineApi("/api/clubs", {
+    method: "POST",
+    body: JSON.stringify(clubConfig),
+  });
+  return onlineApi("/api/clubs/me");
+}

@@ -6,7 +6,7 @@ import {
   getRosterForTeam, hasFullRosterLeague, ROSTER_STATS, getRosterForLeague,
 } from "@legend";
 import { starsFromRating, getPlayerStarProfile, STAR_LABEL_TH, STAR_MAX, starWageMultiplier } from "@stars";
-import { GAME_NAME, GAME_TAGLINE, GAME_VERSION, SAVE_VERSION, FEATURES, STARTING_BUDGET, STARTER_MASTER_COINS, BETA_TEST, BETA_STARTING_BUDGET, BETA_STARTER_MASTER_COINS, GAME_DISCORD_URL, GAME_DISCORD_LABEL, GAME_DISCORD_HINT, DAILY_STAFF_CARD_DRAWS, MINUTES_PER_GAME_DAY, MATCH_DAYS_PER_SEASON } from "@version";
+import { GAME_NAME, GAME_TAGLINE, GAME_VERSION, SAVE_VERSION, FEATURES, STARTING_BUDGET, STARTER_MASTER_COINS, BETA_TEST, BETA_STARTING_BUDGET, BETA_STARTER_MASTER_COINS, GAME_DISCORD_URL, GAME_DISCORD_LABEL, GAME_DISCORD_HINT, DAILY_STAFF_CARD_DRAWS, MINUTES_PER_GAME_DAY, MATCH_DAYS_PER_SEASON, GAME_MINUTE_REAL_SECONDS } from "@version";
 import {
   genPlayerName, pickNationalityForTeam, pickNationality, getNationality,
   formatNationality, ensurePlayerNationality, resolvePlayerNationality,
@@ -57,6 +57,10 @@ import {
   rejectOffer as rejectOnlineOffer, counterOffer as counterOnlineOffer,
   cancelMyOffer as cancelOnlineOffer,
 } from "@onlineneg";
+import {
+  fetchShardMatchesToday, fetchLiveMatch, substitutePlayer,
+} from "@onlinematch";
+import { createOnlineClubDirect } from "@onlinesession";
 import {
   createAmbientPitchState, advanceAmbientPitch, ambientAsBallSim,
   computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene, startPenaltyScene,
@@ -4320,7 +4324,7 @@ export default function App({
   function startCareer(clubConfig, mode = "sandbox") {
     if (booting) return;
     setBooting(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
         const fresh = createNewCareer(clubConfig, profile?.name || accountUser?.username || "ผู้จัดการใหม่");
         if (mode === "online") {
@@ -4330,6 +4334,14 @@ export default function App({
           fresh.onlineUnlocked = true;
           fresh.onlineUnlockedAt = Date.now();
           fresh.log = [`🌐 เลือกเริ่มในโลกออนไลน์ตั้งแต่แรก — ลีคเดียวกับผู้เล่นจริง`, ...fresh.log];
+          try {
+            // สร้างสโมสรจริงบนชาร์ดเซิร์ฟเวอร์ — ถ้าไม่ทำจุดนี้ playMode จะเป็น "online" แค่ในเซฟโลกจำลอง
+            // ไม่มีสโมสรจริงอยู่หลังบ้านเลย (ระบบแมทอัตโนมัติ/สเปคเทตจะหาไม่เจอ)
+            await createOnlineClubDirect(clubConfig);
+          } catch (e) {
+            console.error("createOnlineClubDirect failed", e);
+            showToast("เชื่อมสโมสรออนไลน์ไม่สำเร็จ — เข้า \"ตั้งค่า\" แล้วกด \"เข้าสู่โลกออนไลน์\" อีกครั้งได้");
+          }
         }
         setCareer(checkOnlineUnlock(fresh));
         persist(fresh);
@@ -6396,6 +6408,9 @@ export default function App({
         )}
         {tab === "onlinemarket" && (
           <OnlineMarketView uiLang={uiLang} />
+        )}
+        {tab === "onlinematch" && (
+          <OnlineMatchCenterView uiLang={uiLang} />
         )}
         {tab === "table" && (
           <TableView
@@ -13443,9 +13458,208 @@ function OnlineMarketView({ uiLang = "th" }) {
   );
 }
 
+/* ============================== ONLINE LIVE MATCH CENTER (สเปคเทตแมทจริงบนเซิร์ฟเวอร์) ============================== */
+
+/** นับนาทีในเกมแบบลื่นระหว่างโพล — ประมาณจากเวลาจริงที่ผ่านไปตั้งแต่โพลล่าสุด ไม่รอ query ใหม่ทุกวินาที */
+function useSmoothMatchMinute(serverMinute, kickoffAt, finished) {
+  const [displayMinute, setDisplayMinute] = useState(serverMinute);
+  useEffect(() => {
+    setDisplayMinute(serverMinute);
+    if (finished || !kickoffAt) return;
+    const id = setInterval(() => {
+      const elapsedMs = Date.now() - new Date(kickoffAt).getTime();
+      const m = Math.min(90, Math.max(0, Math.floor(elapsedMs / (GAME_MINUTE_REAL_SECONDS * 1000))));
+      setDisplayMinute(m);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [serverMinute, kickoffAt, finished]);
+  return displayMinute;
+}
+
+function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
+  const [state, setState] = useState(null);
+  const [error, setError] = useState("");
+  const [subOut, setSubOut] = useState("");
+  const [subIn, setSubIn] = useState("");
+  const [subBusy, setSubBusy] = useState(false);
+  const pollRef = useRef(null);
+
+  async function poll() {
+    try {
+      const data = await fetchLiveMatch(matchId);
+      setState(data);
+    } catch (e) {
+      setError(e.message || "โหลดสถานะแมทไม่สำเร็จ");
+    }
+  }
+  useEffect(() => {
+    poll();
+    pollRef.current = setInterval(poll, 4000);
+    return () => clearInterval(pollRef.current);
+  }, [matchId]);
+
+  const minute = useSmoothMatchMinute(state?.minute ?? 0, state?.kickoffAt, state?.finished);
+
+  if (!state) return <Panel><div style={{ fontSize: 12, color: C.textDim, textAlign: "center", padding: 16 }}>กำลังโหลด...</div></Panel>;
+
+  const isMine = state.home?.id === myClubId || state.away?.id === myClubId;
+  const isHome = state.home?.id === myClubId;
+
+  async function doSub() {
+    if (!subOut || !subIn) return;
+    setSubBusy(true);
+    setError("");
+    try {
+      await substitutePlayer(matchId, { outPlayerId: subOut, inPlayerId: subIn });
+      setSubOut(""); setSubIn("");
+      await poll();
+    } catch (e) {
+      setError(e.message || "เปลี่ยนตัวไม่สำเร็จ");
+    } finally {
+      setSubBusy(false);
+    }
+  }
+
+  const isScheduled = state.status === "scheduled";
+  return (
+    <Panel style={{ border: `1px solid ${state.finished ? C.steel : isScheduled ? C.amber : C.crimson}` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 800, color: state.finished ? C.textDim : isScheduled ? C.amber : C.crimson }}>
+          {state.finished ? "⏹ จบการแข่งขัน" : isScheduled ? "⏳ รอคิกอฟรอบถัดไป" : `🔴 สด · นาที ${minute}'`}
+        </span>
+        {onClose && <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 16, cursor: "pointer" }}>✕</button>}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: state.home?.id === myClubId ? C.amber : C.chalk }}>{state.home?.name}</div>
+        </div>
+        <div style={{ fontSize: 22, fontWeight: 800, fontFamily: MONO_FONT, padding: "0 14px" }}>{state.homeGoals} - {state.awayGoals}</div>
+        <div style={{ flex: 1, textAlign: "center" }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: state.away?.id === myClubId ? C.amber : C.chalk }}>{state.away?.name}</div>
+        </div>
+      </div>
+      {state.events?.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+          {state.events.map((e, i) => (
+            <div key={i} style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT }}>
+              ⚽ {e.minute}' — {e.side === "home" ? state.home?.name : state.away?.name}
+            </div>
+          ))}
+        </div>
+      )}
+      {error && <div style={{ fontSize: 11, color: C.crimson, marginBottom: 8 }}>{error}</div>}
+      {isMine && !state.finished && !isScheduled && mySquad && (
+        <div style={{ borderTop: `1px solid ${C.steel}`, paddingTop: 10 }}>
+          <div style={{ fontSize: 10.5, color: C.textDim, marginBottom: 6 }}>เปลี่ยนตัว ({(isHome ? state.homeSubsUsed : state.awaySubsUsed) ?? 0}/{MAX_MATCH_SUBS})</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+            <select value={subOut} onChange={(e) => setSubOut(e.target.value)} style={{ flex: 1, fontSize: 11, padding: 6, borderRadius: 6, background: C.panel2, color: C.chalk, border: `1px solid ${C.steel}` }}>
+              <option value="">ตัวออก...</option>
+              {mySquad.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <select value={subIn} onChange={(e) => setSubIn(e.target.value)} style={{ flex: 1, fontSize: 11, padding: 6, borderRadius: 6, background: C.panel2, color: C.chalk, border: `1px solid ${C.steel}` }}>
+              <option value="">ตัวเข้า...</option>
+              {mySquad.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <OnlineActionBtn tone="good" disabled={!subOut || !subIn || subBusy} onClick={doSub}>🔄 ยืนยันเปลี่ยนตัว</OnlineActionBtn>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function OnlineMatchCenterView({ uiLang = "th" }) {
+  const [myClub, setMyClub] = useState(null);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [openMatchId, setOpenMatchId] = useState(null);
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const club = await fetchMyShardClub();
+      setMyClub(club);
+      if (club) {
+        const d = await fetchShardMatchesToday();
+        setData(d);
+        const mine = d.matches?.find((m) => m.home?.id === club.id || m.away?.id === club.id);
+        if (mine && !openMatchId) setOpenMatchId(mine.matchId);
+      }
+    } catch (e) {
+      setError(e.message || "โหลดแมทวันนี้ไม่สำเร็จ");
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); const id = setInterval(load, 15000); return () => clearInterval(id); }, []);
+
+  if (loading && !data) return <Panel><div style={{ fontSize: 12, color: C.textDim, textAlign: "center", padding: 20 }}>กำลังโหลด...</div></Panel>;
+  if (!myClub) {
+    return (
+      <Panel>
+        <SectionLabel sub="ต้องเข้าสู่โลกออนไลน์ก่อนถึงจะดูแมทสดได้">🔴 แข่งขันสด</SectionLabel>
+        <div style={{ fontSize: 12, color: C.textDim }}>ยังไม่ได้เชื่อมต่อสโมสรออนไลน์ — ไปที่ "ตั้งค่า" แล้วกด "เข้าสู่โลกออนไลน์" ก่อนครับ</div>
+      </Panel>
+    );
+  }
+
+  const myMatch = data?.matches?.find((m) => m.home?.id === myClub.id || m.away?.id === myClub.id);
+  const otherMatches = data?.matches?.filter((m) => m.matchId !== myMatch?.matchId) || [];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Panel style={{ border: `1px solid ${C.crimson}` }}>
+        <SectionLabel style={{ color: C.crimson }} sub="เตะอัตโนมัติตามเวลาจริง 9:00-20:00 น. — ไม่มีปุ่มกดคิกอฟ ไม่มีเร่งเวลา">🔴 แข่งขันสด</SectionLabel>
+      </Panel>
+      {error && <div style={{ fontSize: 11, color: C.crimson, padding: "8px 10px", borderRadius: 8, background: "rgba(193,68,14,.15)" }}>{error}</div>}
+
+      {myMatch && (
+        <OnlineLiveMatchPanel
+          matchId={myMatch.matchId}
+          myClubId={myClub.id}
+          mySquad={myClub.players}
+        />
+      )}
+      {!myMatch && (
+        <Panel><div style={{ fontSize: 12, color: C.textDim, textAlign: "center", padding: 12 }}>วันนี้ยังไม่มีแมทของทีมคุณ (รอรอบถัดไป)</div></Panel>
+      )}
+
+      {otherMatches.length > 0 && (
+        <Panel>
+          <SectionLabel sub="แตะเพื่อดูสด (สเปคเทตทีมอื่น)">แมทอื่นในลีควันนี้</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {otherMatches.map((m) => (
+              <div key={m.matchId}>
+                <button type="button" onClick={() => setOpenMatchId(openMatchId === m.matchId ? null : m.matchId)} style={{
+                  width: "100%", textAlign: "left", padding: "9px 10px", borderRadius: 8, cursor: "pointer",
+                  background: C.panel2, border: `1px solid ${C.steel}`, color: C.chalk,
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                }}>
+                  <span style={{ fontSize: 11.5 }}>{m.home?.isBot ? "🤖" : "👤"} {m.home?.name} vs {m.away?.name} {m.away?.isBot ? "🤖" : "👤"}</span>
+                  <span style={{ fontSize: 10, fontFamily: MONO_FONT, color: m.finished ? C.textDim : C.crimson }}>
+                    {m.finished ? `จบ ${m.homeGoals}-${m.awayGoals}` : m.status === "scheduled" ? "รอคิกอฟ" : `🔴 ${m.homeGoals}-${m.awayGoals}`}
+                  </span>
+                </button>
+                {openMatchId === m.matchId && (
+                  <div style={{ marginTop: 6 }}>
+                    <OnlineLiveMatchPanel matchId={m.matchId} myClubId={myClub.id} mySquad={null} onClose={() => setOpenMatchId(null)} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
 /* ============================== MORE MENU ============================== */
 function MoreView({ setTab, marketOpen, isOnline }) {
   const items = [
+    ...(isOnline ? [{ id: "onlinematch", label: "แข่งขันสด", desc: "ดูแมทอัตโนมัติตามเวลาจริง + เปลี่ยนตัว", icon: "🔴" }] : []),
     ...(isOnline ? [{ id: "onlinemarket", label: "ตลาดออนไลน์", desc: "เสนอซื้อนักเตะทีมอื่นโดยตรง", icon: "🤝" }] : []),
     { id: "profile", label: "โปรไฟล์สโมสร", desc: "ถ้วยรางวัล · สถิติทุกฤดูกาล", icon: "🏆" },
     { id: "club", label: "สโมสร", desc: "แฟนบอล · สปอนเซอร์ · การเงิน", icon: "🏟️" },
