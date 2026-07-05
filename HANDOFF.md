@@ -1,127 +1,55 @@
 # HANDOFF — The Master Football Club (เดิม The Socker Manager / siam-manager-online)
 
-**อัปเดตล่าสุด:** 2026-07-04 03:xx | **Baseline:** `v0.9.0-stable` (commit `69de209`) → ปัจจุบัน `master` @ `6a895a8`+ (ยังไม่ได้ตั้ง tag ใหม่)
+**อัปเดตล่าสุด:** 2026-07-05 21:50 | โดย: Claude (เซสชันหลัก) | `master` @ `c298a3f` (push ขึ้น GitHub แล้ว)
 
 ## ⚠️ สถานะด่วนที่สุด (อ่านก่อนทำอะไรทั้งหมด)
-1. **Render (server จริง) อาจยังไม่ได้ deploy โค้ดล่าสุด** — push ขึ้น `origin/master` แล้ว (`6a895a8`) แต่ curl เช็ค `/api/auth/register` ตอน ~03:10 token ยังเป็นรูปแบบเก่า (`game:userId` ไม่เซ็น) หลังผ่านไป ~10 นาที แปลว่า auto-deploy อาจไม่ทำงาน — **ต้องเข้า Render Dashboard → `the-socker-manager-api` → Manual Deploy → Deploy latest commit** แล้วเช็คซ้ำว่า token เปลี่ยนเป็นรูปแบบเซ็น (มี `.` คั่น payload กับ signature)
-2. **โค้ด negotiations (เสนอซื้อนักเตะตรง) ฝั่ง server เขียนเสร็จแล้ว แต่ client ยังไม่เชื่อมเลย** — ยังไม่มี UI ใช้งานได้จริง (ดูหัวข้อ "ทำต่อ")
+1. **มี branch อื่นชื่อ `claude/progress-check-bgq007` อยู่บน GitHub** — เป็นงานจากอีกเซสชันที่ทำฟีเจอร์ซ้ำ (day-tick auto-kick + spectate) แต่ **สมบูรณ์น้อยกว่า `master` ตอนนี้มาก** (ไม่มีเปลี่ยนตัว/mentality/ตลาดปิดดีล/แบนเนอร์เตือน/ป้ายลอยสกอร์/กันสมัครใหม่ระหว่างแข่ง) — **ห้าม merge branch นั้นเข้า master** ให้ทิ้งไปหรือ `git reset --hard origin/master` แทน
+2. **Production อยู่บน Render แล้ว** (ไม่ใช่เครื่อง PC บ้านอีกต่อไป) — `the-socker-manager-api` (Postgres + web service), DNS `api.themasterfc.com` ชี้ไป Render (CNAME, DNS-only) — เครื่อง PC บ้านปิดได้เลย ไม่กระทบเว็บ
+3. **ใช้ `Start-Test-Server.bat`** (root) เวลาจะทดสอบ patch ใดๆ — เปิด client+API+SQLite แยกต่างหาก (ports 5174/3002, `server/prisma/test.db`) ไม่แตะ production เด็ดขาด
 
-## สรุปเซสชันนี้ (2026-07-04, ยาวมาก — สำคัญมาก อ่านให้ครบ)
+## โปรเจคนี้คืออะไร
+เกมจัดการทีมฟุตบอลภาษาไทย `football-manager.jsx` (ไฟล์เดียว ~13,000+ บรรทัด) — เดิมเป็น single-player/sandbox ล้วน กำลังต่อเข้าระบบออนไลน์จริง (npm workspaces: `client/` Vite React, `server/` Express+Prisma+Postgres บน Render, `packages/game-engine/`) ให้ผู้เล่นจริงแข่งกันในลีคเดียวกัน (16 ทีม/ชาร์ด, บอทเติมที่ว่าง) แข่งอัตโนมัติตามเวลาจริงช่วง 9:00-20:00 น. ไทย
 
-**บริบท:** Cursor เข้าใจผิดว่า "ทำระบบออนไลน์" = สร้างเกมจำลองใหม่บนเซิร์ฟเวอร์แยกต่างหาก (Club/Player/Match tables + `OnlineMvpApp.jsx` หน้าจอง่ายๆ) แทนที่จะเอาเกมจริง (`football-manager.jsx`) มาต่อกับเซิร์ฟเวอร์ — ทำให้เกิด 2 ระบบคู่ขนานที่ไม่เชื่อมกัน + Cursor เผลอลบด่านบังคับล็อกอินออกระหว่างแก้ไฟล์ (`ShellApp.jsx`) ทำให้เข้าเกมได้โดยไม่ต้องล็อกอิน และเจอบั๊ก stack-overflow ที่ทำให้ **เซฟผู้เล่นถูกลบทิ้งอัตโนมัติ** (ตอนนี้แก้แล้วทั้งหมด)
+## สถานะปัจจุบัน — โหมดออนไลน์ใช้งานได้จริงครบวงจรแล้ว (2026-07-05)
 
-**สิ่งที่ user ยืนยันชัดเจนแล้วว่าต้องการ (สำคัญ อย่าเบี่ยงจากนี้):**
-- `football-manager.jsx` **คือเกมจริงเกมเดียว** ไม่ใช่ "โหมดทดลอง" — ระบบออนไลน์ = เอาเกมนี้ต่อเข้าเซิร์ฟเวอร์ ไม่ใช่สร้างเกมใหม่แยก
-- **กติกาโหมดออนไลน์ (ยืนยันแล้วทุกข้อ):**
-  1. ลีคเดียว 16 ทีม — บอทเติมที่ว่างจนกว่าจะมีคนจริงครบ (ของเดิมจาก Cursor มีอยู่แล้ว `LeagueShard`/`TEAMS_PER_SHARD`)
-  2. 1 วันจริง = 1 ฤดูกาล (15 นัด แบบพบกันหมดรอบเดียว, 16 ทีม), เปิดแข่งเฉพาะ **9:00-20:00 น. เวลาไทย**, หลัง 20:00 = พักฟื้น/อีเวนต์/ตลาด (ห้ามแข่ง)
-  3. Idle แข่งอัตโนมัติได้ (AI คุมให้) แต่เข้าดูสด + เปลี่ยนตัว/ปรับแทคติกเองระหว่างเกม = ได้เปรียบกว่าออโต้ (ยังไม่ได้ implement โบนัสนี้จริง แค่ตกลงแนวคิด)
-  4. **ห้ามมีปุ่มเร่งความเร็ว/ข้ามแมตช์ในโหมดออนไลน์** (แต่เปลี่ยนตัวเองได้ปกติ) — ยังไม่ได้ซ่อนปุ่มจริงในโค้ด
-  5. ความยาวแมตช์ตอนดูสด: **คงไว้สั้นๆ 5-8 นาที** (user ตกลงแล้ว ไม่ยืดยาวขึ้น) — เหตุผล: กลไก "ดูสดได้เปรียบ" ต้องเบาพอให้คนอยากดู ยาวไปจะผลักคนออกจากระบบแทน
-  6. ระบบเสนอซื้อนักเตะตรง (Negotiations สไตล์ Top Eleven) — เสนอซื้อนักเตะทีมอื่นได้แม้ไม่ได้ประกาศขาย ผู้ขายตอบรับ/ปฏิเสธ/ต่อรอง — **นี่คือฟีเจอร์ใหม่หลักที่กำลังสร้าง**
-  7. ปุ่ม/UI หน้าจอใหม่ (โดยเฉพาะหน้าซื้อขาย) ให้ดูง่ายชัดเจนแบบ Top Eleven — ปุ่มใหญ่ ชัด สีสื่อความหมาย (เขียว=เสนอ/รับ, แดง=ปฏิเสธ, ส้ม=ต่อรอง)
+**บั๊กใหญ่ที่แก้ไปวันนี้:** `createClubForUser` เดิมสร้างชาร์ดบอทส่วนตัวให้ทุกคน (ไม่มีใครแชร์ลีคกับใครเลย) + เลือก "ออนไลน์" ตอนสร้างทีมไม่เคยเรียกเซิร์ฟเวอร์สร้างสโมสรจริงเลย (แค่ตั้ง flag ในเซฟ) — **ทั้งสองจุดแก้แล้ว ทดสอบ end-to-end ผ่านจริงด้วย curl/Puppeteer**
 
-## Baseline & Patch workflow (2026-07-03)
+**ฟีเจอร์ที่เสร็จสมบูรณ์วันนี้ (ทดสอบ end-to-end ทุกอย่าง ไม่ใช่แค่ทฤษฎี):**
+1. Shared-shard fix — ผู้เล่นจริงแทนที่บอททีละคนในชาร์ดเดียวกัน (`server/src/services/gameService.js: createClubForUser`)
+2. ระบบแมทเตะอัตโนมัติตามเวลาจริง — คิกอฟ/จบเองไม่ต้องกด (`server/src/services/liveMatchService.js`: `kickOffRoundMatches`/`finalizeFinishedMatches`/`computeLiveState`, ต่อเข้า `runDayTickForShard`) — poll ทุก 30 วิ (`server/src/index.js`, ต้องถี่กว่า `MS_PER_GAME_DAY` เดิมมาก เพราะแมทจบใน ~6 นาทีจริงไม่ใช่ทันที)
+3. Route เปลี่ยนตัวระหว่างแมทสด + ดูแมทคนอื่น (สเปคเทต) — `server/src/routes/matches.js` (`/shard-today`, `/live/:matchId`, `/:matchId/substitute`, `/:matchId/mentality`)
+4. Client หน้า "แข่งขันสด" — `OnlineMatchCenterView`/`OnlineLiveMatchPanel` ใน `football-manager.jsx` (เมนู More) + `client/src/lib/online-match.js`
+5. ป้ายลอยสกอร์สด (`OnlineFloatingScoreWidget`) — ดูสกอร์ได้ทุกแท็บ แก้โจทย์ "ย่อ/ขยาย" ด้วยสถาปัตยกรรมแท็บแทนโมดัล
+6. แบนเนอร์นับถอยหลังก่อนแมทบน Dashboard (`OnlineNextKickoffBanner`, ใช้ `getShardNextKickoffEtaMs`)
+7. สั่งอารมณ์ทีมกลางแมท (บุก/สมดุล/รับ) — `setMatchMentality` คูณ xG ส่วนที่เหลือของแมท
+8. ตลาด: เจรจา/ตกลงได้ทั้งวัน แต่ย้ายทีมจริงพร้อมกันตอน 20:00 (`negotiationService.js`: `accepted_pending` → `executeAcceptedTransfers` เรียกจาก `startNewSeason`)
+9. กันสมัครออนไลน์ใหม่ระหว่างแข่งขัน (`isMarketWindowOpen()` gate ใน `createClubForUser`) — เปิดรับเฉพาะ 20:00-09:00 ให้ทุกคนเริ่มจากตาราง 0-0-0-0 สดๆ
 
-| รายการ | ค่า |
-|--------|-----|
-| **GAME_VERSION** | `0.9.0` |
-| **STABLE_VERSION** | `0.9.0` |
-| **SAVE_VERSION** | `5` — **patch ทั่วไปอย่า bump** |
-| **Git tag** | `v0.9.0-stable` |
-| **ย้อนกลับ** | `git checkout v0.9.0-stable` |
+**ย้ายเซิร์ฟเวอร์ไป Render แล้ว** (`render.yaml` root) — Postgres + web service, DNS `api.themasterfc.com` ชี้ Render โดยตรง เครื่อง PC บ้านไม่ต้องเปิดค้างอีกต่อไป
 
-**Patch ทดลอง (Qwen / Codey):**
-1. `git checkout -b patch/qwen-XXX` จาก `master`
-2. แก้ตาม brief → bump `GAME_VERSION` → `0.9.1-qwen.N`
-3. `npm run build -w client` ผ่าน + ทดเล่น
-4. Claude Director → `VERDICT: PASS|FAIL`
-5. PASS → merge · FAIL → ทิ้ง branch หรือ `git reset --hard v0.9.0-stable`
+## ทำต่อ (คุยออกแบบไว้แล้วแต่ยังไม่เริ่มโค้ด — ใหญ่ทั้งหมด)
 
-**Owner งาน:** logic/live หนัก → Claude/Cursor · patch เล็ก → Codey (Qwen3/OpenRouter)
-
----
-เกมจัดการทีมฟุตบอลภาษาไทย เดิมเป็นโปรโตไทป์ single-file React (`football-manager.jsx`, ~540KB) รันฝั่ง client ล้วน
-กำลังพอร์ตเป็นเวอร์ชันออนไลน์ (สเปคเต็ม: `siam-manager-online-spec.md`): npm workspaces — `client/` (Vite React), `server/` (Express+Prisma), `packages/game-engine/`
-
-**กฎการทำงานกับ user โปรเจคนี้ (สำคัญ):** วินิจฉัย/เสนอแผนก่อน รอ user พิมพ์ "ทำได้" แล้วค่อยแก้โค้ด — ห้ามแก้ทันทีที่เจอบั๊ก
-
-## สถานะปัจจุบัน (2026-07-03 — รีแฟคเตอร์ใหญ่ระบบภาพแมตช์สด)
-**ถอดระบบรีเพลย์/ไฮไลต์แยกฉากออกทั้งหมดตามคำสั่ง user** ("จังหวะมันจะได้ต่อเนื่อง") — ทุกอย่างเล่นสดต่อเนื่องในจอเดียวผ่าน ambient sim:
-
-- **จังหวะยิงสโลว์โมชั่น** (`shotSeq` ใน `live-pitch-ambient.js`): ทุกช็อต (เข้า/เซฟ/หลุดกรอบ/ชนเสา) สโลว์ 0.35x ตั้งแต่เงื้อ (aim ~1 วิจริง) จนบอลถึงปลายทาง — เข้า→สโลว์จนถึงก้นตาข่าย (ลึก 3 หน่วยตามภาพตาข่าย), ไม่เข้า→คืนความเร็วทันที + **เส้นปะวิถียิง** (`shotPath` → `ShotPathLine` ใน `tracker-pitch.jsx`, สูตรโค้งเดียวกับ `tickPassFlight` เส้นทับบอลพอดี)
-- **ฉลองประตู**: ทั้งทีม (ยกเว้น GK) วิ่งไปมุมธงฝั่งที่ยิง แล้วกระโดดดีใจค้าง ~2 วิ (bounce เฉพาะภาพ ไม่แตะฟิสิกส์) ระหว่างนั้นบอลกลิ้งไปหาตัวเขี่ยกลางของฝั่งเสีย
-- **ซีนเตะมุม** (`startCornerScene`): บอลกลิ้งออกหลังเส้น → คนเตะ+ตัวส่งสั้นวิ่งไปมุมธง, 5 คนออหน้าโกล, ฝั่งรับประกบ → เปิดโค้ง → สุ่มจบ: โหม่ง (ต่อเข้า shotSeq สโลว์โม 55%) / เคลียร์ (25%) / GK จับ (20%) → ทุกคนกลับตำแหน่ง
-- **ซีนฟรีคิก** (`startFreekickScene`, trigger 40% ของฟาวล์): กำแพง 4 คนเดินเข้าที่ → ยิงสโลว์โม → กลับตำแหน่ง
-- **GK เปิดเกมใหม่หลังได้บอล**: ถือ ~1 วิ แล้วสุ่มเปิดยาวขึ้นหน้า (FW/MF) หรือส่งสั้นตาม AI ปกติ (`gkHold`/`forceGkLaunch`)
-- **บอลไม่วาป**: เพดานความเร็วกลิ้ง `ROLL_SPEED=30` หน่วย/วิ (`rollBallToward`) ใช้ทุกจุดที่บอลต้องเลื่อนหาเป้า — เปลี่ยนตัวครอง/จบช็อต/ตั้งเตะมุม ฯลฯ
-- **GK ยืนกรอบเล็กหน้าประตู** (px 3.5/96.5, py 39-61 — กรอบเล็กบนภาพลึก 6 กว้าง 38-62) + ยกเว้น GK จาก clamp ขอบสนาม PLAY_MIN=8 + `dribbleBallAtCarrier` clamp ขยายเป็น 4-96 (เดิม 22-78 ทำบอลลอยห่างมือ GK)
-- **ปีกเลี้ยงริมเส้น**: ปีกครองบอล → พาบอลวิ่งเกาะเส้นข้างขึ้นหน้า + ถือบอลนานขึ้น (+0.9 วิ)
-- **กองหน้าเกาะไลน์กองหลังคู่แข่ง**: `defLineOf` เฉลี่ย px ของ DF ฝ่ายตรงข้าม → FW lerp 0.75 ไปยืน 1.2 หน่วยหน้าไลน์
-- **ลดความเร็ว**: บอล ×0.75 อีกรอบ (`PASS_PROFILES` รวม ~0.53 ของค่าแรก), นักเตะ `SPEED_SCALE=0.72`, ถือบอลนานขึ้น — และความเร็วนักเตะคูณ `timeScale` ด้วย (คนช้าลงพร้อมบอลตอนสโลว์โม)
-- **เวลาเกม**: `HALF_SECONDS=428` ≈ ครึ่งละ 3 นาทีจริงที่ 1x + โอกาส shot/corner/foul คูณ `speed` ชดเชยติ๊ก (เหตุการณ์ต่อแมตช์คงที่ทุกความเร็ว)
-- **ผู้ตัดสิน**: วิ่งตามบอลมีหน่วง, ใบเหลือง/แดง (16% ของฟาวล์, 2 เหลือง=แดง) โชว์ emoji เหนือหัว + banner + สถิติ, เสียงนกหวีดสังเคราะห์ WebAudio ทุกฟาวล์ (`playWhistle`, เคารพ mute)
-- **การไหลของสกอร์**: React tick ตัดสินผลช็อต+นับสกอร์ทันที (กัน edge จบครึ่ง) แต่ GOAL flash เด้งตอนบอลถึงตาข่ายจริงผ่าน `pendingEvents` — ช็อตที่เกิดในซีน (โหม่งเตะมุม/ฟรีคิก, `counted:false`) React นับสถิติ+สกอร์ตอน resolve ใน rAF drain
-- **ไฟล์กำพร้า (ไม่มีใคร import แล้ว ลบได้ถ้าต้องการ):** `GoalHighlightOverlay.jsx`, `goal-highlight-scenarios.js`
-- compile ผ่านหมด — **แช่ baseline แล้ว:** tag `v0.9.0-stable`, CHANGELOG มี entry baseline
-
-## สถานะล่าสุด (รอบดึก 2026-07-03 — บั๊กฟิกซ์ + ฟีเจอร์ A-D อนุมัติล่วงหน้าทั้งชุด)
-User สั่ง "เริ่มทำให้หมดเลย ทำไปทีละจุด A > D" แล้วออกไปข้างนอก — ทำครบทั้ง 4 ข้อ ไม่ได้หยุดถามระหว่างทำ (ตามที่อนุมัติไว้ล่วงหน้า) ทุกข้อ **ยืนยันด้วยบอท puppeteer จริง** (เปิดเกมจริงใน Edge headless, คลิกจริง, จับ error/พิกัด/นาฬิกา) ไม่ใช่แค่อ่านโค้ด:
-
-- **บั๊กก่อนหน้า (เจอ+แก้ก่อนเริ่มคิว A-D):** บอลวาป = CSS transition ค้างบนสไปรต์บอลใน `tracker-pitch.jsx` (ถอดแล้ว, วัดจาก 8 ครั้ง/นาทีเหลือ 0), GK ยิงข้ามสนาม = `beginAmbientShot` ดึงตัวครองบอลค้างที่อาจเป็น GK มายิงตรงๆ (เพิ่ม guard เช็ค `pos==="GK"` ยกเลิกจังหวะยิงถ้าเจอ)
-- **(A) ปีกวิ่งเลยบอล** — เป้าหมายเดิมอิงตัวเอง+9 ทุกเฟรม (ไม่มีจุดยึด ไหลไม่หยุด) → เปลี่ยนเป็นอิงตำแหน่งบอลจริง (เหมือนผู้ครองบอลทั่วไป) แค่ `lerp` แกน py เข้าเส้นข้าง 35% กันวิ่งเลยบอล
-- **(B) กลับตำแหน่ง+นกหวีดหลังประตู** — เพิ่มสเตจ `s.restart` ใน `live-pitch-ambient.js`: ฉลองจบ (3.6วิ) → ทั้ง 2 ทีมเดินกลับฟอร์เมชันจริง (ไม่ใช่ตำแหน่งขยับตามบอล) ~1.8วิ → นกหวีด (`pendingEvents: kickoffWhistle`) → เล่นต่อ กันช็อต/เตะมุม/ฟรีคิกใหม่ trigger ซ้อนด้วย guard `!X.restart`
-- **(C) ฉากก่อนเริ่มเกม** — กด "ลงสนาม" แล้ว: หน้ารายชื่อ 11 ตัวจริง+ดาว/เรตติ้ง ฝั่งบ้าน 5วิ → ฝั่งเยือน 5วิ (กดข้ามได้) → นักเตะเดินจริงจากจุดอุโมงเข้าตำแหน่งฟอร์เมชัน ~3.6วิ (กดข้ามได้) → นกหวีด (ข้ามไม่ได้) → เขี่ยเปิดเกม `paused` เริ่มที่ `true` จนนกหวีดจบถึง `false` — คอมโพเนนต์ใหม่ `LineupScreen`/`KickoffWhistleBanner` ใน `football-manager.jsx`
-- **(D) ฉากเปลี่ยนตัว** — กดยืนยันตัวสำรองในแผงเปลี่ยนตัวระหว่างเกม (ไม่ใช่ตอนพักครึ่ง — พักครึ่งยังเป็น `doSub` แบบเดิมทันที) จะเรียก `startSubScene`: หยุดเกมสนิททันที → ผจก./ตัวสำรอง/ผู้ช่วยผู้ตัดสิน/คนถือป้ายโผล่ริมเส้น (~2วิ, ป้ายโชว์ "เลขออก → เลขเข้า") → เดินสวนกันจริง ~2.2วิ (ตัวเข้าเดินไปตำแหน่งเดิมของตัวออก / ตัวออกเดินไปหา ผจก.) → จบฉาก: XI/เรตติ้ง/events/subsUsed อัปเดตจริงตอนนี้ (ไม่ใช่ตอนกดยืนยัน) + ฉากทั้งหมดหาย + เล่นต่อ — ยืนยันด้วยบอทว่านาฬิกา**นิ่งสนิทเป๊ะ**ตลอดฉากแล้วเดินต่อพอดีตอนจบ
-  - **รู้อยู่แล้วว่ายังไม่สมบูรณ์:** ป้ายเลข+ผจก.+ผู้ช่วยผู้ตัดสินยืนชิดกันไป ป้ายชื่อ (name label) ทับกันอ่านยาก ณ จุดริมเส้น (px:46,py:97) — ใช้งานได้แต่ควรขยับให้ห่างกันมากกว่านี้ถ้ามีเวลาต่อ
-- ไฟล์ที่แตะรอบนี้: `live-pitch-ambient.js`, `football-manager.jsx`, `tracker-pitch.jsx` — compile ผ่านหมด (Vite 200) ทุกไฟล์
-- **เครื่องมือทดสอบใหม่ที่ตั้งไว้ (สำคัญ ใช้ต่อได้เรื่อยๆ):** `puppeteer-core` ติดตั้งไว้ที่ scratchpad เปิดเกมจริงด้วย Microsoft Edge headless (`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`) — คลิกปุ่มจริงด้วย regex ข้อความ, จับ `pageerror`/`console.error`, อ่านนาฬิกา/DOM, ถ่าย screenshot, วัดพิกัด DOM ต่อเฟรมด้วย `requestAnimationFrame` (ใช้จับบอลวาปมาแล้ว) — เร็วกว่าและแม่นกว่าอ่านโค้งอย่างเดียวมาก ควรใช้ทุกครั้งที่มีบั๊กภาพ/จังหวะเวลาที่อ้างอิงจากโค้ดอย่างเดียวไม่พอ
-
-## ทำต่อ (Next steps) — เรียงลำดับที่ควรทำก่อน-หลัง
-
-**A. เช็ค/แก้ก่อนอย่างอื่นทั้งหมด:**
-1. ยืนยันว่า Render deploy โค้ดล่าสุดแล้วจริง (ดูหัวข้อ "สถานะด่วนที่สุด" ด้านบน) — ถ้ายัง ต้องกด Manual Deploy เอง
-2. ทดสอบ login/logout/สร้างสโมสรบนเว็บจริงอีกรอบให้แน่ใจ 100% (เคยพังจากบั๊ก stack-overflow มาแล้ว 1 ครั้ง แก้แล้วแต่ควรย้ำเช็ค)
-
-**B. งานที่ทำค้างไว้กลางคัน (ระบบเสนอซื้อนักเตะตรง / Negotiations):**
-เขียนฝั่ง **server เสร็จแล้ว 100%** — syntax check ผ่านหมด, prisma db push ผ่านแล้ว (dev.db มีตาราง `PlayerOffer` แล้ว):
-- Schema: `server/prisma/schema.prisma` + `schema.postgresql.prisma` → model `PlayerOffer`
-- Service: `server/src/services/negotiationService.js` (sendPlayerOffer, getMyOffers, respondToOffer, cancelOffer, expireStaleOffers)
-- Routes: `server/src/routes/negotiations.js` → wire แล้วใน `server/src/index.js` (`/api/negotiations`)
-- เพิ่ม `getShardRoster()` ใน `gameService.js` + endpoint `GET /api/leagues/:shardId/roster` (`leagues.js`) — ดูรายชื่อนักเตะทีมอื่นในชาร์ดเพื่อเสนอซื้อ
-- ปรับ `game-version.js`: เพิ่ม `ACTIVE_WINDOW_START_HOUR=9`, `ACTIVE_WINDOW_END_HOUR=20`, `isMatchWindowOpen()`, `isMarketWindowOpen()` (เช็คเวลาไทยจริงผ่าน `Intl.DateTimeFormat`) — `runDayTickForShard`/`prepareUserLiveMatch` เช็คแล้วว่าห้ามแข่งนอกช่วง 9-20 น.
-
-**ยังไม่ได้ทำ (ต้องทำต่อ):**
-3. **`client/src/lib/online-negotiations.js`** — client helper เรียก `/api/negotiations/*` + `/api/leagues/:shardId/roster` (ยังไม่ได้สร้างไฟล์) — ดู `online-api.js`/`online-session.js` เป็นแพทเทิร์น (ใช้ `onlineApi()` + token แยก `siam_online_token` ผ่าน `ensureOnlineSession()`)
-4. **หน้าจอในเกม** (`football-manager.jsx`) — สร้างแท็บ/หน้าจอใหม่ "ตลาดออนไลน์" ใช้ตอน `career.playMode === "online"` เท่านั้น: เรียก roster เพื่อดูนักเตะทีมอื่น, เสนอซื้อ, ดูข้อเสนอที่ส่ง/ได้รับ, ตอบรับ/ปฏิเสธ/ต่อรอง — **ปุ่มต้องดูง่ายชัดเจนสไตล์ Top Eleven** (ปุ่มใหญ่ สีสื่อความหมาย: เขียว=เสนอ/รับ, แดง=ปฏิเสธ, ส้ม=ต่อรอง) — user บอกว่าถ้าอยากรีดีไซน์ UI ส่วนอื่นให้ดูง่าย/สนุกขึ้นด้วยก็ทำได้ ไม่ได้จำกัดแค่หน้าตลาด
-5. **ซ่อนปุ่มเร่งความเร็ว/ข้ามแมตช์** เมื่อ `career.playMode === "online"` — หาจุดที่มีปุ่มสปีด/skip ในหน้าแข่งขันสด (`LiveMatchModal`/`skipToFullTime` เป็นต้น) แล้วซ่อนแบบมีเงื่อนไข
-6. **โบนัส "ดูสด"** — ยังไม่ได้ตกลงสูตรที่แน่นอน แค่ concept "เปลี่ยนตัว/ปรับแทคติกเองระหว่างเกม = ได้เปรียบกว่าออโต้" ต้องคุยกับ user เรื่องตัวเลขจริงก่อนใส่โค้ด (เช่น โบนัสมูดนักเตะ % หรือแม่นยำในการยิง)
-7. **สำคัญที่สุด (ยังไม่ได้เริ่มเลย):** เชื่อม `football-manager.jsx` เข้ากับกลไก shard/day-tick backend ของจริง (ตอนนี้ `career.playMode==="online"` เป็นแค่ flag ในเครื่อง ไม่เชื่อมกับ `LeagueShard`/`Club` ในฐานข้อมูลจริงเลย) — ระบบเสนอซื้อที่กำลังสร้างข้างบนนี้ ถ้าจะใช้งานได้จริงต้องมี "shard club" ของผู้เล่นก่อน (ผ่าน `bootstrapOnlineFromCareer`/`POST /api/clubs`) งานนี้ใหญ่ ต้องคุยแผนกับ user ต่อว่าจะ migrate ทีละส่วนยังไง (ดูบทสนทนาเรื่อง "รื้อ state management ทั้งไฟล์" ที่คุยไว้)
-
-**C. งานค้างเก่าก่อนหน้า (ยังไม่ได้แตะในเซสชันนี้):**
-8. **บั๊ก React duplicate-key warning — ยังไม่จบ 100%:** เกิดตอนความเร็ว 6x + เตะมุม/ฟาวล์ถี่ (0 ครั้งที่ 1x, 36-70 ครั้ง/6วิ ที่ 6x) ไล่ด้วย 3 วิธี (manual stack capture, CDP `Runtime.consoleAPICalled` พร้อม callFrames, เช็คทุกจุดที่มี `key=` ในทั้ง `football-manager.jsx`+`tracker-pitch.jsx`) ยังหาบรรทัดต้นตอไม่เจอ เพราะ React ล้าง component stack ทิ้งไปตอนถึงจุด reconciler ที่ log warning แล้ว (เห็นแต่ react-dom internals) — **เพิ่ม defensive dedup ใน `TrackerPlayerDots`** (`tracker-pitch.jsx`) กรอง key ซ้ำก่อน render กันเผื่อไว้ แต่ **ไม่ได้ทำให้ warning หายไป** (ยังเห็น 36 ครั้ง/6วิที่ 6x เท่าเดิม) แปลว่าตัวที่ซ้ำจริงไม่ใช่ `livePlayers`/dot ของนักเตะ แต่เป็น list อื่นที่ยังไม่เจอ — ยืนยันแล้วว่าจำนวนจุดบนสนามจริงคงที่ 23 เสมอ ไม่มีอะไรเพี้ยนที่เห็นได้ (แค่ warning ไม่ใช่ error/crash) ถ้าจะไล่ต่อ: **ต้องเปิด Chrome DevTools จริงเล่นที่ 6x แล้วดู React DevTools "highlight updates" หรือ component stack ที่ browser แสดงในคอนโซลจริง** (headless เก็บได้แค่ raw stack ไม่มีชื่อ component)
-1. **User ทดสอบด้วยตาจริง** ทั้ง 4 ข้อ A-D + บั๊กฟิกซ์ทั้งหมด — โดยเฉพาะ (D) ที่เพิ่งขยับป้าย/ผจก./ผู้ช่วยผู้ตัดสินให้ห่างกันแล้ว (ยืนยันด้วย screenshot ว่าอ่านง่ายขึ้นชัดเจน) ควรดูอีกทีว่าพอดีหรือยังอยากขยับเพิ่ม
-2. ~~commit งานค้าง~~ ✅ baseline `v0.9.0-stable` แล้ว — patch ต่อบน branch `patch/qwen-*`
-3. ใบแดงยังไม่มีผลเกมจริง (ไม่ตัดเหลือ 10 คน) — ต้องแก้ `buildMatchContext`/`expectedGoalsFull` ถ้าจะเอา
-4. เดินหน้าสเปค online ต่อ (`siam-manager-online-spec.md`) — ตรวจ parity `server/src/services/gameService.js` กับ client logic
+1. **ระบบดิวิชั่น 5-6 ชั้น + เลื่อนชั้น/ตกชั้นข้ามชาร์ด** — user ยืนยันอยากได้ 5-6 ชั้น (Claude เสนอ 3 ไปก่อน แต่ user เลือก 5-6) แผน: ออกแบบโครงสร้างรองรับ 6 ชั้นได้ แต่เปิดใช้จริงแค่ 2-3 ชั้นล่างก่อน (ผู้เล่นยังน้อย, Test Beta) ค่อยเปิดชั้นบนเพิ่มตามจำนวนผู้เล่นจริง — ต้องพอร์ตลอจิกเลื่อนชั้น/ตกชั้นจาก sandbox (`PROMOTION_BONUS`/`RELEGATION_PARACHUTE` ใน `football-manager.jsx`) มาทำเวอร์ชันเซิร์ฟเวอร์ที่ย้ายทีมข้ามชาร์ดได้
+2. **FM-style Tactics overhaul** — แยกฟอร์เมชันมี/ไม่มีบอล (in/out-of-possession), Tactical Advisor เตือนจุดอ่อน, role/duty ต่อตำแหน่งแบบ FM26 (คุยไว้หลังอ่านข่าว FM26 มา) — ยังไม่ได้เริ่มเลย
+3. **ระบบรีเซ็ตรายเดือน + Battle Pass** — user ขอไว้ "กลัวลืม" (2026-07-05) ยังไม่ได้คุยรายละเอียด: รีเซ็ตอะไรบ้าง (ตารางดิวิชั่น? Battle Pass?), Battle Pass มี reward อะไร/XP มาจากไหน/ขายจริงไหม — แนะนำคุย 3 เรื่องนี้ (ดิวิชั่น+รีเซ็ตเดือน+Battle Pass) รวมกันในคราวเดียวเพราะน่าจะใช้รอบ "ฤดูกาล" เดียวกัน กรอบเวลาที่คุยไว้: **1 เดือนจริง** เหมาะสุดสำหรับ Battle Pass (ไม่ใช่สั้น/ยาวกว่านั้น)
+4. **[BACKLOG รอคุยสโคปเพิ่ม]** ระบบความสัมพันธ์นักเตะ (ยังไม่ชัดว่าหมายถึงเคมีทีม/เครือข่ายโซเชียลแบบ FM) + กราฟสถิติเชิงลึกแบบ FBref (heatmap ฯลฯ — เกมยังไม่เก็บข้อมูลตำแหน่ง/แรงกดดันรายนาที ต้องออกแบบ data layer ใหม่ทั้งชุดก่อนถึงจะทำได้จริง)
+5. Player Detail Modal + Radar Chart จริง — **เสร็จแล้ว** (คลิกไอคอน 📊 ข้างชื่อนักเตะใน Squad/Tactics)
 
 ## ติดอยู่/บล็อก
-- ไม่มี
+- ไม่มี (production ทำงานปกติบน Render)
 
 ## ไฟล์/คำสั่งสำคัญ
-- รันเกม: `npm run dev` ที่ root หรือ `Play-Game.bat` (client :5173, API :3001)
-- ระบบภาพแมตช์สด: `live-pitch-ambient.js` = สมองทั้งหมด (shotSeq/setPiece/celebration/restart/GK/ปีก/FW line/roll cap/timeScale/pendingEvents) · `pass-simulator.js` = ฟิสิกส์บอล+AI เลือกจ่าย · `tracker-pitch.jsx` = วาดสนาม+เส้นปะ (`ShotPathLine`, ไม่มี CSS transition บนบอลแล้ว) · `football-manager.jsx` = trigger เหตุการณ์ในลูป tick + drain `pendingEvents` ใน rAF + ฉากก่อนเกม (`preMatchPhase`) + ฉากเปลี่ยนตัว (`subScene`)
-- จุด trigger ใน `football-manager.jsx`: ช็อต (`shotChance` block), เตะมุม (`startCornerScene`), ฟรีคิก (ในบล็อกฟาวล์), นกหวีด/ใบ (`playWhistle`/`cardsRef`), เปลี่ยนตัว (`startSubScene`/`finishSubScene`), ก่อนเกม (`preMatchPhase` + effects), หลังประตู (`s.restart` → `kickoffWhistle` event)
-- ทดสอบด้วยบอท: สคริปต์ตัวอย่างอยู่ที่ scratchpad ของ session (`check-warp.mjs` วัด warp, `check-sub2.mjs` วัดนาฬิกาหยุด/เดิน, `check-premat.mjs` ไล่ทุก phase ก่อนเกม) — เขียนสคริปต์ใหม่ตามแพทเทิร์นเดียวกันได้เลยเวลามีบั๊กภาพ
-- สเปค online: `siam-manager-online-spec.md` · CHANGELOG: `CHANGELOG.md`
-- **ระบบออนไลน์ (ใหม่ 2026-07-04):** auth token เซ็นด้วย `server/src/lib/auth-token.js` · shard/day-tick อยู่ที่ `server/src/services/gameService.js` (`runDayTickForShard`, `prepareUserLiveMatch`/`finishUserLiveMatch` = ล็อกสกอร์จริงตอน kickoff กัน client ปลอมสกอร์) · เวลา 9-20น. อยู่ที่ `game-version.js` (`isMatchWindowOpen`/`isMarketWindowOpen`) · เสนอซื้อนักเตะตรงอยู่ที่ `server/src/services/negotiationService.js` + `server/src/routes/negotiations.js` (`/api/negotiations/*`) — **ฝั่ง client ยังไม่เชื่อมเลย** ต้องสร้าง `client/src/lib/online-negotiations.js` + UI ใน `football-manager.jsx` ต่อ (ดู "ทำต่อ" หัวข้อ B)
-- **เดิมพัน/ระบบคู่ขนานเก่าของ Cursor (อาจเลิกใช้ในอนาคต แต่ตอนนี้ยังอยู่ไม่ได้ลบ):** `client/src/OnlineMvpApp.jsx`, `OnlinePortal.jsx`, `OnlineRoadmapPanel.jsx`, `server/src/services/roadmapService.js`, `server/src/services/stakeService.js` (Stake League — ระบบแยกจริง ทำงานได้แต่ไม่เชื่อมเกมหลัก) — **`ShellApp.jsx` ไม่ import `OnlinePortal`/`OnlineMvpApp` แล้ว** (เลิกใช้แล้วตอนนี้ แต่ยังไม่ลบไฟล์ทิ้ง)
+- **ทดสอบ patch:** `Start-Test-Server.bat` (root) — client:5174, API:3002, DB แยก `server/prisma/test.db` ไม่แตะ production
+- **Dev ปกติ (คนละ DB จาก test):** `Start-Game-Server.bat` — client:5173, API:3001, `server/prisma/dev.db`
+- **Production:** Render (`the-socker-manager-api` + Postgres), deploy อัตโนมัติจาก push ขึ้น `master` (buildCommand รัน `prisma generate && prisma db push` ให้เองทุกครั้ง) — เว็บ client อยู่ Cloudflare Pages, deploy ด้วย `npx wrangler pages deploy dist --project-name=themasterfc --commit-dirty=true --branch=master` ที่ `client/`
+- **ระบบแมทเรียลไทม์:** `server/src/services/liveMatchService.js` (event script generator + `computeLiveState` คำนวณจาก `kickoffAt`+`eventsJson` เท่านั้น ไม่มีโพรเซสรันค้าง ปลอดภัยต่อ restart) — `GAME_MINUTE_REAL_SECONDS=4` ใน `game-version.js` (90 นาทีเกม = 6 นาทีจริง), `MS_PER_GAME_DAY` ~44 นาที/รอบ (15 รอบ/วัน = 1 ฤดูกาล)
+- **Client online libs:** `client/src/lib/online-match.js` (แมทสด/เปลี่ยนตัว/mentality), `online-negotiations.js` (ตลาด), `online-session.js` (`createOnlineClubDirect` = จุดสำคัญที่สร้างสโมสรจริงตอนเลือกโหมดออนไลน์ครั้งแรก)
+- **ระบบภาพแมตช์สด (sandbox, ไม่เกี่ยวกับออนไลน์):** `live-pitch-ambient.js` = สมองทั้งหมด (shotSeq/setPiece/celebration/restart/GK/ปีก/timeScale) · `pass-simulator.js` = ฟิสิกส์บอล+AI จ่าย · `tracker-pitch.jsx` = วาดสนาม
+- **เทสต์ด้วยบอท:** `puppeteer-core` + Edge headless (`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`) — เขียนสคริปต์ทดสอบไว้ที่ scratchpad เวลามีบั๊ก/ฟีเจอร์ใหม่ที่ต้องยืนยันจริง
 
 ## บันทึกย่อรายเซสชัน (ใหม่สุดบนสุด)
-- [2026-07-04 เซสชันยาวมาก] เริ่มจากพี่ขอให้สำรวจ+แก้บั๊กทั้งเกม (10 ทีม audit agent คู่ขนาน) → เจอ+แก้บั๊กจริงเพียบ (legend หายถาวรตอนสัญญาหมด, ผู้เล่นแบนหลุดเข้า XI, ใบแดงคู่แข่งไม่มีผลจริง, งบติดลบจากประมูลพร้อมกัน, ใช้ไอเทมซ้ำฟรีด้วยดับเบิลคลิก, merge การ์ดสลับใบเงียบๆ) จากนั้นเจอวิกฤตใหญ่: (1) เซิร์ฟเวอร์จริงยังใช้ auth token แบบปลอมได้ (`game:userId` ไม่เซ็น) — แก้เป็น HMAC เซ็น+หมดอายุ (2) `/matches/:id/finish` เชื่อ score จาก client ตรงๆ ปลอมสกอร์ชนะได้ทุกนัด — ย้ายมาล็อกสกอร์จริงตอน kickoff แทน (3) Cursor แก้ `ShellApp.jsx` เอาด่านบังคับล็อกอินออกโดยไม่ตั้งใจ + บั๊ก `ensureStaffCardFields`↔`resetDailyStaffDraws` เรียกกันไม่รู้จบ (stack overflow) ทำให้**เซฟผู้เล่นถูกลบทิ้งอัตโนมัติ**ตอนโหลดพลาด — แก้ทั้งหมดแล้ว (คืนด่านล็อกอิน, แก้ recursion, เลิกลบเซฟอัตโนมัติเมื่อโหลด error) ยืนยันด้วย headless Puppeteer (Edge) จำลองผู้เล่นจริงสมัคร→ล็อกอิน→สร้างทีม จนสำเร็จจริง — deploy ขึ้น Cloudflare Pages (client) แล้ว + push โค้ด server ขึ้น GitHub แล้ว (`6a895a8`) แต่ **ยังไม่ยืนยันว่า Render deploy ให้จริง** (ต้องเช็ค/manual deploy ต่อ) หลังจากนั้นคุยกับพี่ยาวมากเรื่อง "ระบบออนไลน์ที่ต้องการจริงๆ คืออะไร" สรุปได้ว่า Cursor เข้าใจผิดสร้างเกมจำลองแยกใหม่แทนที่จะต่อเกมจริงเข้าเซิร์ฟเวอร์ ตกลงกติกาออนไลน์ทั้งหมด (16 ทีม/1วัน=1ฤดูกาล/9-20น./ห้ามข้ามแมตช์/ดูสดได้เปรียบ/แมตช์สั้น 5-8นาที) แล้วเริ่มสร้างระบบเสนอซื้อนักเตะตรง (Negotiations สไตล์ Top Eleven, ค้นข้อมูลจริงจากเว็บมาอ้างอิง) เขียนฝั่ง server เสร็จ (schema+service+routes+เวลา 9-20น.) แต่ **ฝั่ง client ยังไม่ได้เชื่อมเลย** พี่ขอปิดคอมก่อนทำต่อ — งานค้างละเอียดอยู่ในหัวข้อ "ทำต่อ" ด้านบน
-- [2026-07-03 รอบ 6] User สั่ง "ทำต่อเลย" ต่อจากรอบ 5 — แก้ 2 จุดที่ค้างไว้: (1) ขยับตำแหน่ง `coachPos`/`refPos2`/`boardPos` ในฉากเปลี่ยนตัวให้ห่างกันจริง (แนวนอน ±7 + แนวตั้งแยกชั้น แทนเดิม ±3 ชั้นเดียวกันหมด) ยืนยันด้วย screenshot ว่าอ่านง่ายขึ้นชัดเจน ป้าย "เลขออก→เลขเข้า" แยกจากตัวคนชัด (2) ไล่หา React duplicate-key warning ต่อด้วย CDP `Runtime.consoleAPICalled` (ได้ raw callFrames แต่ไม่มีชื่อ component เพราะ React ทิ้ง context ไปแล้วตอนถึงจุด warn) เพิ่ม defensive dedup ใน `TrackerPlayerDots` กันไว้ก่อนแต่ไม่ได้ทำให้ warning หาย (พิสูจน์ว่าไม่ใช่ list นักเตะ) — สรุปยอมหยุดไล่ต่อเพราะไม่กระทบเกมจริงเท่าที่ตรวจได้ (จุดบนสนามคงที่ 23 เสมอ) ต้องใช้ Chrome DevTools จริงถึงจะไล่จบ บันทึกไว้ให้ครบใน "ทำต่อ" ข้อ 0
-- [2026-07-03 รอบ 5] User อนุมัติคิวงาน A-D ล่วงหน้าทั้งชุดแล้วออกไปข้างนอก ("เริ่มทำให้หมดเลย ทำไปทีละจุด A > D") — ทำครบไม่หยุดถาม ยืนยันทุกข้อด้วยบอท puppeteer (ไม่ใช่แค่อ่านโค้ด): (A) แก้ปีกวิ่งเลยบอล (เป้าหมายเดิมอิงตัวเอง+9 ทุกเฟรมไม่มีจุดยึด → เปลี่ยนอิงบอลจริง+lerp เข้าเส้นข้าง) (B) เพิ่มสเตจ `s.restart` กลับตำแหน่ง+นกหวีดก่อนเขี่ยกลางหลังประตู (C) ฉากก่อนเริ่มเกมเต็มรูปแบบ: รายชื่อผู้เล่น(ดาว/เรตติ้ง) 2 ฝั่งฝั่งละ5วิ(ข้ามได้) → เดินออกอุโมงจริง 3.6วิ(ข้ามได้) → นกหวีด(ข้ามไม่ได้) → เขี่ยเปิดเกม (D) ฉากเปลี่ยนตัวเต็มรูปแบบ: หยุดเกมสนิท → ผจก./ตัวสำรอง/ผู้ช่วยผู้ตัดสิน/คนถือป้ายโผล่ริมเส้น+ป้ายเลข → เดินสวนกันจริง → อัปเดต XI จริงตอนจบฉาก → เล่นต่อ — ตั้งเครื่องมือทดสอบใหม่ (puppeteer-core + Edge headless ที่ scratchpad) วัดพิกัด/นาฬิกา/error จริงแทนอ่านโค้งอย่างเดียว ยืนยันนาฬิกาหยุดเป๊ะตลอดฉากเปลี่ยนตัวด้วยการวัดจริง — รู้จุดที่ยังไม่สมบูรณ์: ป้ายเปลี่ยนตัว/ผจก./ผู้ช่วยผู้ตัดสินยืนชิดกันไป name label ทับกัน (บันทึกไว้ใน "ทำต่อ")
-- [2026-07-03 รอบ 4] แก้ 2 บั๊กหลังรีแฟคเตอร์ใหญ่ (ยืนยันด้วยบอท puppeteer วัดพิกัดจริง ไม่ใช่แค่อ่านโค้ด): (1) **บอลวาปตัวจริง** — เจอว่าไม่ใช่บั๊ก simulation แต่เป็น CSS `transition` หน่วง 0.22s บนสไปรต์บอลใน `tracker-pitch.jsx` (TrackerBall) ที่ถอดทิ้งทันทีตอน phase เปลี่ยนจากลอย→เลี้ยง ทำให้สไปรต์ต้องกระโดดปิดระยะค้างในเฟรมเดียว (เงาไม่มี transition เลยไม่เคยวาป — user สังเกตถูกจุดตั้งแต่แรก) → ถอด transition ทิ้ง วัดซ้ำ 60 วิด้วยบอท: จาก 8 ครั้ง/นาที เหลือ 0 (2) **GK ยิงข้ามสนาม/จากครึ่งสนาม** — `beginAmbientShot` ดึง "ตัวครองบอลล่าสุด" ของฝั่งที่สุ่มให้ยิงมาเป็นคนยิงตรงๆ ค่านี้ค้างเป็น GK ได้ถ้าฝั่งนั้นเพิ่งรับเซฟ/ลูกตั้งเตะยังไม่ทันจ่ายต่อ → เพิ่ม guard เช็ค `pos==="GK"` ก่อนเริ่ม shotSeq ถ้าใช่ให้ยกเลิกจังหวะยิงนั้นไปเลย (GK ทำได้แค่เปิดยาว/ส่งสั้นตามเดิม) — วิธีทดสอบใหม่ที่ตั้งไว้: ใช้ puppeteer-core (ติดตั้งไว้ที่ scratchpad) เปิดเกมจริงด้วย Edge headless, จับพิกัด DOM ของสไปรต์บอลทุกเฟรมด้วย `requestAnimationFrame` วัด jump ระหว่างเฟรม — เป็นวิธี verify ที่แม่นกว่าอ่านโค้งอย่างเดียวมาก ควรใช้ซ้ำเวลามีบั๊กภาพแบบนี้อีก
-- [2026-07-03 รอบ 3] **รีแฟคเตอร์ใหญ่: ถอดระบบรีเพลย์แยกฉากทิ้งทั้งหมด** (user เลือกเองหลังถามความเห็น — "จังหวะมันจะได้ต่อเนื่อง") แทนด้วยระบบซีนต่อเนื่องใน ambient sim: shotSeq สโลว์โม+เส้นปะ, ฉลองมุมธงทั้งทีม+กระโดด, ซีนเตะมุมเต็ม (ตามสเปค user: ออกหลัง→วิ่งไปเตะ→ออหน้าโกล→จบช็อต→กลับ→GK เปิดสั้น/ยาว), ซีนฟรีคิกตั้งกำแพง, GK กรอบเล็ก, ปีกเลี้ยงริมเส้น, FW เกาะไลน์กองหลัง, ROLL_SPEED กันวาป, ลดความเร็วบอล/คนอีก ~25-28%, HALF_SECONDS 428 (ครึ่งละ 3 นาที) + ชดเชย speed — เขียน `live-pitch-ambient.js` ใหม่ทั้งไฟล์, แก้ `football-manager.jsx` (ลบ goalReplay/finishGoalReplay/overlay JSX, เพิ่ม pendingEvents drain + timeScale), เพิ่ม `ShotPathLine` ใน `tracker-pitch.jsx`, จูน `pass-simulator.js` — compile ผ่านหมด รอ user ทดสอบ; `GoalHighlightOverlay.jsx`+`goal-highlight-scenarios.js` กลายเป็นไฟล์กำพร้า
-- [2026-07-03 รอบ 1-2] แก้บั๊กชุดใหญ่ในระบบรีเพลย์เดิม (บอลวาป/กล้อง/GK เด้งกลับ/นักเตะวาป ฯลฯ) + เพิ่มผู้ตัดสิน/ใบ/นกหวีด/สถิติใบ + แก้ roleLinkScore ไม่มีเส้นทางจ่ายถอยหลัง (กองหลังไม่เคยได้บอล) + แก้บอลค้างไม่ยอมจ่ายจนจบเกม (stallCycles+forceAny) — ก่อนที่ user จะตัดสินใจถอดรีเพลย์ทิ้งในรอบ 3; **user ตั้งกฎใหม่: ต้องคุย/รอ "ทำได้" ก่อนแก้โค้ด** (บันทึกใน memory แล้ว)
-- [2026-07-02] สร้าง HANDOFF.md ครั้งแรก + งานรอบแรกบนระบบรีเพลย์เดิม (ตัดกล้องซูม/แพน, แก้ตัวยิงวาป) — ประวัติละเอียดของระบบเก่าดูได้จาก git/บทสนทนาเดิม ไม่เก็บที่นี่แล้วเพราะระบบถูกถอดทิ้ง
+
+- **[2026-07-05 เซสชันยาวมาก]** ทำระบบออนไลน์เต็มรูปแบบตั้งแต่ต้นจนจบในเซสชันเดียว: (1) ย้าย production จากเครื่อง PC บ้าน → Render (ทั้งคู่มือ Render dashboard + Cloudflare DNS switch, เจอปัญหา Prisma engine ล็อกไฟล์เพราะ server เก่ายังรันอยู่ระหว่างพยายาม regenerate client ต้องรอ user ปิดเครื่องบ้านก่อนถึงจะปลดล็อกได้) (2) เจอ+แก้บั๊กใหญ่ที่สุดของเซสชัน: `createClubForUser` สร้างชาร์ดส่วนตัวให้ทุกคน ไม่มีใครแชร์ลีคจริง — แก้ให้หาชาร์ด `isFull=false` แล้วแทนที่บอท (3) สร้างระบบแมทอัตโนมัติทั้งชุดตั้งแต่ 0 (`liveMatchService.js` ใหม่ทั้งไฟล์) ทดสอบผ่าน server จริงที่รันอัตโนมัติจริง ไม่ใช่เรียกฟังก์ชันมือ (4) เจอบั๊กที่สองรองลงมา: เลือกโหมดออนไลน์ตอนสร้างทีมไม่เคยสร้างสโมสรจริงบนเซิร์ฟเวอร์เลย (แค่ตั้ง flag ในเซฟ) แก้ด้วย `createOnlineClubDirect` (5) เพิ่มฟีเจอร์ครบชุดที่คุยไว้แต่แรก: เปลี่ยนตัว/ดูแมทคนอื่น/ป้ายลอยสกอร์/แบนเนอร์เตือน/สั่งอารมณ์ทีมกลางแมท/ตลาดปิดดีลตอน 20:00/กันสมัครใหม่ระหว่างแข่ง — ทุกอย่างทดสอบ end-to-end จริงด้วย curl+Puppeteer ไม่ใช่แค่อ่านโค้ด (6) ระหว่างทางคุยดีไซน์เรื่องดิวิชั่น (5-6 ชั้น), รีเซ็ตรายเดือน, Battle Pass — ยังไม่เริ่มโค้ด รอคุยรายละเอียดเพิ่ม (7) เจอ **branch คู่ขนาน `claude/progress-check-bgq007`** จากอีกเซสชัน (user สั่งงานจากมือถือแยกไป) ทำฟีเจอร์ซ้ำแต่สมบูรณ์น้อยกว่า — บอก user ให้สั่งเซสชันนั้น sync กับ `master` แทนการ merge (8) push งานทั้งหมดขึ้น `master` แล้ว (`c298a3f`) — สร้าง radar chart จริง + Player Detail Modal (คลิกชื่อนักเตะ) ระหว่างทางด้วย
+- [2026-07-04 เซสชันยาวมาก] แก้ security ใหญ่: auth token ปลอมได้ (`game:userId` ไม่เซ็น) → เซ็น HMAC จริง, `/matches/:id/finish` เชื่อ score จาก client ตรงๆ → ย้ายมาล็อกตอน kickoff, บั๊ก `ensureStaffCardFields`↔`resetDailyStaffDraws` recursion ทำเซฟถูกลบอัตโนมัติ → แก้แล้ว คุยดีไซน์ระบบออนไลน์ยาวมาก (Cursor เคยเข้าใจผิดสร้างเกมแยกใหม่แทนต่อเกมจริง) สรุปกติกาทั้งหมด (16 ทีม/1วัน=1ฤดูกาล/9-20น./ห้ามข้ามแมตช์/ดูสดได้เปรียบ) เริ่มระบบเสนอซื้อนักเตะตรง (Negotiations) เขียน server เสร็จ client ยังไม่เชื่อม (ทำต่อในเซสชัน 07-05)
+- [2026-07-03 รอบ 3-6] รีแฟคเตอร์ใหญ่ระบบภาพแมตช์สด — ถอดระบบรีเพลย์แยกฉากทิ้งทั้งหมด แทนด้วย ambient sim ต่อเนื่อง (shotSeq สโลว์โม, ฉลองประตู, เตะมุม/ฟรีคิกเต็มรูปแบบ, ฉากก่อนเกม/เปลี่ยนตัวเต็มรูปแบบ) — ยังมี React duplicate-key warning ที่ไม่กระทบเกมจริงค้างอยู่ (หาต้นตอไม่เจอ, ไม่ใช่ list นักเตะ)
+- [2026-07-02] สร้าง HANDOFF.md ครั้งแรก
