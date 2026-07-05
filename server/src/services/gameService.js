@@ -12,6 +12,7 @@ import {
 } from "@siam/game-engine";
 import { prisma } from "../db.js";
 import { reclaimInactiveLegends } from "./legendService.js";
+import { kickOffRoundMatches, finalizeFinishedMatches } from "./liveMatchService.js";
 import { DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY, isMatchWindowOpen } from "../../../game-version.js";
 import {
   initRoadmapForNewClub,
@@ -651,22 +652,14 @@ export async function finishUserLiveMatch(userId, matchId) {
 }
 
 /**
- * Cron day-tick: บอทแข่งกันเอง + จำลองทีมผู้เล่นถ้ายังไม่ได้เล่นสด (offline)
- * autoSimHuman=false → รอแมตช์สด (ใช้ dev เท่านั้น)
+ * Cron day-tick: เตะอัตโนมัติตามเวลาจริงทุกชาร์ด (บอทและผู้เล่นจริงเหมือนกันหมด ไม่แยกแล้ว)
+ * รอบหนึ่ง = คิกอฟทุกแมทของวันนั้นพร้อมกัน (kickOffRoundMatches) → รอ ~6 นาทีจริงให้จบ 90 นาทีเกม
+ * (finalizeFinishedMatches) → ครบทุกแมทแล้วค่อยขึ้นวันถัดไป (tryCompleteShardDay)
  */
-export async function runDayTickForShard(shardId, { autoSimHuman = true, force = false } = {}) {
+export async function runDayTickForShard(shardId, { force = false } = {}) {
   // แข่งได้เฉพาะ 9:00-20:00 เวลาไทยเท่านั้น — หลัง 20:00 คือช่วงพักฟื้น/อีเวนต์/ตลาด ห้าม day-tick เดินต่อ
   if (!force && !isMatchWindowOpen()) {
     return { shardId, action: "outside_match_window" };
-  }
-  const now = Date.now();
-  const last = lastShardDayTick.get(shardId) || 0;
-  if (!force && now - last < MS_PER_GAME_DAY) {
-    return {
-      shardId,
-      action: "throttled",
-      waitMs: MS_PER_GAME_DAY - (now - last),
-    };
   }
 
   const shard = await prisma.leagueShard.findUnique({ where: { id: shardId } });
@@ -677,39 +670,40 @@ export async function runDayTickForShard(shardId, { autoSimHuman = true, force =
     return { shardId, action: "new_season" };
   }
 
-  const { clubsById, allPlayers } = await loadShardContext(shardId);
-  const matches = await prisma.match.findMany({
-    where: { shardId, dayNumber: shard.dayNumber, played: false },
+  // 1) แมทที่ยังไม่คิกอฟของวันนี้ → เริ่มพร้อมกันทั้งหมด (throttle กันคิกอฟซ้ำด้วย lastShardDayTick)
+  const now = Date.now();
+  const last = lastShardDayTick.get(shardId) || 0;
+  const scheduledCount = await prisma.match.count({
+    where: { shardId, dayNumber: shard.dayNumber, status: "scheduled" },
   });
-  if (matches.length === 0) {
-    return tryCompleteShardDay(shardId, shard.dayNumber).then((r) => ({
-      shardId, action: r.action || "already_clear", day: r.day,
-    }));
-  }
-
-  let simmed = 0;
-  let waitingLive = 0;
-  for (const match of matches) {
-    const human = matchHasHuman(match, clubsById);
-    if (human && !autoSimHuman) {
-      waitingLive += 1;
-      continue;
+  if (scheduledCount > 0) {
+    if (!force && now - last < MS_PER_GAME_DAY) {
+      return { shardId, action: "throttled", waitMs: MS_PER_GAME_DAY - (now - last) };
     }
-    await simulateAndPersistMatch(match, clubsById, allPlayers, {});
-    simmed += 1;
+    const { kicked } = await kickOffRoundMatches(shardId, shard.dayNumber);
+    lastShardDayTick.set(shardId, Date.now());
+    return { shardId, action: "kicked_off", day: shard.dayNumber, kicked };
   }
-  if (simmed) await persistPlayers(allPlayers);
 
+  // 2) แมทที่กำลังแข่งสดอยู่ (ครบ 90 นาทีเกมหรือยัง) → ปิดจบเฉพาะที่จบแล้ว
+  const liveCount = await prisma.match.count({
+    where: { shardId, dayNumber: shard.dayNumber, status: "live", played: false },
+  });
+  if (liveCount > 0) {
+    const { finalized } = await finalizeFinishedMatches(shardId, shard.dayNumber);
+    const dayResult = await tryCompleteShardDay(shardId, shard.dayNumber);
+    return {
+      shardId,
+      action: dayResult.advanced ? dayResult.action : "waiting_live",
+      day: shard.dayNumber,
+      finalized,
+      remaining: dayResult.remaining,
+    };
+  }
+
+  // 3) ไม่มีแมท scheduled/live เหลือเลย แต่ยังไม่ครบวัน (เช่น รอบก่อนจบไปแล้วรอ throttle ให้ครบ MS_PER_GAME_DAY)
   const dayResult = await tryCompleteShardDay(shardId, shard.dayNumber);
-  lastShardDayTick.set(shardId, Date.now());
-  return {
-    shardId,
-    action: dayResult.advanced ? dayResult.action : "waiting_live",
-    day: shard.dayNumber,
-    simmed,
-    waitingLive,
-    remaining: dayResult.remaining,
-  };
+  return { shardId, action: dayResult.action || "already_clear", day: dayResult.day };
 }
 
 function applyStandingResult(standing, gf, ga) {

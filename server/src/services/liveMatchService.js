@@ -99,6 +99,68 @@ export async function kickOffRoundMatches(shardId, dayNumber) {
   return { kicked: matches.length };
 }
 
+function applyStandingResult(standing, gf, ga) {
+  const next = { ...standing };
+  next.played += 1;
+  next.gf += gf;
+  next.ga += ga;
+  if (gf > ga) { next.w += 1; next.pts += 3; }
+  else if (gf < ga) { next.l += 1; }
+  else { next.d += 1; next.pts += 1; }
+  return { played: next.played, w: next.w, d: next.d, l: next.l, gf: next.gf, ga: next.ga, pts: next.pts };
+}
+
+function applyMatchWearLocal(squad, xiIds) {
+  squad.forEach((p) => {
+    if (xiIds.includes(p.id)) {
+      p.stamina = Math.max(5, Math.min(100, p.stamina - Math.floor(Math.random() * 9) - 10));
+      p.careerApps = (p.careerApps || 0) + 1;
+      if (Math.random() < Math.min(0.07, Math.max(0.003, (100 - p.stamina) / 100 * 0.06 + 0.004))) {
+        p.injuryDays = Math.max(1, Math.floor(Math.random() * 7) + 1);
+      }
+    }
+  });
+}
+
+/** ปิดจบแมทที่เตะครบ 90 นาที (ตามเวลาจริง) แล้ว — สกอร์ล็อกไว้ตั้งแต่ตอนคิกอฟแล้ว แค่บันทึกผลลงตาราง/สภาพนักเตะ
+ * เรียกจาก day-tick ทุกครั้ง เป็น idempotent (เช็ค status==="live" && finished เท่านั้น ไม่แตะแมทที่ finalize ไปแล้ว) */
+export async function finalizeFinishedMatches(shardId, dayNumber) {
+  const liveMatches = await prisma.match.findMany({ where: { shardId, dayNumber, status: "live", played: false } });
+  const toFinalize = liveMatches.filter((m) => computeLiveState(m).finished);
+  if (toFinalize.length === 0) return { finalized: 0 };
+
+  const clubs = await prisma.club.findMany({ where: { shardId }, include: { players: true, standing: true } });
+  const clubsById = Object.fromEntries(clubs.map((c) => [c.id, c]));
+  const dirtyPlayers = new Map();
+
+  for (const match of toFinalize) {
+    const homeClub = clubsById[match.homeClubId];
+    const awayClub = clubsById[match.awayClubId];
+    const homeXI = match.homeXIJson ? JSON.parse(match.homeXIJson) : [];
+    const awayXI = match.awayXIJson ? JSON.parse(match.awayXIJson) : [];
+
+    await prisma.match.update({ where: { id: match.id }, data: { played: true, status: "finished" } });
+    await prisma.standing.update({ where: { id: homeClub.standing.id }, data: applyStandingResult(homeClub.standing, match.homeGoals, match.awayGoals) });
+    await prisma.standing.update({ where: { id: awayClub.standing.id }, data: applyStandingResult(awayClub.standing, match.awayGoals, match.homeGoals) });
+
+    const homeSquad = homeClub.players.map(playerToEngine);
+    const awaySquad = awayClub.players.map(playerToEngine);
+    applyMatchWearLocal(homeSquad, homeXI);
+    applyMatchWearLocal(awaySquad, awayXI);
+    homeSquad.forEach((p) => dirtyPlayers.set(p.id, p));
+    awaySquad.forEach((p) => dirtyPlayers.set(p.id, p));
+  }
+
+  for (const p of dirtyPlayers.values()) {
+    await prisma.player.update({
+      where: { id: p.id },
+      data: { stamina: p.stamina, injuryDays: p.injuryDays, careerApps: p.careerApps },
+    });
+  }
+
+  return { finalized: toFinalize.length };
+}
+
 /** เปลี่ยนตัวระหว่างแมทสด — ตัดต่อสคริปต์เหตุการณ์ใหม่จากนาทีปัจจุบันด้วย XI ที่อัปเดตแล้ว (ประตูที่เกิดไปแล้วคงเดิมเสมอ) */
 export async function submitSubstitution(userId, matchId, { outPlayerId, inPlayerId }) {
   const club = await prisma.club.findFirst({ where: { userId } });
