@@ -231,7 +231,9 @@ export function beginAmbientShot(state, { shotSide, outcome, counted = true, aim
     phase: "aim", t: 0, outcome, shotSide, outPt, fwd, goalPx, counted,
     aimTime, shooterIdx: carrierIdx(s),
   };
-  s.timeScale = 0.35;
+  // ไล่ระดับความช้าแทนการสแนปทันที (เดิม s.timeScale = 0.35 ตรงๆ ทำให้จังหวะยิงดู "วาป" ตัดเข้าสโลว์โม
+  // แบบไม่มีช่วงเปลี่ยนผ่านเลย) — ค่อยๆ หน่วงลงใน advanceAmbientPitch แทน ดูเป็นธรรมชาติกว่า
+  s.timeScaleTarget = 0.35;
   s.shotPath = {
     fromPx: s.ball.px, fromPy: s.ball.py, toPx: outPt.px, toPy: outPt.py,
     arc: 1.2, curveSign: Math.random() < 0.5 ? 1 : -1, fwdSign: fwd,
@@ -273,7 +275,7 @@ function resolveShotSeq(s) {
   s.shotSeq = null;
   s.setPiece = null; // ซีนแม่ (เตะมุม/ฟรีคิก) จบพร้อมช็อต — ทุกคนวิ่งกลับตำแหน่งเอง
   s.shotPath = null;
-  s.timeScale = 1;
+  s.timeScaleTarget = 1;
   b.phase = "dribble";
   b.t = 1;
   b.fromCarrier = null;
@@ -303,7 +305,7 @@ function startCelebration(s, q) {
   let idx = kickSlots.findIndex((sl) => sl.pos === "FW");
   if (idx < 0) idx = kickSlots.findIndex((sl) => sl.pos === "MF");
   s.celebration = {
-    t: 0, side: q.shotSide, runDur: 1.4, dur: 3.6, kickSide,
+    t: 0, side: q.shotSide, runDur: 1.4, dur: 4.4, kickSide,
     targetPx: clamp(q.goalPx - q.fwd * 5, 4, 96),
     targetPy: cornerPy,
     scorerIdx: q.shooterIdx,
@@ -327,7 +329,7 @@ function advanceCelebration(s, dt) {
   if (c.t >= c.dur) {
     // ฉลองจบแล้ว ยังเล่นต่อไม่ได้ทันที — ต้องกลับตำแหน่งครบก่อนแล้วรอนกหวีด (ดู advanceRestart)
     s.celebration = null;
-    s.restart = { t: 0, kickSide: c.kickSide, resetDur: 1.8, whistleDur: 0.5, whistled: false };
+    s.restart = { t: 0, kickSide: c.kickSide, resetDur: 2.4, whistleDur: 0.6, whistled: false };
   }
 }
 
@@ -335,6 +337,12 @@ function advanceCelebration(s, dt) {
 function advanceRestart(s, dt) {
   const r = s.restart;
   r.t += dt;
+  // บอลกลิ้งมาวางกลางสนามระหว่างเดินกลับฟอร์เมชัน — เขี่ยกลางได้จริงตอนนกหวีด แทนที่จะเขี่ยจากตำแหน่งเดิมตอนฉลอง
+  rollBallToward(s.ball, 50, 50, dt, 4);
+  s.ball.fromPx = s.ball.toPx = s.ball.px;
+  s.ball.fromPy = s.ball.toPy = s.ball.py;
+  s.ball.t = 1;
+  s.ball.airHeight = 0;
   if (r.t >= r.resetDur) {
     if (!r.whistled) {
       r.whistled = true;
@@ -788,11 +796,23 @@ function stepPlayer(prev, tx, ty, maxStep, ease = 0.13) {
   const dx = tx - prev.px;
   const dy = ty - prev.py;
   const dist = Math.hypot(dx, dy);
-  if (dist < 0.001) return { px: prev.px, py: prev.py, vx: 0, vy: 0 };
-  // เร่งเข้าหาเป้าตามระยะ (เหมือน p += (target-p)*speedFactor) แต่ล็อกเพดานความเร็วไว้กันวิ่งเร็วเกิน
+  const pvx = prev.vx || 0;
+  const pvy = prev.vy || 0;
+  if (dist < 0.001) {
+    // หยุดแบบผ่อนความเร็วลง ไม่ใช่เบรกกึกทันที (เดิม vx/vy กลับเป็น 0 วาบเดียวพอถึงเป้าพอดี)
+    const decay = 0.7;
+    return { px: prev.px + pvx * decay, py: prev.py + pvy * decay, vx: pvx * decay, vy: pvy * decay };
+  }
+  // ความเร็ว "ที่อยากได้" ตามระยะ+เพดาน เหมือนเดิม แต่ไม่วาปไปแตะความเร็วนั้นทันที — ไล่ตามแบบมีอัตราเร่ง
+  // (เดิมกระโดดจาก 0 ไปสุดสปีดใน 1 เฟรมตอนเริ่มวิ่งใหม่ ทำให้ดู "แข็ง" เหมือนหุ่นยนต์)
   const step = Math.min(maxStep, dist * ease);
   const sc = step / dist;
-  return { px: prev.px + dx * sc, py: prev.py + dy * sc, vx: dx * sc, vy: dy * sc };
+  const desiredVx = dx * sc;
+  const desiredVy = dy * sc;
+  const accel = 0.4;
+  const vx = pvx + (desiredVx - pvx) * accel;
+  const vy = pvy + (desiredVy - pvy) * accel;
+  return { px: prev.px + vx, py: prev.py + vy, vx, vy };
 }
 
 // ความเร็วนักเตะ — ลดรวมอีก ~28% ผ่าน SPEED_SCALE ตามฟีดแบ็ก (จูนจุดเดียว)
@@ -856,8 +876,14 @@ function updateTeamAmbient(teamArr, slots, side, ball, possSide, animTick, carri
 
     if (restart) {
       // ฉลองจบแล้ว — ทั้ง 2 ทีมเดินกลับฟอร์เมชันจริง (ไม่ขยับตามบอล) รอนกหวีดก่อนเล่นต่อ
-      targetPx = anchor.px;
-      targetPy = anchor.py;
+      // ยกเว้นคนเขี่ยกลาง (เจ้าของบอลฝั่งที่ได้เขี่ย) ให้เดินไปยืนคุมบอลกลางสนามแทนตำแหน่งฟอร์เมชันปกติ
+      if (side === possSide && i === carrierIndex) {
+        targetPx = 50 - fwd * 1.5;
+        targetPy = 50;
+      } else {
+        targetPx = anchor.px;
+        targetPy = anchor.py;
+      }
       sceneRun = true;
     } else if (celeb && side === celeb.side && !isGK) {
       // ทั้งทีมวิ่งไปมุมธง แล้วกระโดดดีใจค้าง
@@ -907,10 +933,11 @@ function updateTeamAmbient(teamArr, slots, side, ball, possSide, animTick, carri
       sceneRun = true;
     }
 
-    // จิตเตอร์ idle เฉพาะคนยืนคุมพื้นที่ — งดตอนมีบทบาท/อยู่ในซีน กันสั่นทับการวิ่งจริง
-    if (!isGK && !isCarrier && !isPasser && !isReceiver && !isPresser && !sceneRun) {
-      targetPx += Math.sin(animTick * 0.018 + p.phase) * 0.9;
-      targetPy += Math.cos(animTick * 0.016 + p.phase * 1.1) * 0.75;
+    // จิตเตอร์ idle เฉพาะฝ่ายไม่มีบอลที่ยืนคุมพื้นที่ (แนวรับตั้งฟอร์เมชัน) — งดกับฝ่ายมีบอล เพราะ target
+    // ของพวกเขาจะถูกผสม (lerp) เข้ากับ support-run ทีหลัง ถ้าจิตเตอร์ทับเข้าไปจะเห็นเป็นอาการสั่น/กระตุกตอนวิ่ง
+    if (!isGK && !isCarrier && !isPasser && !isReceiver && !isPresser && !sceneRun && !hasBall) {
+      targetPx += Math.sin(animTick * 0.014 + p.phase) * 0.55;
+      targetPy += Math.cos(animTick * 0.012 + p.phase * 1.1) * 0.45;
     }
 
     if (sceneRun) {
@@ -961,11 +988,14 @@ function updateTeamAmbient(teamArr, slots, side, ball, possSide, animTick, carri
     if (sq && isGK && side !== sq.shotSide) maxStep = 0.6 * ts; // พุ่งเซฟไวกว่าปกติ (คูณ timeScale ให้เข้าสโลว์โม)
 
     const next = stepPlayer(p, targetPx, targetPy, maxStep);
-    teamArr[i] = { ...p, px: next.px, py: next.py };
+    teamArr[i] = { ...p, px: next.px, py: next.py, vx: next.vx, vy: next.vy };
 
-    let facing = side === "home" ? 1 : -1;
+    // หันหน้าแบบมีความจำ (เก็บทิศเดิมไว้) แทนสแนปกลับทิศบ้านตายตัวทุกครั้งที่ความเร็วต่ำ —
+    // เดิมพอ vx เกือบ 0 (เช่นแตะเบรกใกล้ถึงเป้า) หน้าจะวาปกลับทิศเริ่มเกม ดูกระตุก
+    let facing = p.facing ?? (side === "home" ? 1 : -1);
     if (Math.abs(next.vx) > 0.02) facing = next.vx > 0 ? 1 : -1;
     else if (isCarrier || isReceiver || isPasser) facing = hasBall ? fwd : -fwd;
+    teamArr[i].facing = facing;
 
     return {
       px: next.px,

@@ -10163,8 +10163,13 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       if (!ambientRef.current) {
         ambientRef.current = createAmbientPitchState(hSlots, aSlots);
       }
-      // timeScale = สโลว์โมชั่นจังหวะยิง (ambient ตั้งเอง 0.35 ช่วงเงื้อ→บอลถึงเป้า)
-      const ts = ambientRef.current.timeScale ?? 1;
+      // timeScale = สโลว์โมชั่นจังหวะยิง (ambient ตั้งเป้าไว้ 0.35 ช่วงเงื้อ→บอลถึงเป้า, กลับ 1 ตอนจบ) —
+      // ไล่ระดับด้วย "เวลาจริง" (dt ก่อนคูณ timeScale) แทนการสแนปทันที กันจังหวะเข้า/ออกสโลว์โมดู "วาป"
+      const amb = ambientRef.current;
+      if (amb.timeScaleTarget == null) amb.timeScaleTarget = amb.timeScale ?? 1;
+      if (amb.timeScale == null) amb.timeScale = 1;
+      amb.timeScale += (amb.timeScaleTarget - amb.timeScale) * Math.min(1, dt * 8);
+      const ts = amb.timeScale;
       ambientRef.current = advanceAmbientPitch(ambientRef.current, dt * ts, {
         pressure: gs.pressure,
         homeSlots: hSlots,
