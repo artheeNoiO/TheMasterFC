@@ -13,7 +13,7 @@ import {
 import { prisma } from "../db.js";
 import { reclaimInactiveLegends } from "./legendService.js";
 import { kickOffRoundMatches, finalizeFinishedMatches } from "./liveMatchService.js";
-import { DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY, isMatchWindowOpen } from "../../../game-version.js";
+import { DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY, isMatchWindowOpen, isMarketWindowOpen } from "../../../game-version.js";
 import {
   initRoadmapForNewClub,
   getRoadmapPayload,
@@ -244,6 +244,12 @@ async function createBotOnlyShardInDb() {
 /** ผู้เล่นจริงเข้ามาแทนที่ทีมบอทตัวหนึ่งในชาร์ดที่มีอยู่ — ทุกคนแชร์ลีค 16 ทีมเดียวกันจริง
  * (เดิม: ทุกคนได้ชาร์ดบอทส่วนตัวของตัวเอง ไม่มีใครแชร์ลีคกับใครเลย — เป็นช่องว่างที่ขัดกับดีไซน์เดิม) */
 export async function createClubForUser(userId, config) {
+  // เปิดรับสมาชิกใหม่เฉพาะช่วงพักฟื้น/ตลาด 20:00-09:00 — ให้ทุกคนเริ่มจากตารางคะแนน 0-0-0-0 ที่เพิ่งรีเซ็ต
+  // ไม่ใช่รับช่วงสถิติค้างของบอทที่แข่งไปแล้วบางส่วนระหว่างวัน (ดู HANDOFF/บันทึกการคุยออกแบบ)
+  if (!isMarketWindowOpen()) {
+    throw new Error("ลีคออนไลน์เปิดรับสมาชิกใหม่เฉพาะช่วง 20:00-09:00 น. (ตอนนี้กำลังแข่งขันอยู่) กลับมาใหม่หลัง 20:00 น. หรือเล่นโหมด Sandbox ระหว่างรอ");
+  }
+
   const existing = await prisma.club.findFirst({ where: { userId } });
   if (existing) throw new Error("มีสโมสรแล้ว");
 

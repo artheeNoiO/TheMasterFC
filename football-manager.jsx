@@ -6284,6 +6284,9 @@ export default function App({
       )}
 
       {career.liveMatch && <LiveMatchModal career={career} liveMatch={career.liveMatch} userAutoMode={uTeam.autoMode} onFinish={finishLiveMatch} suggestTacticSwitch={suggestTacticSwitch} fullOnlineMode={career.playMode === "online"} />}
+      {career.playMode === "online" && tab !== "onlinematch" && (
+        <OnlineFloatingScoreWidget onOpen={() => setTab("onlinematch")} />
+      )}
 
       <div className="fc-main-wrap">
         {tab === "dashboard" && <SandboxModePanel career={career} onEnterOnline={enterOnlineMode} compact />}
@@ -13474,6 +13477,49 @@ function useSmoothMatchMinute(serverMinute, kickoffAt, finished) {
     return () => clearInterval(id);
   }, [serverMinute, kickoffAt, finished]);
   return displayMinute;
+}
+
+/** ป้ายลอยแบบย่อ — โชว์สกอร์สดของแมทตัวเองตลอด ไม่ว่าจะอยู่แท็บไหน กดเพื่อขยายไปหน้าแข่งขันสดเต็ม */
+function OnlineFloatingScoreWidget({ onOpen }) {
+  const [match, setMatch] = useState(null);
+  const [myClubId, setMyClubId] = useState(null);
+
+  async function poll() {
+    try {
+      const club = await fetchMyShardClub();
+      if (!club) return;
+      setMyClubId(club.id);
+      const d = await fetchShardMatchesToday();
+      const mine = d.matches?.find((m) => m.home?.id === club.id || m.away?.id === club.id);
+      setMatch(mine && mine.status === "live" ? mine : null);
+    } catch {
+      /* เงียบไว้ — ไม่ให้ป้ายลอยรบกวนด้วย error */
+    }
+  }
+  useEffect(() => { poll(); const id = setInterval(poll, 10000); return () => clearInterval(id); }, []);
+
+  const minute = useSmoothMatchMinute(match?.minute ?? 0, match?.kickoffAt, false);
+  if (!match) return null;
+
+  const isHome = match.home?.id === myClubId;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      style={{
+        position: "fixed", bottom: 74, right: 12, zIndex: 55,
+        background: "rgba(8,18,12,.92)", border: `1px solid ${C.crimson}`, borderRadius: 12,
+        padding: "8px 12px", cursor: "pointer", boxShadow: "0 6px 20px rgba(0,0,0,.5)",
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+      }}
+    >
+      <div style={{ fontSize: 9, color: C.crimson, fontWeight: 800 }}>🔴 {minute}'</div>
+      <div style={{ fontSize: 12, fontWeight: 800, fontFamily: MONO_FONT, color: C.chalk }}>
+        {isHome ? match.homeGoals : match.awayGoals} - {isHome ? match.awayGoals : match.homeGoals}
+      </div>
+      <div style={{ fontSize: 8, color: C.textDim }}>แตะเพื่อดู</div>
+    </button>
+  );
 }
 
 function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
