@@ -1,21 +1,33 @@
+databases:
+  - name: the-socker-manager-db
+    plan: basic-256mb
+    postgresMajorVersion: 16
+
 services:
   - type: web
     name: the-socker-manager-api
     runtime: node
+    plan: starter
     rootDir: server
-    buildCommand: npm install && npm run db:generate && npx prisma db push
+    buildCommand: npm install && npx prisma generate --schema=prisma/schema.postgresql.prisma && npx prisma db push --schema=prisma/schema.postgresql.prisma
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: "20"
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: the-socker-manager-db
+          property: connectionString
       - key: CLIENT_URL
         value: https://www.themasterfc.com
+      - key: CORS_ORIGINS
+        value: https://www.themasterfc.com,https://themasterfc.com
       - key: CRON_SECRET
         generateValue: true
+      # ต้องตั้งค่าเองใน Render dashboard ให้ "ตรงกับ" AUTH_TOKEN_SECRET ที่ตั้งไว้ใน Cloudflare Pages
+      # (client/functions ใช้เซ็น/verify token ด้วยคีย์เดียวกันนี้ — ถ้าไม่ตรงกัน login จะพังทั้งระบบ)
       - key: AUTH_TOKEN_SECRET
-        generateValue: true
+        sync: false
       - key: GAME_PROVISION_SECRET
         sync: false
       - key: NODE_ENV
