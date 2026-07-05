@@ -117,6 +117,17 @@ model Match {
   homeGoals  Int?
   awayGoals  Int?
 
+  /** เตะอัตโนมัติตามเวลาจริง — scheduled รอคิกอฟ, live กำลังแข่ง (คำนวณจาก kickoffAt+eventsJson ตอนอ่าน), finished จบแล้ว */
+  status       String    @default("scheduled")
+  kickoffAt    DateTime?
+  /** สคริปต์เหตุการณ์ประตูที่สุ่มไว้ล่วงหน้าตอนคิกอฟ [{minute, side}] — ใช้คำนวณสถานะสดจาก elapsed time แทนการรันโพรเซสค้างไว้ */
+  eventsJson   String?
+  homeXIJson   String?
+  awayXIJson   String?
+  subsJson     String?
+  homeSubsUsed Int       @default(0)
+  awaySubsUsed Int       @default(0)
+
   @@index([shardId, dayNumber])
 }
 

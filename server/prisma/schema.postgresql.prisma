@@ -117,6 +117,15 @@ model Match {
   homeGoals  Int?
   awayGoals  Int?
 
+  status       String    @default("scheduled")
+  kickoffAt    DateTime?
+  eventsJson   String?
+  homeXIJson   String?
+  awayXIJson   String?
+  subsJson     String?
+  homeSubsUsed Int       @default(0)
+  awaySubsUsed Int       @default(0)
+
   @@index([shardId, dayNumber])
 }
 

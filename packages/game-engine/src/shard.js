@@ -72,6 +72,26 @@ export function createShardWithUserClub(userClubConfig) {
   };
 }
 
+/** ชาร์ดบอทล้วน 16 ทีม ไม่มีผู้เล่นจริงเลย — เปิดไว้เป็น "แชนแนล" รอผู้เล่นจริงเข้ามาแทนที่บอททีละคน
+ * (createClubForUser ฝั่งเซิร์ฟเวอร์จะหาชาร์ดที่ isFull=false แล้วสลับบอทตัวหนึ่งเป็นผู้เล่นจริง แทนที่จะสร้างชาร์ดส่วนตัวให้ทุกคน) */
+export function createBotOnlyShard() {
+  const shardId = uid("shard");
+  const bots = BOT_TEAM_DEFS.slice(0, TEAMS_PER_SHARD).map((def, i) => createBotClub(def, shardId, i));
+  const clubIds = bots.map((c) => c.id);
+  const fixtures = buildSeasonFixtures(clubIds);
+  return {
+    shard: {
+      id: shardId,
+      name: LEAGUE_NAME,
+      division: 1,
+      seasonNumber: 1,
+      dayNumber: 1,
+    },
+    clubs: bots,
+    fixtures,
+  };
+}
+
 export function joinOpenShard(existingBots, userClubConfig, shardMeta) {
   const userClub = createUserClub(userClubConfig, shardMeta.id);
   const needed = TEAMS_PER_SHARD - existingBots.length - 1;

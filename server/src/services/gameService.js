@@ -5,9 +5,10 @@ import {
   applyMatchWear,
   recoverStaminaAll,
   buildSeasonFixtures,
-  emptyStanding,
   isSeasonComplete,
-  createShardWithUserClub,
+  createBotOnlyShard,
+  genManager,
+  genSquad,
 } from "@siam/game-engine";
 import { prisma } from "../db.js";
 import { reclaimInactiveLegends } from "./legendService.js";
@@ -171,11 +172,32 @@ export async function updateClubTactics(userId, { formation, lineup, autoMode, g
   }).then((c) => ({ ...c, lineup: c.lineupJson ? JSON.parse(c.lineupJson) : [] }));
 }
 
-export async function createClubForUser(userId, config) {
-  const existing = await prisma.club.findFirst({ where: { userId } });
-  if (existing) throw new Error("มีสโมสรแล้ว");
+function playerCreateData(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    position: p.position,
+    age: p.age,
+    attrs: JSON.stringify(p.attrs),
+    attack: p.attack,
+    defense: p.defense,
+    rating: p.rating,
+    potential: p.potential,
+    value: p.value,
+    wage: p.wage,
+    morale: p.morale,
+    stamina: p.stamina,
+    injuryDays: p.injuryDays,
+    careerGoals: p.careerGoals,
+    careerApps: p.careerApps,
+    role: p.role,
+    contractEndsDay: p.contractEndsDay,
+  };
+}
 
-  const world = createShardWithUserClub(config);
+/** เปิดชาร์ดบอทล้วนใหม่ (16 ทีม) ไว้เป็น "แชนแนล" รอผู้เล่นจริงมาแทนที่บอททีละคน */
+async function createBotOnlyShardInDb() {
+  const world = createBotOnlyShard();
   await prisma.leagueShard.create({
     data: {
       id: world.shard.id,
@@ -183,58 +205,25 @@ export async function createClubForUser(userId, config) {
       division: world.shard.division,
       seasonNumber: world.shard.seasonNumber,
       dayNumber: world.shard.dayNumber,
-      isFull: true,
+      isFull: false,
       clubs: {
         create: world.clubs.map((c) => ({
           id: c.id,
-          userId: c.id === world.userClubId ? userId : null,
+          userId: null,
           name: c.name,
           shortCode: c.shortCode,
           logoIndex: c.logoIndex,
           primaryColor: c.primaryColor,
           secondaryColor: c.secondaryColor,
-          shirtColor: c.shirtColor ?? null,
-          shortsColor: c.shortsColor ?? null,
           budget: c.budget,
           tier: c.tier,
           formation: c.formation,
           chemistry: c.chemistry,
-          isBot: c.isBot,
+          isBot: true,
           managerJson: JSON.stringify(c.manager),
           gameStateJson: JSON.stringify(syncDailyStaffDraws({})),
-          players: {
-            create: c.players.map((p) => ({
-              id: p.id,
-              name: p.name,
-              position: p.position,
-              age: p.age,
-              attrs: JSON.stringify(p.attrs),
-              attack: p.attack,
-              defense: p.defense,
-              rating: p.rating,
-              potential: p.potential,
-              value: p.value,
-              wage: p.wage,
-              morale: p.morale,
-              stamina: p.stamina,
-              injuryDays: p.injuryDays,
-              careerGoals: p.careerGoals,
-              careerApps: p.careerApps,
-              role: p.role,
-              contractEndsDay: p.contractEndsDay,
-            })),
-          },
-          standing: {
-            create: {
-              played: c.standing.played,
-              w: c.standing.w,
-              d: c.standing.d,
-              l: c.standing.l,
-              gf: c.standing.gf,
-              ga: c.standing.ga,
-              pts: c.standing.pts,
-            },
-          },
+          players: { create: c.players.map(playerCreateData) },
+          standing: { create: { played: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 } },
         })),
       },
       matches: {
@@ -247,8 +236,61 @@ export async function createClubForUser(userId, config) {
         ),
       },
     },
-    include: { clubs: true },
   });
+  return world.shard.id;
+}
+
+/** ผู้เล่นจริงเข้ามาแทนที่ทีมบอทตัวหนึ่งในชาร์ดที่มีอยู่ — ทุกคนแชร์ลีค 16 ทีมเดียวกันจริง
+ * (เดิม: ทุกคนได้ชาร์ดบอทส่วนตัวของตัวเอง ไม่มีใครแชร์ลีคกับใครเลย — เป็นช่องว่างที่ขัดกับดีไซน์เดิม) */
+export async function createClubForUser(userId, config) {
+  const existing = await prisma.club.findFirst({ where: { userId } });
+  if (existing) throw new Error("มีสโมสรแล้ว");
+
+  let openBotClub = await prisma.club.findFirst({
+    where: { isBot: true, userId: null, shard: { isFull: false } },
+  });
+
+  let shardId;
+  if (openBotClub) {
+    shardId = openBotClub.shardId;
+  } else {
+    shardId = await createBotOnlyShardInDb();
+    openBotClub = await prisma.club.findFirst({ where: { shardId, isBot: true, userId: null } });
+  }
+
+  const manager = genManager();
+  const players = genSquad(openBotClub.id, -3);
+
+  await prisma.$transaction([
+    prisma.player.deleteMany({ where: { clubId: openBotClub.id } }),
+    prisma.club.update({
+      where: { id: openBotClub.id },
+      data: {
+        userId,
+        name: config.name,
+        shortCode: config.short,
+        logoIndex: config.logoIndex ?? 0,
+        primaryColor: config.primaryColor,
+        secondaryColor: config.secondaryColor ?? "#f2f0e6",
+        shirtColor: config.shirtColor ?? null,
+        shortsColor: config.shortsColor ?? null,
+        budget: 500_000_000,
+        tier: -3,
+        formation: "4-4-2",
+        chemistry: 50,
+        isBot: false,
+        managerJson: JSON.stringify(manager),
+        gameStateJson: JSON.stringify(syncDailyStaffDraws({})),
+        players: { create: players.map(playerCreateData) },
+      },
+    }),
+  ]);
+
+  const remainingBotSlots = await prisma.club.count({ where: { shardId, isBot: true, userId: null } });
+  if (remainingBotSlots === 0) {
+    await prisma.leagueShard.update({ where: { id: shardId }, data: { isFull: true } });
+  }
+
   return prisma.club.findFirst({
     where: { userId },
     include: { shard: true, standing: true, players: true },

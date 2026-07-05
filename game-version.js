@@ -70,6 +70,14 @@ export const MS_PER_GAME_DAY = Math.floor((ACTIVE_WINDOW_HOURS * 3600 * 1000) / 
 export const MINUTES_PER_GAME_DAY = Math.round(MS_PER_GAME_DAY / 60000);
 export const GAME_TIMEZONE = "Asia/Bangkok";
 
+/** โหมดออนไลน์: แมทเตะอัตโนมัติตามเวลาจริงบนเซิร์ฟเวอร์ (ไม่มีปุ่มกดคิกอฟ/เร่งเวลาเหมือนโลกจำลอง)
+ * 90 นาทีเกม = 6 นาทีจริง/แมท — เหลือเวลาพัก ~38 นาทีก่อนรอบถัดไปภายในช่วง MS_PER_GAME_DAY (~44 นาที) */
+export const GAME_MINUTE_REAL_SECONDS = 4;
+export const MATCH_REAL_DURATION_MS = 90 * GAME_MINUTE_REAL_SECONDS * 1000;
+export const MAX_SUBS_PER_MATCH = 5;
+/** เตือนผู้เล่นล่วงหน้ากี่นาทีจริง ก่อนรอบถัดไปมีสิทธิ์คิกอฟ (ดู throttle ของ day-tick) */
+export const PRE_MATCH_REMINDER_MINUTES = 10;
+
 /** ชั่วโมงปัจจุบันตามเวลาไทย (0-23, รวมเศษนาทีเป็นทศนิยม) — ไม่พึ่ง timezone ของเครื่อง/เซิร์ฟเวอร์ */
 export function bangkokHourNow(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {

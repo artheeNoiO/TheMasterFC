@@ -17,6 +17,7 @@ export const BOT_TEAM_DEFS = [
   { name: "ปราจีนบุรี พาวเวอร์", short: "PJP", color: "#e36414", tier: -9 },
   { name: "สิงห์บุรี สโตนคัตเตอร์ส", short: "SBS", color: "#3a5a40", tier: -10 },
   { name: "อุตรดิตถ์ ธันเดอร์โบลท์", short: "UTB", color: "#4a4e69", tier: -10 },
+  { name: "น่าน โกลเด้น เกท", short: "NGG", color: "#8d5a97", tier: -3 },
 ];
 
 export const FORMATIONS = {

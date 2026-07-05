@@ -3,10 +3,15 @@ dist/
 build/
 .env
 .env.local
+.env.test
 *.log
 .DS_Store
 server/prisma/dev.db
 server/prisma/dev.db-journal
 server/dev.db
 server/dev.db-journal
+server/prisma/test.db
+server/prisma/test.db-journal
+server/test.db
+server/test.db-journal
 cloudflared-config.yml

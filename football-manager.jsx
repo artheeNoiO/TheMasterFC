@@ -3882,6 +3882,98 @@ function RadarStats({ stats }) {
   );
 }
 
+function radarPolarPoint(cx, cy, r, angleRad) {
+  return [cx + r * Math.sin(angleRad), cy - r * Math.cos(angleRad)];
+}
+
+/** กราฟเรดาร์ (spider chart) จริง — ใช้เทียบสเตตนักเตะแบบเห็นภาพรวมทีเดียว (0-100 ต่อแกน) */
+function RadarChartSVG({ stats, size = 210, color = C.amber, compareStats = null, compareColor = C.blue }) {
+  const entries = Object.entries(stats);
+  const n = entries.length;
+  if (n < 3) return null;
+  const cx = 100;
+  const cy = 100;
+  const R = 74;
+  const angleStep = (Math.PI * 2) / n;
+  const toPoints = (vals) => entries.map(([k], i) => radarPolarPoint(cx, cy, (clamp(vals[k] ?? 0, 0, 100) / 100) * R, i * angleStep));
+  const dataPoints = toPoints(stats);
+  const comparePoints = compareStats ? toPoints(compareStats) : null;
+  return (
+    <svg viewBox="0 0 200 200" width={size} height={size}>
+      {[0.25, 0.5, 0.75, 1].map((ring) => (
+        <polygon
+          key={ring}
+          points={entries.map((_, i) => radarPolarPoint(cx, cy, ring * R, i * angleStep).join(",")).join(" ")}
+          fill="none" stroke={C.steel} strokeOpacity={0.55} strokeWidth={1}
+        />
+      ))}
+      {entries.map((_, i) => {
+        const [x, y] = radarPolarPoint(cx, cy, R, i * angleStep);
+        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke={C.steel} strokeOpacity={0.55} strokeWidth={1} />;
+      })}
+      {comparePoints && (
+        <polygon points={comparePoints.map((p) => p.join(",")).join(" ")} fill={compareColor} fillOpacity={0.18} stroke={compareColor} strokeWidth={1.5} />
+      )}
+      <polygon points={dataPoints.map((p) => p.join(",")).join(" ")} fill={color} fillOpacity={0.3} stroke={color} strokeWidth={2} />
+      {entries.map(([label, v], i) => {
+        const [lx, ly] = radarPolarPoint(cx, cy, R + 18, i * angleStep);
+        return (
+          <text key={label} x={lx} y={ly} fontSize={8.5} fill={C.chalk} textAnchor="middle" dominantBaseline="middle" fontFamily={MONO_FONT}>
+            {label}
+          </text>
+        );
+      })}
+    </svg>
+  );
+}
+
+/** popup โชว์สเตตนักเตะแบบละเอียด + กราฟเรดาร์ — เปิดจากคลิกชื่อในหน้า Squad/Tactics */
+function PlayerDetailModal({ player: p, onClose }) {
+  if (!p) return null;
+  const radarStats = {
+    "โดยรวม": p.rating,
+    "จ่ายบอล": (p.attrs?.passing || 0) * 5,
+    "ยิงประตู": (p.attrs?.finishing || 0) * 5,
+    "พละกำลัง": (p.attrs?.strength || 0) * 5,
+    "ปะทะ": (p.attrs?.tackling || 0) * 5,
+    "ความเร็ว": (p.attrs?.pace || 0) * 5,
+    "เลี้ยงบอล": (p.attrs?.dribbling || 0) * 5,
+  };
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+      onClick={onClose}
+    >
+      <Panel style={{ maxWidth: 420, width: "100%", maxHeight: "88vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>{p.name}</div>
+            <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>{playerPosTH(p)} · อายุ {p.age} · เรตติ้ง {p.rating}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", margin: "6px 0 4px" }}>
+          <RadarChartSVG stats={radarStats} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}><PlayerStarsRow p={p} /></div>
+        {Object.keys(ATTR_GROUPS).map((grp) => (
+          <div key={grp} style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 9.5, color: GROUP_COLOR[grp], marginBottom: 3, fontWeight: 700 }}>{GROUP_TH[grp]}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              {ATTR_GROUPS[grp].map((k) => (
+                <div key={k}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: C.textDim }}><span>{ATTR_TH[k]}</span><span style={{ fontFamily: MONO_FONT, color: C.chalk }}>{p.attrs[k]}</span></div>
+                  <MiniBar value={(p.attrs[k] / 20) * 100} color={GROUP_COLOR[grp]} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </Panel>
+    </div>
+  );
+}
+
 /* ============================== MAIN APP ============================== */
 export default function App({
   onMigrateToServer,
@@ -8355,6 +8447,7 @@ function SquadView({ squad, xi, squadSize, injuredCount, canKickoff, xiAfterFill
 function attrGroupAvg(p, group) { return ATTR_GROUPS[group].reduce((s, k) => s + p.attrs[k], 0) / ATTR_GROUPS[group].length; }
 function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, onRenewContract, uiLang = "th", teams, leagueId = "thailand" }) {
   const [open, setOpen] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
   const daysLeft = p.contractEndsDay != null && currentDay != null ? p.contractEndsDay - currentDay : null;
   const contractColor = daysLeft == null ? C.textDim : daysLeft > 60 ? C.good : daysLeft > 20 ? C.amber : C.crimson;
   const renewFee = Math.round((p.value * 0.06) / 1000) * 1000;
@@ -8385,6 +8478,11 @@ function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, 
         <div style={{ flex: 1, minWidth: 0 }} onClick={() => setOpen((o) => !o)} role="button">
           <div style={{ fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             {p.name}
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowDetail(true); }}
+              title="ดูสเตตแบบละเอียด"
+              style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 11, cursor: "pointer", padding: 0, lineHeight: 1 }}
+            >📊</button>
             {p.isLegend && <span style={{ fontSize: 9, background: C.gold, color: "#0b2318", borderRadius: 4, padding: "1px 5px" }}>⭐ {t(uiLang, "player.legend")}</span>}
             {isXI && <span style={{ fontSize: 9, background: C.good, color: "#08150e", borderRadius: 4, padding: "1px 5px" }}>{t(uiLang, "player.xiBadge")}</span>}
             {p.injuryDays > 0 && (
@@ -8455,6 +8553,7 @@ function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, 
       <div style={{ textAlign: "center", marginTop: 4 }}>
         <button onClick={() => setOpen((o) => !o)} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 10, cursor: "pointer" }}>{open ? "▲ ซ่อนแอตทริบิวต์" : "▼ ดูแอตทริบิวต์เต็ม (15 ค่า)"}</button>
       </div>
+      {showDetail && <PlayerDetailModal player={p} onClose={() => setShowDetail(false)} />}
     </div>
   );
 }
@@ -8685,6 +8784,7 @@ function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onAutoPick, o
   const [expandedId, setExpandedId] = useState(null);
   const [pick, setPick] = useState(null); // { kind, index?, playerId? }
   const [dragOver, setDragOver] = useState(null);
+  const [detailPlayer, setDetailPlayer] = useState(null);
   const slots = resolveLineupSlots(career, squad, team.formation);
   const slotDefs = FORMATIONS[resolveFormation(team.formation)].slots;
   const xiIds = slots.filter(Boolean);
@@ -8773,7 +8873,12 @@ function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onAutoPick, o
             {p ? (
               <>
                 <div style={{ fontSize: 11.5, fontWeight: tier === "xi" ? 700 : 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {p.name}{p.injuryDays > 0 && " 🤕"}{p.injuryDays <= 0 && (p.suspendedMatches || 0) > 0 && " 🚫"}{p.isLegend && " ⭐"}{isNew && <span style={{ color: C.amber, fontSize: 9 }}> NEW</span>}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDetailPlayer(p); }}
+                    title="ดูสเตตแบบละเอียด"
+                    style={{ background: "transparent", border: "none", color: "inherit", font: "inherit", fontWeight: "inherit", padding: 0, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted", textDecorationColor: C.textDim }}
+                  >{p.name}</button>
+                  {p.injuryDays > 0 && " 🤕"}{p.injuryDays <= 0 && (p.suspendedMatches || 0) > 0 && " 🚫"}{p.isLegend && " ⭐"}{isNew && <span style={{ color: C.amber, fontSize: 9 }}> NEW</span>}
                 </div>
                 <div style={{ fontSize: 8, color: oop ? C.crimson : C.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {oop
@@ -8815,6 +8920,7 @@ function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onAutoPick, o
   }
 
   return (
+    <>
     <Panel style={{ padding: 0, overflow: "hidden" }}>
       <div style={{ padding: "14px 14px 8px" }}>
         <SectionLabel sub={`ตัวจริง ${MIN_XI_SIZE} · ตัวสำรอง ${MATCH_BENCH_SIZE} (เปลี่ยนได้ ${MAX_MATCH_SUBS}/นัด) · ทีมทั้งหมด ${squad.length} คน — ลากหรือแตะสลับ`}>รายชื่อนักเตะ</SectionLabel>
@@ -8844,6 +8950,8 @@ function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onAutoPick, o
         </button>
       </div>
     </Panel>
+    {detailPlayer && <PlayerDetailModal player={detailPlayer} onClose={() => setDetailPlayer(null)} />}
+    </>
   );
 }
 
