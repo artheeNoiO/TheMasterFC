@@ -13,6 +13,7 @@ import {
 import { prisma } from "../db.js";
 import { reclaimInactiveLegends } from "./legendService.js";
 import { kickOffRoundMatches, finalizeFinishedMatches } from "./liveMatchService.js";
+import { executeAcceptedTransfers } from "./negotiationService.js";
 import { DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY, isMatchWindowOpen, isMarketWindowOpen } from "../../../game-version.js";
 import {
   initRoadmapForNewClub,
@@ -735,6 +736,9 @@ function applyStandingResult(standing, gf, ga) {
 }
 
 async function startNewSeason(shardId) {
+  // ปิดตลาด — ดีลที่ตกลงกันไว้ระหว่างวัน (accepted_pending) ย้ายทีมจริงพร้อมกันตอนนี้ทีเดียว
+  await executeAcceptedTransfers(shardId);
+
   const clubs = await prisma.club.findMany({ where: { shardId } });
   const clubIds = clubs.map((c) => c.id);
   const fixtures = buildSeasonFixtures(clubIds);

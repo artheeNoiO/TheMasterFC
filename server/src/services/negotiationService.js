@@ -1,17 +1,15 @@
 /**
  * เสนอซื้อนักเตะตรงจากทีมอื่น (สไตล์ Top Eleven "Negotiations") — คนละระบบกับ TransferListing/Bid
  * (ประมูลของที่ประกาศขาย) เพราะอันนี้เสนอได้แม้เจ้าของไม่ได้ประกาศขายนักเตะคนนั้นเลย
+ *
+ * เปิดเจรจา/เสนอ/ต่อรอง/ตกลงได้ตลอดทั้งวัน (9:00-20:00 เล่นแมทอยู่ก็ทำได้) — แต่การย้ายทีมจริง
+ * (โอนเงิน+เปลี่ยนสังกัด) จะ "ค้าง" ไว้เป็นสถานะ accepted_pending แล้วรันพร้อมกันทีเดียวตอนวันปิด
+ * (เรียกจาก startNewSeason ใน gameService.js ซึ่งทำงานตอนจบรอบสุดท้ายของวัน ~20:00 พอดี)
+ * กันดีลย้ายทีมไปกวนสควอด/XI ระหว่างที่ระบบแมทอัตโนมัติกำลังล็อกทีมแข่งอยู่
  */
 import { prisma } from "../db.js";
-import { isMarketWindowOpen } from "../../../game-version.js";
 
-const OFFER_TTL_MS = 8 * 60 * 60 * 1000; // 8 ชม. — อยู่ในช่วงตลาด (20:00-09:00) พอดี ไม่ค้างข้ามไปช่วงแข่งถัดไป
-
-function assertMarketOpen() {
-  if (!isMarketWindowOpen()) {
-    throw new Error("ตลาดปิด — เปิดเฉพาะช่วงพักฟื้น 20:00-09:00 น. (ตอนนี้เป็นช่วงแข่งขัน)");
-  }
-}
+const OFFER_TTL_MS = 8 * 60 * 60 * 1000; // 8 ชม. — พอสำหรับเจรจาข้ามช่วงกลางวันไปถึงตอนตลาดปิดดีล
 
 async function getClubOrThrow(userId) {
   const club = await prisma.club.findFirst({ where: { userId } });
@@ -37,9 +35,8 @@ function serializeOffer(offer, playersById, clubsById) {
   };
 }
 
-/** เสนอซื้อนักเตะของทีมอื่น — ยังไม่หักเงินตอนนี้ หักตอนเจ้าของกดรับเท่านั้น */
+/** เสนอซื้อนักเตะของทีมอื่น — เสนอได้ตลอดวัน ยังไม่หักเงินตอนนี้ (หักตอนย้ายทีมจริงตอนปิดวัน) */
 export async function sendPlayerOffer(userId, { playerId, feeOffer, wageOffer }) {
-  assertMarketOpen();
   if (!(feeOffer > 0) || !(wageOffer > 0)) throw new Error("ต้องระบุค่าตัวและค่าเหนื่อยที่เสนอ");
 
   const fromClub = await getClubOrThrow(userId);
@@ -80,7 +77,13 @@ export async function getMyOffers(userId) {
   await expireStaleOffers(club.shardId);
 
   const offers = await prisma.playerOffer.findMany({
-    where: { shardId: club.shardId, OR: [{ fromClubId: club.id }, { toClubId: club.id }] },
+    where: {
+      shardId: club.shardId,
+      OR: [{ fromClubId: club.id }, { toClubId: club.id }],
+      // ไม่โชว์ของที่จบเรื่องแล้ว (accepted/rejected/expired/cancelled) — เหลือแค่ที่ยังต้องทำอะไรต่อ
+      // หรือรอปิดดีลตอน 20:00 (accepted_pending)
+      status: { in: ["pending", "countered", "accepted_pending"] },
+    },
     orderBy: { createdAt: "desc" },
     take: 50,
   });
@@ -132,7 +135,8 @@ export async function respondToOffer(userId, offerId, { action, counterFee, coun
   }
 
   if (action === "accept") {
-    assertMarketOpen();
+    // ตกลงดีลได้ทันทีไม่ว่ากี่โมง แต่ "ย้ายทีมจริง" (โอนเงิน+เปลี่ยนสังกัด) รอไปทำพร้อมกันตอนปิดวัน
+    // (executeAcceptedTransfers เรียกจาก startNewSeason) — กันย้ายทีมกลางที่ระบบแมทอัตโนมัติล็อก XI อยู่
     const finalFee = offer.status === "countered" ? offer.counterFee : offer.feeOffer;
     const finalWage = offer.status === "countered" ? offer.counterWage : offer.wageOffer;
 
@@ -142,27 +146,50 @@ export async function respondToOffer(userId, offerId, { action, counterFee, coun
     ]);
     if (!fromClub) throw new Error("ทีมผู้เสนอไม่พบแล้ว");
     if (!player || player.clubId !== club.id) throw new Error("นักเตะไม่ได้อยู่กับทีมคุณแล้ว");
-    // เช็คงบผู้ซื้อซ้ำตอนรับจริง (เวลาผ่านไปอาจใช้งบไปแล้วจากที่อื่น) — กันงบติดลบ
     if (fromClub.budget < finalFee) {
       await prisma.playerOffer.update({ where: { id: offer.id }, data: { status: "rejected", respondedAt: new Date() } });
       throw new Error("ทีมผู้เสนอมีงบไม่พอแล้ว ณ ตอนนี้ — ข้อเสนอถูกยกเลิกอัตโนมัติ");
     }
 
     await prisma.$transaction([
-      prisma.club.update({ where: { id: fromClub.id }, data: { budget: { decrement: finalFee } } }),
-      prisma.club.update({ where: { id: club.id }, data: { budget: { increment: finalFee } } }),
-      prisma.player.update({ where: { id: player.id }, data: { clubId: fromClub.id, wage: finalWage } }),
-      prisma.playerOffer.update({ where: { id: offer.id }, data: { status: "accepted", respondedAt: new Date() } }),
-      // ข้อเสนออื่นที่ค้างอยู่กับนักเตะคนนี้ (จากทีมอื่น) ต้องยกเลิกไปด้วย เพราะย้ายทีมไปแล้ว
+      prisma.playerOffer.update({ where: { id: offer.id }, data: { status: "accepted_pending", respondedAt: new Date() } }),
+      // ข้อเสนออื่นที่ค้างอยู่กับนักเตะคนนี้ (จากทีมอื่น) ต้องยกเลิกไปด้วย เพราะตกลงย้ายแล้ว
       prisma.playerOffer.updateMany({
         where: { playerId: player.id, status: { in: ["pending", "countered"] }, id: { not: offer.id } },
         data: { status: "expired" },
       }),
     ]);
-    return { status: "accepted", fee: finalFee, wage: finalWage };
+    return { status: "accepted_pending", fee: finalFee, wage: finalWage };
   }
 
   throw new Error("action ต้องเป็น accept, reject หรือ counter");
+}
+
+/** ปิดดีลที่ตกลงกันไว้ระหว่างวันจริง (โอนเงิน+เปลี่ยนสังกัด) — เรียกครั้งเดียวตอนวันปิด ~20:00
+ * (เช็คงบ/ความเป็นเจ้าของซ้ำตอนนี้อีกที เผื่อเปลี่ยนไปแล้วระหว่างวันจากดีลอื่น) */
+export async function executeAcceptedTransfers(shardId) {
+  const offers = await prisma.playerOffer.findMany({ where: { shardId, status: "accepted_pending" } });
+  let executed = 0;
+  for (const offer of offers) {
+    const finalFee = offer.counterFee ?? offer.feeOffer;
+    const finalWage = offer.counterWage ?? offer.wageOffer;
+    const [fromClub, player] = await Promise.all([
+      prisma.club.findUnique({ where: { id: offer.fromClubId } }),
+      prisma.player.findUnique({ where: { id: offer.playerId } }),
+    ]);
+    if (!fromClub || !player || player.clubId !== offer.toClubId || fromClub.budget < finalFee) {
+      await prisma.playerOffer.update({ where: { id: offer.id }, data: { status: "expired" } });
+      continue;
+    }
+    await prisma.$transaction([
+      prisma.club.update({ where: { id: fromClub.id }, data: { budget: { decrement: finalFee } } }),
+      prisma.club.update({ where: { id: offer.toClubId }, data: { budget: { increment: finalFee } } }),
+      prisma.player.update({ where: { id: player.id }, data: { clubId: fromClub.id, wage: finalWage } }),
+      prisma.playerOffer.update({ where: { id: offer.id }, data: { status: "accepted" } }),
+    ]);
+    executed += 1;
+  }
+  return { executed };
 }
 
 /** ยกเลิกข้อเสนอที่ทีมตัวเองส่งไป (ยังไม่มีใครตอบ) */

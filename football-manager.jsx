@@ -13358,7 +13358,7 @@ function OnlineMarketView({ uiLang = "th" }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Panel style={{ border: `1px solid ${C.amber}` }}>
-        <SectionLabel style={{ color: C.amber }} sub="เสนอซื้อนักเตะทีมอื่นได้ตรงๆ แม้ไม่ได้ประกาศขาย · เปิดเฉพาะช่วงพักฟื้น 20:00-09:00 น.">🤝 ตลาดออนไลน์</SectionLabel>
+        <SectionLabel style={{ color: C.amber }} sub="เสนอซื้อนักเตะทีมอื่นได้ตรงๆ แม้ไม่ได้ประกาศขาย · เจรจาได้ตลอดวัน ดีลที่ตกลงกันจะย้ายทีมจริงพร้อมกันตอน 20:00 น.">🤝 ตลาดออนไลน์</SectionLabel>
         <div style={{ fontSize: 11.5, fontFamily: MONO_FONT, color: C.textDim }}>งบสโมสรออนไลน์ <b style={{ color: C.good }}>{formatMoney(myClub.budget)}</b></div>
       </Panel>
 
@@ -13376,11 +13376,15 @@ function OnlineMarketView({ uiLang = "th" }) {
                     <div style={{ fontSize: 9, color: C.textDim }}>จาก {o.fromClub?.name}</div>
                   </div>
                 } />
-                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                  <OnlineActionBtn tone="good" disabled={busyId === o.id} onClick={() => runAction(o.id, () => acceptOnlineOffer(o.id))}>✅ รับข้อเสนอ</OnlineActionBtn>
-                  <OnlineActionBtn tone="warn" disabled={busyId === o.id} onClick={() => setCounteringId(counteringId === o.id ? null : o.id)}>🔁 ต่อรอง</OnlineActionBtn>
-                  <OnlineActionBtn tone="bad" disabled={busyId === o.id} onClick={() => runAction(o.id, () => rejectOnlineOffer(o.id))}>❌ ปฏิเสธ</OnlineActionBtn>
-                </div>
+                {o.status === "accepted_pending" ? (
+                  <div style={{ fontSize: 10.5, color: C.good, marginTop: 6 }}>✅ ตกลงแล้ว — รอย้ายทีมจริงตอน 20:00 น.</div>
+                ) : (
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <OnlineActionBtn tone="good" disabled={busyId === o.id} onClick={() => runAction(o.id, () => acceptOnlineOffer(o.id))}>✅ รับข้อเสนอ</OnlineActionBtn>
+                    <OnlineActionBtn tone="warn" disabled={busyId === o.id} onClick={() => setCounteringId(counteringId === o.id ? null : o.id)}>🔁 ต่อรอง</OnlineActionBtn>
+                    <OnlineActionBtn tone="bad" disabled={busyId === o.id} onClick={() => runAction(o.id, () => rejectOnlineOffer(o.id))}>❌ ปฏิเสธ</OnlineActionBtn>
+                  </div>
+                )}
                 {counteringId === o.id && (
                   <OnlineOfferForm
                     player={{ ...o.player, value: o.feeOffer, wage: o.wageOffer }}
@@ -13406,15 +13410,21 @@ function OnlineMarketView({ uiLang = "th" }) {
                 <OnlinePlayerRow player={o.player} right={
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontSize: 12, fontWeight: 800, color: C.amber }}>{formatMoney(o.status === "countered" ? o.counterFee : o.feeOffer)}</div>
-                    <div style={{ fontSize: 9, color: C.textDim }}>{o.status === "countered" ? "โดนต่อรอง" : "รอตอบรับ"} · {o.toClub?.name}</div>
+                    <div style={{ fontSize: 9, color: C.textDim }}>
+                      {o.status === "accepted_pending" ? "ตกลงแล้ว" : o.status === "countered" ? "โดนต่อรอง" : "รอตอบรับ"} · {o.toClub?.name}
+                    </div>
                   </div>
                 } />
-                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                  {o.status === "countered" && (
-                    <OnlineActionBtn tone="good" disabled={busyId === o.id} onClick={() => runAction(o.id, () => sendOnlinePlayerOffer({ playerId: o.player.id, feeOffer: o.counterFee, wageOffer: o.counterWage }))}>✅ รับราคาต่อรอง</OnlineActionBtn>
-                  )}
-                  <OnlineActionBtn tone="bad" disabled={busyId === o.id} onClick={() => runAction(o.id, () => cancelOnlineOffer(o.id))}>ยกเลิกข้อเสนอ</OnlineActionBtn>
-                </div>
+                {o.status === "accepted_pending" ? (
+                  <div style={{ fontSize: 10.5, color: C.good, marginTop: 6 }}>✅ ตกลงแล้ว — รอย้ายทีมจริงตอน 20:00 น.</div>
+                ) : (
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    {o.status === "countered" && (
+                      <OnlineActionBtn tone="good" disabled={busyId === o.id} onClick={() => runAction(o.id, () => sendOnlinePlayerOffer({ playerId: o.player.id, feeOffer: o.counterFee, wageOffer: o.counterWage }))}>✅ รับราคาต่อรอง</OnlineActionBtn>
+                    )}
+                    <OnlineActionBtn tone="bad" disabled={busyId === o.id} onClick={() => runAction(o.id, () => cancelOnlineOffer(o.id))}>ยกเลิกข้อเสนอ</OnlineActionBtn>
+                  </div>
+                )}
               </div>
             ))}
           </div>
