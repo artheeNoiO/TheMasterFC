@@ -2436,7 +2436,8 @@ function buildSuggestedPrep(weaknesses, managerProfile, keyThreats) {
 function defaultMatchPrep() {
   return {
     mentality: "balanced", instructions: [], teamTalk: null,
-    tempo: "normal", pressing: "medium", defLine: "normal", offsideTrap: false, markPlayerId: null,
+    tempo: "normal", pressing: "medium", defLine: "normal", creativeFreedom: "balanced",
+    offsideTrap: false, markPlayerId: null,
   };
 }
 
@@ -2469,6 +2470,8 @@ function applyMatchPrepToContext(ctx, prep, meta) {
   atk *= pressing.atk; def *= pressing.def;
   const defLine = DEF_LINE_OPTIONS.find((t) => t.id === prep.defLine) || DEF_LINE_OPTIONS[1];
   atk *= defLine.atk; def *= defLine.def;
+  const creativeFreedom = CREATIVE_FREEDOM_OPTIONS.find((t) => t.id === prep.creativeFreedom) || CREATIVE_FREEDOM_OPTIONS[1];
+  atk *= creativeFreedom.atk; def *= creativeFreedom.def;
 
   if (meta?.squad && meta?.xiIds) {
     const ownDefenders = meta.squad.filter((p) => meta.xiIds.includes(p.id) && (p.position === "DF" || p.position === "GK"));
@@ -2845,6 +2848,12 @@ const DEF_LINE_OPTIONS = [
   { id: "deep", label: "แนวรับลึก", desc: "ถอยรอสวนกลับ", atk: 0.96, def: 1.05 },
   { id: "normal", label: "แนวรับปกติ", desc: "มาตรฐาน", atk: 1, def: 1 },
   { id: "high", label: "แนวรับสูง", desc: "ดันขึ้นบีบพื้นที่ — ต้องมีแบ็คเร็วคุ้มกับดักล้ำหน้า", atk: 1.04, def: 0.96 },
+];
+/** อิสระในการตัดสินใจ (Creative Freedom แบบ FM26) — ปล่อยอิสระ = สร้างสรรค์ขึ้นแต่เสี่ยงเสียบอลง่ายขึ้น */
+const CREATIVE_FREEDOM_OPTIONS = [
+  { id: "disciplined", label: "มีวินัย", desc: "ทำตามแผนเป๊ะ เสี่ยงน้อย", atk: 0.97, def: 1.03 },
+  { id: "balanced", label: "สมดุล", desc: "มาตรฐาน", atk: 1, def: 1 },
+  { id: "expressive", label: "อิสระ", desc: "กล้าเลี้ยง/จ่ายเสี่ยง สร้างโอกาสมากขึ้นแต่เสียบอลง่ายขึ้น", atk: 1.05, def: 0.95 },
 ];
 /** กับดักล้ำหน้าได้ผลจริงก็ต่อเมื่อดันแนวสูง + แบ็คตัวเร็วพอ ไม่งั้นเสี่ยงโดนบอลทะลุ */
 function offsideTrapMult(defLine, offsideTrap, avgDefPace) {
@@ -3932,10 +3941,8 @@ function RadarChartSVG({ stats, size = 210, color = C.amber, compareStats = null
   );
 }
 
-/** popup โชว์สเตตนักเตะแบบละเอียด + กราฟเรดาร์ — เปิดจากคลิกชื่อในหน้า Squad/Tactics */
-function PlayerDetailModal({ player: p, onClose }) {
-  if (!p) return null;
-  const radarStats = {
+function playerRadarStats(p) {
+  return {
     "โดยรวม": p.rating,
     "จ่ายบอล": (p.attrs?.passing || 0) * 5,
     "ยิงประตู": (p.attrs?.finishing || 0) * 5,
@@ -3944,6 +3951,17 @@ function PlayerDetailModal({ player: p, onClose }) {
     "ความเร็ว": (p.attrs?.pace || 0) * 5,
     "เลี้ยงบอล": (p.attrs?.dribbling || 0) * 5,
   };
+}
+
+/** popup โชว์สเตตนักเตะแบบละเอียด + กราฟเรดาร์ — เปิดจากคลิกชื่อในหน้า Squad/Tactics
+ *  squad (optional): รายชื่อนักเตะในทีมเดียวกัน — ถ้ามีจะเปิดให้เลือกนักเตะอีกคนมาเทียบกราฟซ้อนกันได้ */
+function PlayerDetailModal({ player: p, onClose, squad = null }) {
+  const [compareId, setCompareId] = useState("");
+  if (!p) return null;
+  const radarStats = playerRadarStats(p);
+  const comparePlayer = compareId ? squad?.find((s) => s.id === compareId) : null;
+  const compareStats = comparePlayer ? playerRadarStats(comparePlayer) : null;
+  const compareOptions = (squad || []).filter((s) => s.id !== p.id);
   return (
     <div
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
@@ -3952,14 +3970,34 @@ function PlayerDetailModal({ player: p, onClose }) {
       <Panel style={{ maxWidth: 420, width: "100%", maxHeight: "88vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 800 }}>{p.name}</div>
+            <div style={{ fontSize: 16, fontWeight: 800 }}>{p.name}{comparePlayer && <span style={{ color: C.blue }}> vs {comparePlayer.name}</span>}</div>
             <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>{playerPosTH(p)} · อายุ {p.age} · เรตติ้ง {p.rating}</div>
           </div>
           <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
+        {compareOptions.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+            <span style={{ fontSize: 9.5, color: C.textDim }}>เทียบกับ:</span>
+            <select value={compareId} onChange={(e) => setCompareId(e.target.value)} style={{
+              flex: 1, fontSize: 10.5, padding: "5px 6px", borderRadius: 6, border: `1px solid ${C.steel}`,
+              background: C.panel2, color: C.chalk,
+            }}>
+              <option value="">— ไม่เทียบ —</option>
+              {compareOptions.map((s) => (
+                <option key={s.id} value={s.id}>{s.name} ({playerPosTH(s)})</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div style={{ display: "flex", justifyContent: "center", margin: "6px 0 4px" }}>
-          <RadarChartSVG stats={radarStats} />
+          <RadarChartSVG stats={radarStats} compareStats={compareStats} />
         </div>
+        {comparePlayer && (
+          <div style={{ display: "flex", justifyContent: "center", gap: 14, marginBottom: 6, fontSize: 9.5 }}>
+            <span style={{ color: C.amber }}>● {p.name}</span>
+            <span style={{ color: C.blue }}>● {comparePlayer.name}</span>
+          </div>
+        )}
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}><PlayerStarsRow p={p} /></div>
         {Object.keys(ATTR_GROUPS).map((grp) => (
           <div key={grp} style={{ marginTop: 10 }}>
@@ -7581,6 +7619,7 @@ function MatchBriefingPanel({ scout, matchPrep, onSetMentality, onToggleInstruct
               <>
                 {[
                   { field: "tempo", label: "จังหวะเกม (Tempo)", options: TEMPO_OPTIONS, color: C.amber },
+                  { field: "creativeFreedom", label: "อิสระความคิด (Creative Freedom)", options: CREATIVE_FREEDOM_OPTIONS, color: C.gold },
                   { field: "pressing", label: "การกดดัน (Pressing)", options: PRESSING_OPTIONS, color: C.crimson },
                   { field: "defLine", label: "แนวรับ (Defensive Line)", options: DEF_LINE_OPTIONS, color: C.blue },
                 ].map(({ field, label, options, color }) => (
@@ -8973,7 +9012,7 @@ function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onAutoPick, o
         </button>
       </div>
     </Panel>
-    {detailPlayer && <PlayerDetailModal player={detailPlayer} onClose={() => setDetailPlayer(null)} />}
+    {detailPlayer && <PlayerDetailModal player={detailPlayer} squad={squad} onClose={() => setDetailPlayer(null)} />}
     </>
   );
 }
@@ -8983,6 +9022,7 @@ const STYLE_CARD_ICONS = {
   tempo: { slow: "🐢", normal: "⚖️", fast: "⚡" },
   pressing: { low: "🧱", medium: "🔁", high: "🔥" },
   defLine: { deep: "🛡️", normal: "➖", high: "📏" },
+  creativeFreedom: { disciplined: "📐", balanced: "⚖️", expressive: "🎨" },
 };
 function styleEffectLine(opt) {
   const parts = [];
@@ -8994,43 +9034,55 @@ function styleEffectLine(opt) {
 }
 function TeamStyleCards({ matchPrep, onSetPrepField, squad, xi }) {
   const groups = [
-    { field: "tempo", label: "จังหวะเกม (Tempo)", options: TEMPO_OPTIONS },
-    { field: "pressing", label: "เพรสซิ่ง (Pressing)", options: PRESSING_OPTIONS },
-    { field: "defLine", label: "แนวรับ (Defensive Line)", options: DEF_LINE_OPTIONS },
+    { field: "tempo", label: "จังหวะเกม (Tempo)", options: TEMPO_OPTIONS, group: "in" },
+    { field: "creativeFreedom", label: "อิสระความคิด (Creative Freedom)", options: CREATIVE_FREEDOM_OPTIONS, group: "in" },
+    { field: "pressing", label: "เพรสซิ่ง (Pressing)", options: PRESSING_OPTIONS, group: "out" },
+    { field: "defLine", label: "แนวรับ (Defensive Line)", options: DEF_LINE_OPTIONS, group: "out" },
   ];
   const xiDF = squad.filter((p) => xi.includes(p.id) && p.position === "DF");
   const avgDefPace = xiDF.length ? xiDF.reduce((s, p) => s + (p.attrs?.pace || 10), 0) / xiDF.length : 10;
+  const sections = [
+    { id: "in", label: "🔵 ครองบอล (In Possession)" },
+    { id: "out", label: "🔴 ไม่ได้ครองบอล (Out of Possession)" },
+  ];
   return (
     <Panel style={{ border: `1px solid ${C.blue}` }}>
       <SectionLabel style={{ color: C.blue }} sub="มีผลทุกนัดจนกว่าจะเปลี่ยน — ปรับเฉพาะนัดได้ที่หน้าเตรียมแมตช์เหมือนเดิม">สไตล์การเล่นของทีม</SectionLabel>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {groups.map(({ field, label, options }) => {
-          const current = matchPrep?.[field] || (field === "pressing" ? "medium" : "normal");
-          return (
-            <div key={field}>
-              <div style={{ fontSize: 10, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{label}</div>
-              <div style={{ display: "grid", gridTemplateColumns: `repeat(${options.length}, 1fr)`, gap: 8 }}>
-                {options.map((opt) => {
-                  const on = current === opt.id;
-                  return (
-                    <button key={opt.id} type="button" onClick={() => onSetPrepField(field, opt.id)} style={{
-                      padding: "12px 6px 10px", borderRadius: 10, cursor: "pointer", textAlign: "center",
-                      border: `2px solid ${on ? "#6db3f2" : C.steel}`,
-                      background: on ? "linear-gradient(165deg,#1d3a5f,#12253f)" : C.panel2,
-                      boxShadow: on ? "0 0 12px rgba(109,179,242,.25)" : "none",
-                      transition: "all .15s",
-                    }}>
-                      <div style={{ fontSize: 24, filter: on ? "none" : "grayscale(.6)" }}>{STYLE_CARD_ICONS[field][opt.id]}</div>
-                      <div style={{ fontSize: 11, fontWeight: 800, color: on ? "#bcdcf7" : C.chalk, marginTop: 4 }}>{opt.label}</div>
-                      <div style={{ fontSize: 8, color: on ? "#8fb8dd" : C.textDim, marginTop: 3, lineHeight: 1.35 }}>{styleEffectLine(opt)}</div>
-                      {on && <div style={{ fontSize: 8.5, color: "#6db3f2", marginTop: 4, fontWeight: 700 }}>✓ ใช้อยู่</div>}
-                    </button>
-                  );
-                })}
-              </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {sections.map((section) => (
+          <div key={section.id}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: C.chalk, marginBottom: 10 }}>{section.label}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {groups.filter((g) => g.group === section.id).map(({ field, label, options }) => {
+                const current = matchPrep?.[field] || options[1].id;
+                return (
+                  <div key={field}>
+                    <div style={{ fontSize: 10, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{label}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: `repeat(${options.length}, 1fr)`, gap: 8 }}>
+                      {options.map((opt) => {
+                        const on = current === opt.id;
+                        return (
+                          <button key={opt.id} type="button" onClick={() => onSetPrepField(field, opt.id)} style={{
+                            padding: "12px 6px 10px", borderRadius: 10, cursor: "pointer", textAlign: "center",
+                            border: `2px solid ${on ? "#6db3f2" : C.steel}`,
+                            background: on ? "linear-gradient(165deg,#1d3a5f,#12253f)" : C.panel2,
+                            boxShadow: on ? "0 0 12px rgba(109,179,242,.25)" : "none",
+                            transition: "all .15s",
+                          }}>
+                            <div style={{ fontSize: 24, filter: on ? "none" : "grayscale(.6)" }}>{STYLE_CARD_ICONS[field][opt.id]}</div>
+                            <div style={{ fontSize: 11, fontWeight: 800, color: on ? "#bcdcf7" : C.chalk, marginTop: 4 }}>{opt.label}</div>
+                            <div style={{ fontSize: 8, color: on ? "#8fb8dd" : C.textDim, marginTop: 3, lineHeight: 1.35 }}>{styleEffectLine(opt)}</div>
+                            {on && <div style={{ fontSize: 8.5, color: "#6db3f2", marginTop: 4, fontWeight: 700 }}>✓ ใช้อยู่</div>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
+          </div>
+        ))}
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 11, fontWeight: 700 }}>🪤 กับดักล้ำหน้า (Offside Trap)</div>
@@ -10176,6 +10228,8 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
     atk *= pressing.atk; def *= pressing.def;
     const defLineOpt = DEF_LINE_OPTIONS.find((t) => t.id === prep.defLine) || DEF_LINE_OPTIONS[1];
     atk *= defLineOpt.atk; def *= defLineOpt.def;
+    const creativeFreedomOpt = CREATIVE_FREEDOM_OPTIONS.find((t) => t.id === prep.creativeFreedom) || CREATIVE_FREEDOM_OPTIONS[1];
+    atk *= creativeFreedomOpt.atk; def *= creativeFreedomOpt.def;
     const ownDefenders = mySquad.filter((p) => myXI.includes(p.id) && (p.position === "DF" || p.position === "GK"));
     const avgDefPace = ownDefenders.length ? ownDefenders.reduce((s, p) => s + (p.attrs?.pace || 10), 0) / ownDefenders.length : 10;
     def *= offsideTrapMult(prep.defLine, prep.offsideTrap, avgDefPace);
