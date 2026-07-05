@@ -29,6 +29,14 @@ import {
 /** กัน day-tick ถี่เกิน (in-process + cron backup ใช้ร่วมกัน) */
 const lastShardDayTick = new Map();
 
+/** อีกกี่ ms กว่าจะถึงคิวคิกอฟรอบถัดไปของชาร์ดนี้ — ใช้ทำแบนเนอร์เตือนก่อนแมทฝั่ง client (null = ไม่มีรอบรออยู่/นอกช่วงแข่งขัน) */
+export function getShardNextKickoffEtaMs(shardId) {
+  if (!isMatchWindowOpen()) return null;
+  const last = lastShardDayTick.get(shardId);
+  if (last == null) return 0; // ยังไม่เคยคิกอฟเลย — รอบแรกพร้อมคิกอฟทันทีที่ day-tick ถัดไปมาถึง
+  return Math.max(0, MS_PER_GAME_DAY - (Date.now() - last));
+}
+
 function calendarDayKey() {
   return new Date().toISOString().slice(0, 10);
 }

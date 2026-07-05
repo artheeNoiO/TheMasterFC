@@ -5,6 +5,7 @@ import {
   getUserMatchToday,
   prepareUserLiveMatch,
   getClubForUser,
+  getShardNextKickoffEtaMs,
 } from "../services/gameService.js";
 import {
   getShardMatchesToday,
@@ -21,7 +22,8 @@ router.get("/shard-today", requireAuth, async (req, res) => {
     const club = await getClubForUser(req.user.id);
     if (!club) return res.json({ matches: [] });
     const matches = await getShardMatchesToday(club.shardId, club.shard.dayNumber);
-    res.json({ day: club.shard.dayNumber, matches });
+    const nextKickoffEtaMs = getShardNextKickoffEtaMs(club.shardId);
+    res.json({ day: club.shard.dayNumber, matches, nextKickoffEtaMs });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

@@ -8117,6 +8117,7 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {career.playMode === "online" && <OnlineNextKickoffBanner />}
       <RoadmapDashboardPanel
         career={career} uTeam={uTeam}
         onPressChoice={onPressChoice}
@@ -13477,6 +13478,50 @@ function useSmoothMatchMinute(serverMinute, kickoffAt, finished) {
     return () => clearInterval(id);
   }, [serverMinute, kickoffAt, finished]);
   return displayMinute;
+}
+
+function formatCountdown(ms) {
+  const totalSec = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/** แบนเนอร์เตือนก่อนแมท — โชว์บน Dashboard เมื่อทีมตัวเองยังไม่คิกอฟ (รอคิวรอบถัดไป) นับถอยหลังให้ */
+function OnlineNextKickoffBanner() {
+  const [info, setInfo] = useState(null); // { etaMs, fetchedAt, scheduled }
+  const [now, setNow] = useState(Date.now());
+
+  async function poll() {
+    try {
+      const club = await fetchMyShardClub();
+      if (!club) { setInfo(null); return; }
+      const d = await fetchShardMatchesToday();
+      const mine = d.matches?.find((m) => m.home?.id === club.id || m.away?.id === club.id);
+      if (mine && mine.status === "scheduled" && d.nextKickoffEtaMs != null) {
+        setInfo({ etaMs: d.nextKickoffEtaMs, fetchedAt: Date.now() });
+      } else {
+        setInfo(null);
+      }
+    } catch {
+      setInfo(null);
+    }
+  }
+  useEffect(() => { poll(); const id = setInterval(poll, 15000); return () => clearInterval(id); }, []);
+  useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
+
+  if (!info) return null;
+  const remaining = info.etaMs - (now - info.fetchedAt);
+  if (remaining <= 0) return null;
+
+  return (
+    <Panel style={{ border: `1px solid ${C.amber}`, background: "rgba(224,164,88,.08)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 12, color: C.amber, fontWeight: 700 }}>⏳ ทีมของคุณจะเตะในอีก...</div>
+        <div style={{ fontSize: 16, fontWeight: 800, fontFamily: MONO_FONT, color: C.amber }}>{formatCountdown(remaining)}</div>
+      </div>
+    </Panel>
+  );
 }
 
 /** ป้ายลอยแบบย่อ — โชว์สกอร์สดของแมทตัวเองตลอด ไม่ว่าจะอยู่แท็บไหน กดเพื่อขยายไปหน้าแข่งขันสดเต็ม */
