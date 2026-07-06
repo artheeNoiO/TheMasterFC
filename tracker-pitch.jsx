@@ -271,7 +271,12 @@ function SoccerBallSvg({ uid, spin, shooting }) {
 }
 
 /** FM — แสดงตำแหน่งจาก engine โดยตรง (ไม่ใช้ CSS transition ซ้อน) */
-function TrackerPlayerFigure({ x, y, shirtColor, shortsColor, gkColor, num, isGK, isCarrier, isPasser, isReceiver, facing, name }) {
+function staminaColor(v) {
+  if (v >= 65) return "#3dba6a";
+  if (v >= 35) return "#e0a458";
+  return "#e05a4a";
+}
+function TrackerPlayerFigure({ x, y, shirtColor, shortsColor, gkColor, num, isGK, isCarrier, isPasser, isReceiver, facing, name, stamina }) {
   const shirt = isGK ? gkColor : shirtColor;
   const shorts = isGK ? "#1e1e1e" : (shortsColor || "#1a1a1a");
   const { playerH: h, playerW: w } = trackerScaleAt(y);
@@ -293,6 +298,14 @@ function TrackerPlayerFigure({ x, y, shirtColor, shortsColor, gkColor, num, isGK
           background: "rgba(0,0,0,0.55)", borderRadius: 3, padding: "0 3px",
           whiteSpace: "nowrap", letterSpacing: 0.2, textShadow: "0 1px 1px rgba(0,0,0,.6)",
         }}>{name}</div>
+      )}
+      {stamina != null && (
+        <div style={{
+          position: "absolute", left: "18%", right: "18%", top: "-22%", height: "9%",
+          minHeight: 2, background: "rgba(0,0,0,0.5)", borderRadius: 2, overflow: "hidden",
+        }}>
+          <div style={{ width: `${stamina}%`, height: "100%", background: staminaColor(stamina) }} />
+        </div>
       )}
       <div style={{ position: "relative", width: "100%", height: "100%", transform: flip }}>
         <div style={{
@@ -371,6 +384,7 @@ function TrackerPlayerDots({ players }) {
           isReceiver={p.isReceiver}
           facing={p.facing ?? 1}
           name={p.name}
+          stamina={p.stamina}
         />
       ))}
     </>

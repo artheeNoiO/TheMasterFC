@@ -9800,9 +9800,29 @@ function MarketTradeView({ list, budget, onBid, marketOpen, now, career, onAcqui
         )}
         <div style={{ fontSize: 11.5, color: C.textDim, marginTop: 6 }}>งบคงเหลือ: <span style={{ color: C.amber, fontFamily: MONO_FONT }}>{formatMoney(budget)}</span> — เสนอ "ค่าเหนื่อย" สูงกว่าชนะก่อน ถ้าเท่ากันตัดสินด้วย "ค่าตัว"</div>
       </Panel>
-      <div className="fc-auction-grid">
-        {list.map((l) => <ListingCard key={l.listingId} l={l} budget={budget} onBid={onBid} marketOpen={marketOpen} now={now} />)}
-      </div>
+      {(() => {
+        const hotCount = list.filter((l) => Math.max(0, Math.round((l.endsAt - now) / 1000)) <= 20).length;
+        const sorted = [...list].sort((a, b) => (a.endsAt - now) - (b.endsAt - now));
+        return (
+          <>
+            {list.length > 0 && (
+              <div style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                padding: "8px 12px", borderRadius: 8, background: hotCount > 0 ? "rgba(193,68,14,.12)" : C.panel2,
+                border: `1px solid ${hotCount > 0 ? C.crimson : C.steel}`, fontSize: 11.5,
+              }}>
+                <span style={{ fontWeight: 700, color: hotCount > 0 ? C.crimson : C.textDim }}>
+                  {hotCount > 0 ? `🔥 ${hotCount} รายการใกล้ปิด!` : "📋 รายการประมูลวันนี้"}
+                </span>
+                <span style={{ color: C.textDim, fontFamily: MONO_FONT }}>{list.length} ทั้งหมด</span>
+              </div>
+            )}
+            <div className="fc-auction-grid">
+              {sorted.map((l) => <ListingCard key={l.listingId} l={l} budget={budget} onBid={onBid} marketOpen={marketOpen} now={now} />)}
+            </div>
+          </>
+        );
+      })()}
       <Panel accent={C.crimson}>
         <SectionLabel sub={`ต้องมีอย่างน้อย ${MIN_SELL_SQUAD} คนในทีม`}>💰 ขายนักเตะในทีม</SectionLabel>
         {squadSize <= MIN_SELL_SQUAD ? (
@@ -9952,7 +9972,7 @@ function ListingCard({ l, budget, onBid, marketOpen, now }) {
   const iLead = l.topBid.isUser;
   return (
     <Panel
-      className={urgent ? "fc-auction-urgent" : undefined}
+      className={urgent ? "fc-auction-urgent" : iLead ? "fc-auction-leading" : undefined}
       style={{ border: `2px solid ${iLead ? C.good : urgent ? C.crimson : C.steel}`, position: "relative", overflow: "hidden" }}
     >
       <div style={{
@@ -10991,6 +11011,13 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
     return p ? (p.name.split(" ")[1] || p.name) : "";
   });
 
+  // ประมาณสตามินาสดระหว่างเกม — ใช้ค่าสตามินาก่อนแมทช์ลบตามนาทีที่ผ่านไป (แสดงผลเฉยๆ ไม่แตะ engine จำลอง)
+  function liveStaminaFor(squad, xi, idx) {
+    const p = squad.find((sp) => sp.id === xi[idx]);
+    if (!p) return null;
+    return clamp((p.stamina ?? 80) - gameMinuteDisplay * 0.25, 5, 100);
+  }
+
   let livePlayers;
   if (ambientRef.current) {
     const { home, away } = computeAmbientLivePlayers(hSlots, aSlots, ambientRef.current, animTick, pitchToWide);
@@ -11001,6 +11028,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         shortsColor: teamShortsColor(homeTeam),
         gkColor: gkKitColor(homeTeam, "home"),
         name: homeNames[d.idx],
+        stamina: liveStaminaFor(homeSquad, homeXI, d.idx),
       })),
       ...away.map((d, i) => ({
         ...d, key: "a" + i,
@@ -11008,6 +11036,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         shortsColor: teamShortsColor(awayTeam),
         gkColor: gkKitColor(awayTeam, "away"),
         name: awayNames[d.idx],
+        stamina: liveStaminaFor(awaySquad, awayXI, d.idx),
       })),
     ].sort((a, b) => a.z - b.z);
     if (ambientRef.current.referee) {

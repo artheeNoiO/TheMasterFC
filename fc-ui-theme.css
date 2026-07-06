@@ -635,8 +635,15 @@ a.fc-header-chip {
 .fc-auction-urgent {
   animation: fc-auction-pulse 1.1s ease-in-out infinite;
 }
+@keyframes fc-auction-lead-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(61, 186, 106, 0.35); }
+  50% { box-shadow: 0 0 0 5px rgba(61, 186, 106, 0); }
+}
+.fc-auction-leading {
+  animation: fc-auction-lead-glow 2.2s ease-in-out infinite;
+}
 @media (prefers-reduced-motion: reduce) {
-  .fc-auction-urgent { animation: none; }
+  .fc-auction-urgent, .fc-auction-leading { animation: none; }
 }
 
 /* Scroll without visible bars — drag or wheel instead */
