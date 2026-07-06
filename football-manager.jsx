@@ -8036,84 +8036,88 @@ function ClubHubView({ career, uTeam, standings, seasonOver, onUpgradeSponsor, o
   const clubNews = career.log.filter((l) => /📈|📉|💼|🎉|😞|🙌|📄|✂️/.test(l)).slice(0, 10);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Panel accent={C.gold} style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <ClubBadge team={uTeam} size={44} />
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 700, fontFamily: DISPLAY_FONT }}>{uTeam.name}</div>
-          <div style={{ fontSize: 10.5, color: C.textDim }}>{uTeam.division === 0 ? "Master League" : "Challenger League"} · อันดับ #{posInTable || "-"}</div>
-        </div>
-      </Panel>
-
-      <ClubTierPanel career={career} />
-      <ClubFansPanel career={career} uTeam={uTeam} seasonOver={seasonOver} posInTable={posInTable} userRow={userRow} onUpgradeSponsor={onUpgradeSponsor} />
-
-      <ClubBoardPanel career={career} uTeam={uTeam} posInTable={posInTable} uiLang={uiLang} />
-      <ClubStadiumPanel career={career} uiLang={uiLang} onUpgradeStadium={onUpgradeStadium} />
-      <ClubExtraStaffPanel career={career} uiLang={uiLang} onHireCard={onHireCard} />
-
-      <Panel>
-        <SectionLabel sub="ยิ่งฐานแฟนเยอะ ยิ่งปลดล็อกสปอนเซอร์เกรดสูง">🪜 บันไดสปอนเซอร์</SectionLabel>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {SPONSOR_TIERS.map((t) => {
-            const active = t.tier === (career.sponsorTier ?? 0);
-            const reached = (career.fanBase || 0) >= t.minFans;
-            return (
-              <div key={t.tier} style={{
-                display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", borderRadius: 6,
-                background: active ? "rgba(212,175,55,.12)" : C.panel2, border: `1px solid ${active ? C.gold : C.steel}`,
-              }}>
-                <div style={{ fontSize: 11.5, fontWeight: active ? 700 : 500, color: reached ? C.chalk : C.textDim }}>
-                  {active && "▶ "}{t.name}
-                </div>
-                <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, textAlign: "right" }}>
-                  ต้องการแฟน {t.minFans.toLocaleString()}+<br />
-                  <span style={{ color: C.good }}>+{formatMoney(t.baseDaily)}/วัน (ฐาน)</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </Panel>
-
-      <Panel>
-        <SectionLabel sub={`ฐานแฟน ${(career.fanBase || 0).toLocaleString()} คน × โบนัสนักเตะสตาร์`}>👕 รายได้เสื้อ/ของที่ระลึก</SectionLabel>
-        <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
-          รายได้วันนี้ <b style={{ color: C.good, fontFamily: MONO_FONT }}>+{formatMoney(merchDaily)}</b>
-          <br />มีนักเตะเรต 85+ ในทีมช่วยเพิ่มยอดขาย 50% · เรต 75+ เพิ่ม 20%
-        </div>
-      </Panel>
-
-      <Panel>
-        <SectionLabel sub="ทุกสินทรัพย์รวมกันเป็นมูลค่าสโมสร">💰 การเงินสโมสร</SectionLabel>
-        <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11.5, fontFamily: MONO_FONT }}>
-          {[
-            ["งบสด", fin.budget, C.amber],
-            ["มูลค่านักเตะชุดใหญ่", fin.squadValue, C.chalk],
-            ["มูลค่าอคาเดมี+ดาวรุ่ง", fin.academyValue + fin.prospectValue, C.chalk],
-            ["สิ่งอำนวยความสะดวก", fin.facilitiesValue, C.chalk],
-            ["สตาฟ/ผจก/แมวมอง", fin.coachesValue + fin.managerValue + fin.scoutValue + fin.academyMgrValue, C.chalk],
-          ].map(([label, val, color]) => (
-            <div key={label} style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: C.textDim, fontFamily: FM_FONT }}>{label}</span>
-              <span style={{ color }}>{formatMoney(val)}</span>
-            </div>
-          ))}
-          <div style={{ display: "flex", justifyContent: "space-between", borderTop: `1px solid ${C.steel}`, paddingTop: 5, marginTop: 3 }}>
-            <span style={{ fontWeight: 700, fontFamily: FM_FONT }}>มูลค่าสโมสรรวม</span>
-            <span style={{ fontWeight: 700, color: C.gold }}>{formatMoney(fin.teamValue)}</span>
-          </div>
-        </div>
-      </Panel>
-
-      {clubNews.length > 0 && (
-        <Panel>
-          <SectionLabel>📰 ข่าวสโมสรล่าสุด</SectionLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 11, color: C.textDim, lineHeight: 1.5 }}>
-            {clubNews.map((l, i) => <div key={i} style={{ borderTop: i > 0 ? `1px solid ${C.steel}` : "none", paddingTop: i > 0 ? 6 : 0 }}>{l}</div>)}
+    <div className="fc-clubhub-split">
+      <div className="fc-clubhub-side" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <Panel accent={C.gold} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <ClubBadge team={uTeam} size={44} />
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, fontFamily: DISPLAY_FONT }}>{uTeam.name}</div>
+            <div style={{ fontSize: 10.5, color: C.textDim }}>{uTeam.division === 0 ? "Master League" : "Challenger League"} · อันดับ #{posInTable || "-"}</div>
           </div>
         </Panel>
-      )}
+
+        <ClubTierPanel career={career} />
+        <ClubFansPanel career={career} uTeam={uTeam} seasonOver={seasonOver} posInTable={posInTable} userRow={userRow} onUpgradeSponsor={onUpgradeSponsor} />
+        <ClubBoardPanel career={career} uTeam={uTeam} posInTable={posInTable} uiLang={uiLang} />
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <ClubStadiumPanel career={career} uiLang={uiLang} onUpgradeStadium={onUpgradeStadium} />
+        <ClubExtraStaffPanel career={career} uiLang={uiLang} onHireCard={onHireCard} />
+
+        <Panel>
+          <SectionLabel sub="ยิ่งฐานแฟนเยอะ ยิ่งปลดล็อกสปอนเซอร์เกรดสูง">🪜 บันไดสปอนเซอร์</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {SPONSOR_TIERS.map((t) => {
+              const active = t.tier === (career.sponsorTier ?? 0);
+              const reached = (career.fanBase || 0) >= t.minFans;
+              return (
+                <div key={t.tier} style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", borderRadius: 6,
+                  background: active ? "rgba(212,175,55,.12)" : C.panel2, border: `1px solid ${active ? C.gold : C.steel}`,
+                }}>
+                  <div style={{ fontSize: 11.5, fontWeight: active ? 700 : 500, color: reached ? C.chalk : C.textDim }}>
+                    {active && "▶ "}{t.name}
+                  </div>
+                  <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, textAlign: "right" }}>
+                    ต้องการแฟน {t.minFans.toLocaleString()}+<br />
+                    <span style={{ color: C.good }}>+{formatMoney(t.baseDaily)}/วัน (ฐาน)</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+
+        <Panel>
+          <SectionLabel sub={`ฐานแฟน ${(career.fanBase || 0).toLocaleString()} คน × โบนัสนักเตะสตาร์`}>👕 รายได้เสื้อ/ของที่ระลึก</SectionLabel>
+          <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
+            รายได้วันนี้ <b style={{ color: C.good, fontFamily: MONO_FONT }}>+{formatMoney(merchDaily)}</b>
+            <br />มีนักเตะเรต 85+ ในทีมช่วยเพิ่มยอดขาย 50% · เรต 75+ เพิ่ม 20%
+          </div>
+        </Panel>
+
+        <Panel>
+          <SectionLabel sub="ทุกสินทรัพย์รวมกันเป็นมูลค่าสโมสร">💰 การเงินสโมสร</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11.5, fontFamily: MONO_FONT }}>
+            {[
+              ["งบสด", fin.budget, C.amber],
+              ["มูลค่านักเตะชุดใหญ่", fin.squadValue, C.chalk],
+              ["มูลค่าอคาเดมี+ดาวรุ่ง", fin.academyValue + fin.prospectValue, C.chalk],
+              ["สิ่งอำนวยความสะดวก", fin.facilitiesValue, C.chalk],
+              ["สตาฟ/ผจก/แมวมอง", fin.coachesValue + fin.managerValue + fin.scoutValue + fin.academyMgrValue, C.chalk],
+            ].map(([label, val, color]) => (
+              <div key={label} style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: C.textDim, fontFamily: FM_FONT }}>{label}</span>
+                <span style={{ color }}>{formatMoney(val)}</span>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", borderTop: `1px solid ${C.steel}`, paddingTop: 5, marginTop: 3 }}>
+              <span style={{ fontWeight: 700, fontFamily: FM_FONT }}>มูลค่าสโมสรรวม</span>
+              <span style={{ fontWeight: 700, color: C.gold }}>{formatMoney(fin.teamValue)}</span>
+            </div>
+          </div>
+        </Panel>
+
+        {clubNews.length > 0 && (
+          <Panel>
+            <SectionLabel>📰 ข่าวสโมสรล่าสุด</SectionLabel>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 11, color: C.textDim, lineHeight: 1.5 }}>
+              {clubNews.map((l, i) => <div key={i} style={{ borderTop: i > 0 ? `1px solid ${C.steel}` : "none", paddingTop: i > 0 ? 6 : 0 }}>{l}</div>)}
+            </div>
+          </Panel>
+        )}
+      </div>
     </div>
   );
 }
@@ -9668,28 +9672,31 @@ function MarketScoutView({ scoutFinds, budget, onBuyScoutFind, onScoutSearch, on
   const scoutCards = (career?.staffCardBag || []).filter((c) => c.type === "SCOUT");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Panel style={{ border: `1px solid ${hasScout ? C.blue : C.steel}` }}>
-        <SectionLabel sub="แยกจากแมวมองเยาวชนในอคาเดมี">แมวมองทีมชุดใหญ่</SectionLabel>
-        {career.marketScout ? (
-          <div>
-            <div style={{ fontSize: 12.5, fontFamily: MONO_FONT, color: C.textDim }}>{career.marketScout.name} · เกรด {career.marketScout.grade}/5 · ค่าเหนื่อย {formatMoney(career.marketScout.weeklyWage)}/วัน</div>
-            {isStaffRoleLocked(career.marketScout, career.season) && (
-              <div style={{ fontSize: 10, color: C.textDim, marginTop: 4 }}>🔒 เปลี่ยนแมวมองคนนี้ได้ตอนขึ้นฤดูกาลหน้า</div>
-            )}
-          </div>
-        ) : career.marketScoutOffer ? (
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>{career.marketScoutOffer.name} (เกรด {career.marketScoutOffer.grade}/5)</div>
-            <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, margin: "4px 0 10px" }}>ค่าแรกเข้า {formatMoney(career.marketScoutOffer.signingCost)} · ค่าเหนื่อย {formatMoney(career.marketScoutOffer.weeklyWage)}/วัน</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={onHireMarketScout} style={{ ...btnStyle(C.good, "#08150e"), flex: 1 }}>จ้าง</button>
+    <div className="fc-scout-split">
+      <div className="fc-scout-side" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <Panel style={{ border: `1px solid ${hasScout ? C.blue : C.steel}` }}>
+          <SectionLabel sub="แยกจากแมวมองเยาวชนในอคาเดมี">แมวมองทีมชุดใหญ่</SectionLabel>
+          {career.marketScout ? (
+            <div>
+              <div style={{ fontSize: 12.5, fontFamily: MONO_FONT, color: C.textDim }}>{career.marketScout.name} · เกรด {career.marketScout.grade}/5 · ค่าเหนื่อย {formatMoney(career.marketScout.weeklyWage)}/วัน</div>
+              {isStaffRoleLocked(career.marketScout, career.season) && (
+                <div style={{ fontSize: 10, color: C.textDim, marginTop: 4 }}>🔒 เปลี่ยนแมวมองคนนี้ได้ตอนขึ้นฤดูกาลหน้า</div>
+              )}
             </div>
-          </div>
-        ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
-      </Panel>
+          ) : career.marketScoutOffer ? (
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>{career.marketScoutOffer.name} (เกรด {career.marketScoutOffer.grade}/5)</div>
+              <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, margin: "4px 0 10px" }}>ค่าแรกเข้า {formatMoney(career.marketScoutOffer.signingCost)} · ค่าเหนื่อย {formatMoney(career.marketScoutOffer.weeklyWage)}/วัน</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={onHireMarketScout} style={{ ...btnStyle(C.good, "#08150e"), flex: 1 }}>จ้าง</button>
+              </div>
+            </div>
+          ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
+        </Panel>
 
-      <StaffCardPickerRow cards={scoutCards} title="การ์ดแมวมองที่สุ่มได้" career={career} onHire={onHireScoutCard} />
+        <StaffCardPickerRow cards={scoutCards} title="การ์ดแมวมองที่สุ่มได้" career={career} onHire={onHireScoutCard} />
+      </div>
+
       <Panel style={{ border: `1px solid ${hasScout ? C.blue : C.steel}` }}>
         <SectionLabel sub={hasScout ? `${scout.name} · เกรด ${scout.grade}/5 · สูงสุด ${maxFinds} รายการ` : "จ้างแมวมองด้านบนก่อน"}>
           🔭 รายงานจากแมวมอง
@@ -12038,118 +12045,123 @@ function TrainingView({
   const campDaysLeft = campReady ? 0 : (campCooldownDay || 0) - currentDay;
   const eligibleFocusPlayers = (squad || []).filter((p) => p.injuryDays <= 0).sort((a, b) => b.rating - a.rating);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <TrainingAnalystPanel squad={squad} staffBonuses={staffBonuses} onSetFocus={onSetFocus} onAutoAnalystAll={onAutoAnalystAll} />
-      <TrainingReportPanel reports={trainingReports} currentDay={currentDay} />
-      <DrillBoard drillPlans={drillPlans || {}} drillDoneDay={drillDoneDay || {}} currentDay={currentDay}
-        squad={squad} staff={staff} onSetDrillPlan={onSetDrillPlan} onAutoDrills={onAutoDrills} onRunDrills={onRunDrills}
-        onAutoAnalystDrills={onAutoAnalystDrills} hasAnalyst={staffBonuses?.hasAnalyst} />
-      <Panel>
-        <SectionLabel sub="ห้องพยาบาลย้ายไปแท็บ 🏥 ห้องพยาบาล (เมนูเพิ่มเติม) แล้ว">ศูนย์ฝึกสโมสร</SectionLabel>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {FACILITY_TYPES.filter((type) => type !== "medical").map((type) => {
-            const level = (facilities || {})[type] || 1;
-            const cost = facilityUpgradeCost(level);
-            const tierCap = getMaxRoomLevel(globalFanbase || 0);
-            const maxed = level >= Math.min(9, tierCap);
-            return (
-              <div key={type} style={{ padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{FACILITY_TH[type]} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>Lv.{level}/{tierCap}</span></div>
-                  {!maxed ? (
-                    <button disabled={budget < cost} onClick={() => onUpgradeFacility(type)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 6, border: "none", background: budget >= cost ? C.good : "#2b332f", color: budget >= cost ? "#08150e" : C.textDim, cursor: budget >= cost ? "pointer" : "not-allowed", fontWeight: 700 }}>อัปเกรด {formatMoney(cost)}</button>
-                  ) : level >= 9 ? (
-                    <span style={{ fontSize: 9.5, color: C.gold }}>สูงสุดแล้ว</span>
-                  ) : (
-                    <span style={{ fontSize: 9.5, color: C.textDim }}>🔒 Club Tier {level + 1}</span>
-                  )}
-                </div>
-                <div style={{ fontSize: 10.5, color: C.textDim, marginBottom: 4 }}>{FACILITY_DESC[type]}</div>
-                <MiniBar value={(level / 9) * 100} color={C.amber} />
-              </div>
-            );
-          })}
-        </div>
-      </Panel>
-      <Panel style={{ border: `1px solid ${C.purple}` }}>
-        <SectionLabel style={{ color: C.purple }}>โปรแกรมฝึก 10 วัน</SectionLabel>
-        <div style={{ fontSize: 12, color: C.textDim, marginBottom: 10 }}>1 วันแข่ง ≈ 1 ช่องฝึกในรอบนี้ ถึงวันที่ 10 แล้ววนกลับมาวันที่ 1 ใหม่ วางแผนล่วงหน้าได้ว่าวันไหนพัก วันไหนซ้อมหนัก</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={onToggleAuto} style={{ ...btnStyle(autoTraining ? C.purple : C.steel, autoTraining ? "#fff" : C.chalk), flex: 1, minWidth: 140 }}>{autoTraining ? "ปิดออโต้ (จัดเอง)" : "เปิดให้โค้ชจัดอัตโนมัติ"}</button>
-          <button type="button" onClick={onAutoAssign} style={{ ...btnStyle(C.purple, "#fff"), flex: 1, minWidth: 140 }}>จัดโปรแกรมใหม่</button>
-        </div>
-      </Panel>
-      <Panel>
-        <SectionLabel>ปฏิทินฝึกซ้อม</SectionLabel>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
-          {trainingPlan.map((type, idx) => {
-            const synergySpecs = Object.entries(COACH_TRAINING_SYNERGY[type] || {}).filter(([spec]) => staff && staff[spec]);
-            return (
-              <button key={idx} onClick={() => { if (!autoTraining) onSetDay(idx, TRAINING_TYPES[(TRAINING_TYPES.indexOf(type) + 1) % TRAINING_TYPES.length]); }} style={{
-                textAlign: "left", padding: "10px 12px", borderRadius: 10, cursor: autoTraining ? "default" : "pointer",
-                border: `2px solid ${idx === currentSlot ? C.amber : C.steel}`, background: idx === currentSlot ? "rgba(224,164,88,.12)" : C.panel2,
-              }}>
-                <div style={{ fontSize: 10, color: C.textDim }}>วันที่ {idx + 1} {idx === currentSlot && "· วันนี้"}</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: TRAINING_COLOR[type], marginTop: 2 }}>{TRAINING_TH[type]}</div>
-                {synergySpecs.length > 0 && (
-                  <div style={{ fontSize: 9, color: C.good, marginTop: 2 }}>⚡ ตรงสาย {synergySpecs.map(([spec]) => STAFF_TH[spec]).join(", ")}</div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-        {!autoTraining && <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 10 }}>แตะการ์ดเพื่อวนเปลี่ยนประเภทการฝึกของวันนั้น · ⚡ = ตรงสายโค้ชที่มี ได้ผลฝึกเพิ่มขึ้น</div>}
-      </Panel>
-      <Panel>
-        <SectionLabel>ผลของแต่ละประเภท</SectionLabel>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 11.5, color: C.textDim }}>
-          <div><b style={{ color: TRAINING_COLOR.REST }}>พักฟื้น</b> — ฟื้นสตามินา +22 งดซ้อมรายตำแหน่ง ฟื้นตัวเพิ่มอีก +10 มูดดีขึ้น · ตัวจริงหลังแข่งจะพักอัตโนมัติแม้ไม่ใช่วันพัก</div>
-          <div><b style={{ color: TRAINING_COLOR.FITNESS }}>ฟิตเนส</b> — เพิ่มความเร็ว/พละกำลัง/ความคล่องตัว · ตรงสายโค้ชฟิตเนส</div>
-          <div><b style={{ color: TRAINING_COLOR.SHOOTING }}>ซ้อมยิงประตู</b> — เพิ่มยิงประตู/เลี้ยงบอล/ความนิ่ง · ตรงสายโค้ชกองหน้า</div>
-          <div><b style={{ color: TRAINING_COLOR.DEFENDING }}>ซ้อมเกมรับ</b> — เพิ่มการตัดสินใจ/โหม่ง/วิสัยทัศน์ · ตรงสายโค้ช GK/กองหลัง</div>
-          <div><b style={{ color: TRAINING_COLOR.TACKLING }}>ซ้อมสกัด/ปะทะ</b> — เพิ่มปะทะ-สกัด/พละกำลัง/ความมุ่งมั่น · ตรงสายโค้ชกองหลัง/กองกลาง</div>
-          <div>ทุกประเภท (ยกเว้นพักฟื้น) ใช้สตามินาเพิ่มเล็กน้อย · อาจมีเหตุการณ์สุ่มเกิดขึ้นระหว่างฝึกได้</div>
-        </div>
-      </Panel>
-      {onSetFocus && (
-        <Panel style={{ border: `1px solid ${C.blue}` }}>
-          <SectionLabel style={{ color: C.blue }} sub={`ใช้ช่อง ${focusUsed}/${focusSlots} · ปลดล็อกช่องเพิ่มโดยอัปเกรดเทคโนโลยีฝึกซ้อม`}>🎯 โฟกัสฝึกรายบุคคล</SectionLabel>
-          <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8, lineHeight: 1.5 }}>เลือกหมวดฝึกพิเศษให้นักเตะรายคน ได้ผลเพิ่มทุกวันโดยไม่ต้องรอตารางทีม</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
-            {eligibleFocusPlayers.map((p) => {
-              const current = (individualFocus || {})[p.id];
+    <div className="fc-training-split">
+      <div className="fc-training-side" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <Panel>
+          <SectionLabel sub="ห้องพยาบาลย้ายไปแท็บ 🏥 ห้องพยาบาล (เมนูเพิ่มเติม) แล้ว">ศูนย์ฝึกสโมสร</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {FACILITY_TYPES.filter((type) => type !== "medical").map((type) => {
+              const level = (facilities || {})[type] || 1;
+              const cost = facilityUpgradeCost(level);
+              const tierCap = getMaxRoomLevel(globalFanbase || 0);
+              const maxed = level >= Math.min(9, tierCap);
               return (
-                <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderTop: `1px solid ${C.steel}` }}>
-                  <div style={{ flex: 1, fontSize: 12, fontWeight: current ? 700 : 500 }}>{p.name} <span style={{ color: C.textDim, fontSize: 10 }}>{playerPosCode(p)}</span></div>
-                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                    {INDIVIDUAL_FOCUS_TYPES.map((ft) => (
-                      <button key={ft} type="button" onClick={() => onSetFocus(p.id, ft)} style={{
-                        fontSize: 9, padding: "3px 6px", borderRadius: 5, cursor: "pointer",
-                        border: `1px solid ${current === ft ? TRAINING_COLOR[ft] : C.steel}`,
-                        background: current === ft ? TRAINING_COLOR[ft] : "transparent",
-                        color: current === ft ? "#08150e" : C.textDim, fontWeight: current === ft ? 700 : 500,
-                      }}>{TRAINING_TH[ft]}</button>
-                    ))}
+                <div key={type} style={{ padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700 }}>{FACILITY_TH[type]} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>Lv.{level}/{tierCap}</span></div>
+                    {!maxed ? (
+                      <button disabled={budget < cost} onClick={() => onUpgradeFacility(type)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 6, border: "none", background: budget >= cost ? C.good : "#2b332f", color: budget >= cost ? "#08150e" : C.textDim, cursor: budget >= cost ? "pointer" : "not-allowed", fontWeight: 700 }}>อัปเกรด {formatMoney(cost)}</button>
+                    ) : level >= 9 ? (
+                      <span style={{ fontSize: 9.5, color: C.gold }}>สูงสุดแล้ว</span>
+                    ) : (
+                      <span style={{ fontSize: 9.5, color: C.textDim }}>🔒 Club Tier {level + 1}</span>
+                    )}
                   </div>
+                  <div style={{ fontSize: 10.5, color: C.textDim, marginBottom: 4 }}>{FACILITY_DESC[type]}</div>
+                  <MiniBar value={(level / 9) * 100} color={C.amber} />
                 </div>
               );
             })}
           </div>
         </Panel>
-      )}
-      {onRunCamp && (
-        <Panel style={{ border: `1px solid ${C.gold}` }}>
-          <SectionLabel style={{ color: C.gold }} sub={`คูลดาวน์ ${TRAINING_CAMP_COOLDOWN_DAYS} วัน`}>🏕️ แคมป์ฝึกพิเศษ</SectionLabel>
-          <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8, lineHeight: 1.5 }}>ทีมชุดใหญ่ทั้งหมดได้พัฒนาการทันที + สตามินาเต็ม + มูดพุ่ง เหมาะใช้ก่อนช่วงลีกสำคัญ</div>
-          {campReady ? (
-            <button disabled={budget < campCost} onClick={onRunCamp} style={{ ...btnStyle(budget >= campCost ? C.gold : "#2b332f", budget >= campCost ? "#0a1210" : C.textDim), width: "100%", cursor: budget >= campCost ? "pointer" : "not-allowed" }}>
-              จัดแคมป์ · {formatMoney(campCost)}
-            </button>
-          ) : (
-            <div style={{ fontSize: 11, color: C.textDim, textAlign: "center", padding: "8px 0" }}>พักฟื้นระบบอีก {campDaysLeft} วัน</div>
-          )}
+        <Panel style={{ border: `1px solid ${C.purple}` }}>
+          <SectionLabel style={{ color: C.purple }}>โปรแกรมฝึก 10 วัน</SectionLabel>
+          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 10 }}>1 วันแข่ง ≈ 1 ช่องฝึกในรอบนี้ ถึงวันที่ 10 แล้ววนกลับมาวันที่ 1 ใหม่ วางแผนล่วงหน้าได้ว่าวันไหนพัก วันไหนซ้อมหนัก</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={onToggleAuto} style={{ ...btnStyle(autoTraining ? C.purple : C.steel, autoTraining ? "#fff" : C.chalk), flex: 1, minWidth: 140 }}>{autoTraining ? "ปิดออโต้ (จัดเอง)" : "เปิดให้โค้ชจัดอัตโนมัติ"}</button>
+            <button type="button" onClick={onAutoAssign} style={{ ...btnStyle(C.purple, "#fff"), flex: 1, minWidth: 140 }}>จัดโปรแกรมใหม่</button>
+          </div>
         </Panel>
-      )}
+        {onRunCamp && (
+          <Panel style={{ border: `1px solid ${C.gold}` }}>
+            <SectionLabel style={{ color: C.gold }} sub={`คูลดาวน์ ${TRAINING_CAMP_COOLDOWN_DAYS} วัน`}>🏕️ แคมป์ฝึกพิเศษ</SectionLabel>
+            <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8, lineHeight: 1.5 }}>ทีมชุดใหญ่ทั้งหมดได้พัฒนาการทันที + สตามินาเต็ม + มูดพุ่ง เหมาะใช้ก่อนช่วงลีกสำคัญ</div>
+            {campReady ? (
+              <button disabled={budget < campCost} onClick={onRunCamp} style={{ ...btnStyle(budget >= campCost ? C.gold : "#2b332f", budget >= campCost ? "#0a1210" : C.textDim), width: "100%", cursor: budget >= campCost ? "pointer" : "not-allowed" }}>
+                จัดแคมป์ · {formatMoney(campCost)}
+              </button>
+            ) : (
+              <div style={{ fontSize: 11, color: C.textDim, textAlign: "center", padding: "8px 0" }}>พักฟื้นระบบอีก {campDaysLeft} วัน</div>
+            )}
+          </Panel>
+        )}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <TrainingAnalystPanel squad={squad} staffBonuses={staffBonuses} onSetFocus={onSetFocus} onAutoAnalystAll={onAutoAnalystAll} />
+        <TrainingReportPanel reports={trainingReports} currentDay={currentDay} />
+        <DrillBoard drillPlans={drillPlans || {}} drillDoneDay={drillDoneDay || {}} currentDay={currentDay}
+          squad={squad} staff={staff} onSetDrillPlan={onSetDrillPlan} onAutoDrills={onAutoDrills} onRunDrills={onRunDrills}
+          onAutoAnalystDrills={onAutoAnalystDrills} hasAnalyst={staffBonuses?.hasAnalyst} />
+        <Panel>
+          <SectionLabel>ปฏิทินฝึกซ้อม</SectionLabel>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
+            {trainingPlan.map((type, idx) => {
+              const synergySpecs = Object.entries(COACH_TRAINING_SYNERGY[type] || {}).filter(([spec]) => staff && staff[spec]);
+              return (
+                <button key={idx} onClick={() => { if (!autoTraining) onSetDay(idx, TRAINING_TYPES[(TRAINING_TYPES.indexOf(type) + 1) % TRAINING_TYPES.length]); }} style={{
+                  textAlign: "left", padding: "10px 12px", borderRadius: 10, cursor: autoTraining ? "default" : "pointer",
+                  border: `2px solid ${idx === currentSlot ? C.amber : C.steel}`, background: idx === currentSlot ? "rgba(224,164,88,.12)" : C.panel2,
+                }}>
+                  <div style={{ fontSize: 10, color: C.textDim }}>วันที่ {idx + 1} {idx === currentSlot && "· วันนี้"}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: TRAINING_COLOR[type], marginTop: 2 }}>{TRAINING_TH[type]}</div>
+                  {synergySpecs.length > 0 && (
+                    <div style={{ fontSize: 9, color: C.good, marginTop: 2 }}>⚡ ตรงสาย {synergySpecs.map(([spec]) => STAFF_TH[spec]).join(", ")}</div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {!autoTraining && <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 10 }}>แตะการ์ดเพื่อวนเปลี่ยนประเภทการฝึกของวันนั้น · ⚡ = ตรงสายโค้ชที่มี ได้ผลฝึกเพิ่มขึ้น</div>}
+        </Panel>
+        <Panel>
+          <SectionLabel>ผลของแต่ละประเภท</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 11.5, color: C.textDim }}>
+            <div><b style={{ color: TRAINING_COLOR.REST }}>พักฟื้น</b> — ฟื้นสตามินา +22 งดซ้อมรายตำแหน่ง ฟื้นตัวเพิ่มอีก +10 มูดดีขึ้น · ตัวจริงหลังแข่งจะพักอัตโนมัติแม้ไม่ใช่วันพัก</div>
+            <div><b style={{ color: TRAINING_COLOR.FITNESS }}>ฟิตเนส</b> — เพิ่มความเร็ว/พละกำลัง/ความคล่องตัว · ตรงสายโค้ชฟิตเนส</div>
+            <div><b style={{ color: TRAINING_COLOR.SHOOTING }}>ซ้อมยิงประตู</b> — เพิ่มยิงประตู/เลี้ยงบอล/ความนิ่ง · ตรงสายโค้ชกองหน้า</div>
+            <div><b style={{ color: TRAINING_COLOR.DEFENDING }}>ซ้อมเกมรับ</b> — เพิ่มการตัดสินใจ/โหม่ง/วิสัยทัศน์ · ตรงสายโค้ช GK/กองหลัง</div>
+            <div><b style={{ color: TRAINING_COLOR.TACKLING }}>ซ้อมสกัด/ปะทะ</b> — เพิ่มปะทะ-สกัด/พละกำลัง/ความมุ่งมั่น · ตรงสายโค้ชกองหลัง/กองกลาง</div>
+            <div>ทุกประเภท (ยกเว้นพักฟื้น) ใช้สตามินาเพิ่มเล็กน้อย · อาจมีเหตุการณ์สุ่มเกิดขึ้นระหว่างฝึกได้</div>
+          </div>
+        </Panel>
+        {onSetFocus && (
+          <Panel style={{ border: `1px solid ${C.blue}` }}>
+            <SectionLabel style={{ color: C.blue }} sub={`ใช้ช่อง ${focusUsed}/${focusSlots} · ปลดล็อกช่องเพิ่มโดยอัปเกรดเทคโนโลยีฝึกซ้อม`}>🎯 โฟกัสฝึกรายบุคคล</SectionLabel>
+            <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8, lineHeight: 1.5 }}>เลือกหมวดฝึกพิเศษให้นักเตะรายคน ได้ผลเพิ่มทุกวันโดยไม่ต้องรอตารางทีม</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
+              {eligibleFocusPlayers.map((p) => {
+                const current = (individualFocus || {})[p.id];
+                return (
+                  <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderTop: `1px solid ${C.steel}` }}>
+                    <div style={{ flex: 1, fontSize: 12, fontWeight: current ? 700 : 500 }}>{p.name} <span style={{ color: C.textDim, fontSize: 10 }}>{playerPosCode(p)}</span></div>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {INDIVIDUAL_FOCUS_TYPES.map((ft) => (
+                        <button key={ft} type="button" onClick={() => onSetFocus(p.id, ft)} style={{
+                          fontSize: 9, padding: "3px 6px", borderRadius: 5, cursor: "pointer",
+                          border: `1px solid ${current === ft ? TRAINING_COLOR[ft] : C.steel}`,
+                          background: current === ft ? TRAINING_COLOR[ft] : "transparent",
+                          color: current === ft ? "#08150e" : C.textDim, fontWeight: current === ft ? 700 : 500,
+                        }}>{TRAINING_TH[ft]}</button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+        )}
+      </div>
     </div>
   );
 }
@@ -12233,46 +12245,48 @@ function AcademyView({ career, budget, onHireScout, onHireScoutCard, onHireAcade
   const scoutCards = (career?.staffCardBag || []).filter((c) => c.type === "SCOUT");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Panel>
-        <SectionLabel sub="แยกจากแมวมองทีมชุดใหญ่ในแท็บตลาด">แมวมองเยาวชน</SectionLabel>
-        {career.youthScout ? (
-          <div>
-            <div style={{ fontSize: 12.5, fontFamily: MONO_FONT, color: C.textDim }}>{career.youthScout.name} · เกรด {career.youthScout.grade}/5 · ค่าเหนื่อย {formatMoney(career.youthScout.weeklyWage)}/วัน</div>
-            {isStaffRoleLocked(career.youthScout, career.season) && (
-              <div style={{ fontSize: 10, color: C.textDim, marginTop: 4 }}>🔒 เปลี่ยนแมวมองคนนี้ได้ตอนขึ้นฤดูกาลหน้า</div>
-            )}
-          </div>
-        ) : career.youthScoutOffer ? (
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>{career.youthScoutOffer.name} (เกรด {career.youthScoutOffer.grade}/5)</div>
-            <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, margin: "4px 0 10px" }}>ค่าแรกเข้า {formatMoney(career.youthScoutOffer.signingCost)} · ค่าเหนื่อย {formatMoney(career.youthScoutOffer.weeklyWage)}/วัน</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={onHireScout} style={{ ...btnStyle(C.good, "#08150e"), flex: 1 }}>จ้าง</button>
+      <div className="fc-academy-grid">
+        <Panel>
+          <SectionLabel sub="แยกจากแมวมองทีมชุดใหญ่ในแท็บตลาด">แมวมองเยาวชน</SectionLabel>
+          {career.youthScout ? (
+            <div>
+              <div style={{ fontSize: 12.5, fontFamily: MONO_FONT, color: C.textDim }}>{career.youthScout.name} · เกรด {career.youthScout.grade}/5 · ค่าเหนื่อย {formatMoney(career.youthScout.weeklyWage)}/วัน</div>
+              {isStaffRoleLocked(career.youthScout, career.season) && (
+                <div style={{ fontSize: 10, color: C.textDim, marginTop: 4 }}>🔒 เปลี่ยนแมวมองคนนี้ได้ตอนขึ้นฤดูกาลหน้า</div>
+              )}
             </div>
-          </div>
-        ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
-      </Panel>
+          ) : career.youthScoutOffer ? (
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>{career.youthScoutOffer.name} (เกรด {career.youthScoutOffer.grade}/5)</div>
+              <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, margin: "4px 0 10px" }}>ค่าแรกเข้า {formatMoney(career.youthScoutOffer.signingCost)} · ค่าเหนื่อย {formatMoney(career.youthScoutOffer.weeklyWage)}/วัน</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={onHireScout} style={{ ...btnStyle(C.good, "#08150e"), flex: 1 }}>จ้าง</button>
+              </div>
+            </div>
+          ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
+        </Panel>
+
+        <Panel>
+          <SectionLabel>ผจก.อคาเดมี</SectionLabel>
+          {career.academyManager ? (
+            <div>
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>{career.academyManager.name}</div>
+              <div style={{ marginTop: 8 }}><RadarStats stats={career.academyManager.stats} /></div>
+            </div>
+          ) : career.academyManagerOffer ? (
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>{career.academyManagerOffer.name}</div>
+              <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, margin: "4px 0 8px" }}>ค่าแต่งตั้ง {formatMoney(career.academyManagerOffer.signingCost)} · ค่าเหนื่อย {formatMoney(career.academyManagerOffer.weeklyWage)}/วัน</div>
+              <div style={{ marginBottom: 10 }}><RadarStats stats={career.academyManagerOffer.stats} /></div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={onHireAcademyManager} style={{ ...btnStyle(C.purple, "#fff"), flex: 1 }}>แต่งตั้ง</button>
+              </div>
+            </div>
+          ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
+        </Panel>
+      </div>
 
       <StaffCardPickerRow cards={scoutCards} title="การ์ดแมวมองที่สุ่มได้" career={career} onHire={onHireScoutCard} />
-
-      <Panel>
-        <SectionLabel>ผจก.อคาเดมี</SectionLabel>
-        {career.academyManager ? (
-          <div>
-            <div style={{ fontSize: 12.5, fontWeight: 700 }}>{career.academyManager.name}</div>
-            <div style={{ marginTop: 8 }}><RadarStats stats={career.academyManager.stats} /></div>
-          </div>
-        ) : career.academyManagerOffer ? (
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>{career.academyManagerOffer.name}</div>
-            <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, margin: "4px 0 8px" }}>ค่าแต่งตั้ง {formatMoney(career.academyManagerOffer.signingCost)} · ค่าเหนื่อย {formatMoney(career.academyManagerOffer.weeklyWage)}/วัน</div>
-            <div style={{ marginBottom: 10 }}><RadarStats stats={career.academyManagerOffer.stats} /></div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={onHireAcademyManager} style={{ ...btnStyle(C.purple, "#fff"), flex: 1 }}>แต่งตั้ง</button>
-            </div>
-          </div>
-        ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
-      </Panel>
 
       <Panel>
         <SectionLabel>ดาวรุ่งที่แมวมองเยาวชนพบ ({career.youthProspects.length})</SectionLabel>

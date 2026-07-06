@@ -542,6 +542,77 @@ a.fc-header-chip {
   }
 }
 
+/* Club Hub — จอกว้างวางพาเนลสถานะ (Tier/แฟนบอล/บอร์ด) เป็นคอลัมน์ข้าง เคียงเนื้อหายาว (สนาม/สปอนเซอร์/การเงิน) */
+.fc-clubhub-split {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@media (min-width: 900px) {
+  .fc-clubhub-split {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    align-items: start;
+    gap: 16px;
+  }
+  .fc-clubhub-split > .fc-clubhub-side {
+    position: sticky;
+    top: 70px;
+  }
+}
+
+/* หน้าสอดแนม (Scout) — จอกว้างวางพาเนลจ้างสเกาต์ไว้ข้าง เคียงรายงานที่พบ */
+.fc-scout-split {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@media (min-width: 900px) {
+  .fc-scout-split {
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    align-items: start;
+    gap: 16px;
+  }
+  .fc-scout-split > .fc-scout-side {
+    position: sticky;
+    top: 70px;
+  }
+}
+
+/* หน้าฝึกซ้อม — จอกว้างแยกพาเนลตั้งค่า (อัพเกรด/แคมป์/โหมด) ไว้ข้าง เคียงกิจกรรมประจำวัน (รายงาน/ปฏิทิน) */
+.fc-training-split {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@media (min-width: 900px) {
+  .fc-training-split {
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    align-items: start;
+    gap: 16px;
+  }
+  .fc-training-split > .fc-training-side {
+    position: sticky;
+    top: 70px;
+  }
+}
+
+/* อคาเดมี — จอกว้างจัดพาเนลจ้างสตาฟ (สเกาต์เยาวชน/ผจก.อคาเดมี) เป็น 2 คอลัมน์ */
+.fc-academy-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@media (min-width: 900px) {
+  .fc-academy-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+}
+
 @keyframes fc-auction-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(193, 68, 14, 0.45); }
   50% { box-shadow: 0 0 0 6px rgba(193, 68, 14, 0); }
