@@ -26,6 +26,16 @@ User feedback: ทั้งแอปเป็น mobile-first คอลัมน
 - `.fc-stat-grid` (utility class ใหม่) — จัด 2 คอลัมน์ที่ `min-width:900px` ใช้แล้วกับ 4 รายการเทียบสถิติใน `MatchStatComparisonPanel` (หน้า "เทียบสถิติ" ก่อนแมท ที่ user ยกเป็นตัวอย่าง)
 **ยังไม่ทำ (งานใหญ่ต่อเนื่อง):** ทุกหน้าจอยังเรียงพาเนลแนวตั้งคอลัมน์เดียวด้วย inline `flexDirection:"column"` (ไม่ใช้ `.fc-stat-grid` หรือ grid อื่น) — Dashboard, ClubHubView, SquadView, MarketTradeView ฯลฯ ยังไม่ได้แตะเลย ต้องไล่ทำทีละหน้าจอ (widen คอลัมน์เนื้อหาช่วยได้ระดับหนึ่งเพราะพาเนลที่ width:100% จะยืดตาม แต่ไม่ได้ลดจำนวนแถวแนวตั้งที่ต้องเลื่อน)
 
+## 🏆 Club Tier (1-9) + Owner Level (1-100) — ระบบใหม่ (2026-07-06, `3adfbf4`)
+เกิดจากการคุยยาวเรื่องห้องพยาบาล/โค้ช/สนามซ้อมดู "กลวง" อัพเกรดง่ายไป — ออกแบบระบบเกตใหม่:
+- **`globalFanbase` (สถิติใหม่ แยกจาก `fanBase` เดิมเด็ดขาด)** — `fanBase` เดิม (เพดาน ~250K/80K ตามดิวิชั่น) ยังคุมรายได้สปอนเซอร์/ขายของเหมือนเดิมไม่แตะ ส่วน `globalFanbase` โตช้ากว่ามาก ได้แค่จากเหตุการณ์ใหญ่: ชนะแมท (+500-2000), Top4 (+50K), เลื่อนชั้น (+200K), Master Top8 (+500K), แชมป์ (+5M), คว้าซูเปอร์สตาร์ (+1M), แชมป์ถ้วย (+2M)
+- **Club Tier = `getClubTier(globalFanbase)`** — 9 ระดับ threshold [0, 50K, 200K, 800K, 3M, 10M, 30M, 60M, 120M] — tier 9 ต้องการ 120M ตามที่ user ขอ "หลักร้อยล้าน"
+- **`getMaxRoomLevel(globalFanbase) = tier`** — ทุกห้อง (medical/training/fitness/techLab/stadium) เพดานเลเวล = Club Tier ปัจจุบันตรงๆ ไม่มีเพดานแยกรายห้อง — ต่อเข้า `upgradeFacility`/`upgradeStadium` แล้ว โชว์ 🔒 พร้อมเลข tier ที่ต้องการเมื่อติดเพดาน (MedicalRoomView, TrainingView, ClubStadiumPanel)
+- **`STADIUM_LEVELS` ขยายจาก 5→9 level**, cost curve ของ stadium+facility ปรับให้ชันขึ้นรองรับ 9 ระดับ
+- **Owner Level 1-100** — `ownerXp` แยกจากสโมสร (ตัวผู้เล่นเอง) ได้ XP จากเล่นแมท (+5)/ชนะ(+15)/เสมอ(+8)/แพ้(+3)/เลื่อนชั้น/Top8/แชมป์/ถ้วย/คว้าซูเปอร์สตาร์ — โค้ง XP แบบ RPG (`xpForNextOwnerLevel`) รวมทั้งหมดถึง Lv.100 ≈ 4.2M XP
+- **UI ใหม่**: `ClubTierPanel` (บนสุดของแท็บ "สโมสร") โชว์ progress bar ทั้งคู่
+- **ยังไม่ทำ (บอก user แล้วว่าเป็นงานต่อเนื่อง)**: ระบบคิวก่อสร้างแบบใช้เวลาจริง (real-world time) สำหรับอัพเกรดสนาม/ห้อง — ตอนนี้อัพเกรดยังสำเร็จทันทีเหมือนเดิมถ้ามีเงินพอ+ผ่านเพดาน tier — ยังไม่มีการรอ "วันจริง" ตามที่คุยไว้ตอนแรก
+
 ## ⚡ ปรับจังหวะฤดูกาลออนไลน์ (2026-07-06, `a1d4f1e`)
 user รู้สึกว่ารอนานเกินไประหว่างรอบแข่ง (~44 นาที/รอบ) — สาเหตุคือ `MATCH_DAYS_PER_SEASON=15` ตรงกับ round-robin ครั้งเดียว (16 ทีม เจอกันคนละครั้ง) กระจายเต็มช่วง 9:00-20:00 พอดี แก้เป็น **double round-robin (30 นัด, เจอกันเหย้า-เยือน)** ห่างรอบละ ~22 นาทีแทน ยังจบใน 11 ชม.เท่าเดิม — แก้ที่ `packages/game-engine/src/league.js` (`buildSeasonFixtures`) + ปรับ `MATCH_DAYS_PER_SEASON` ทั้ง 2 ที่ (`game-version.js`, `packages/game-engine/src/constants.js`) ให้ตรงกัน — **เป็นการเปลี่ยนฝั่งเซิร์ฟเวอร์ล้วนๆ ไม่ต้อง deploy client** Render auto-deploy จาก push แล้ว — ชาร์ดที่กำลังเล่นฤดูกาลปัจจุบันจะจบด้วย 15 นัดแบบเดิมก่อน แล้วฤดูกาลถัดไปจะได้ 30 นัดอัตโนมัติ (เพราะ `startNewSeason` เรียก `buildSeasonFixtures` ใหม่ทุกฤดูกาลอยู่แล้ว ไม่ต้อง migrate อะไร)
 
