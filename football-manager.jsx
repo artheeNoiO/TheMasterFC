@@ -5045,8 +5045,13 @@ export default function App({
       const won = uIsHome ? homeGoals > awayGoals : awayGoals > homeGoals;
       const draw = homeGoals === awayGoals;
       const moraleBonus = enrichedManagerPlan(c, uT).moraleBonus;
+      const userXIForCaptain = uIsHome ? homeXI : awayXI;
+      const captain = c.players
+        .filter((p) => p.teamId === c.userTeamId && p.personality === "leader" && userXIForCaptain.includes(p.id))
+        .sort((a, b) => b.rating - a.rating)[0];
+      const captainBonus = captain ? 1 : 0;
       c.players.filter((p) => p.teamId === c.userTeamId).forEach((p) => {
-        const delta = won ? rand(2, 6) + moraleBonus : draw ? 0 : -(rand(2, 6) - Math.floor(moraleBonus / 2));
+        const delta = won ? rand(2, 6) + moraleBonus + captainBonus : draw ? captainBonus : -(rand(2, 6) - Math.floor(moraleBonus / 2)) + captainBonus;
         p.morale = clamp(p.morale + delta, 10, 99);
       });
     }
@@ -5382,8 +5387,13 @@ export default function App({
       const won = uIsHome ? homeGoals > awayGoals : awayGoals > homeGoals;
       const draw = homeGoals === awayGoals;
       const moraleBonus = enrichedManagerPlan(c, uT).moraleBonus;
+      const userXIForCaptain = uIsHome ? finalHomeXI : finalAwayXI;
+      const captain = c.players
+        .filter((p) => p.teamId === c.userTeamId && p.personality === "leader" && userXIForCaptain.includes(p.id))
+        .sort((a, b) => b.rating - a.rating)[0];
+      const captainBonus = captain ? 1 : 0;
       c.players.filter((p) => p.teamId === c.userTeamId).forEach((p) => {
-        const delta = won ? rand(2, 6) + moraleBonus : draw ? 0 : -(rand(2, 6) - Math.floor(moraleBonus / 2));
+        const delta = won ? rand(2, 6) + moraleBonus + captainBonus : draw ? captainBonus : -(rand(2, 6) - Math.floor(moraleBonus / 2)) + captainBonus;
         p.morale = clamp(p.morale + delta, 10, 99);
       });
       if (m.home === c.userTeamId || m.away === c.userTeamId) {
