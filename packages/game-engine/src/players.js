@@ -50,7 +50,7 @@ export function genPlayer(position, tier, clubId, forcedAge, startDay) {
   recomputeDerived(p);
   const ageMult = age <= 23 ? 1.35 : age <= 28 ? 1.05 : age <= 31 ? 0.65 : 0.35;
   p.value = Math.round((p.rating * p.rating * 380 * ageMult) / 1000) * 1000;
-  p.wage = Math.max(100, Math.round(((p.rating * p.rating * 2) / 100) * starWageMultiplier(p.rating) / 100) * 100);
+  p.wage = Math.max(100, Math.round(((p.rating * p.rating * 2) / 100) * starWageMultiplier(p.rating) / 10) * 10);
   p.potential = age <= 21 ? clamp(p.rating + rand(6, 34), p.rating, 99) : age <= 25 ? clamp(p.rating + rand(0, 10), p.rating, 99) : p.rating;
   p.contractEndsDay = (startDay || 1) + rand(150, 400);
   return p;

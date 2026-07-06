@@ -1666,7 +1666,7 @@ function processSeasonEndFans(c, prevPos, prevRow, prevDivision, wasPromoted, wa
 }
 function computePlayerWage(rating) {
   const raw = ((rating * rating * PLAYER_WAGE_DAILY_MULT) / 100) * starWageMultiplier(rating);
-  return Math.max(100, Math.round(raw / 100) * 100);
+  return Math.max(100, Math.round(raw / 10) * 10);
 }
 /** ตัวสำรอง/โรตейชันจ่ายค่าเหนื่อยน้อยกว่าตัวจริง */
 function effectivePlayerDailyWage(p) {
@@ -9700,8 +9700,8 @@ function ListingCard({ l, budget, onBid, marketOpen, now }) {
   const secsLeft = Math.max(0, Math.round((l.endsAt - now) / 1000));
   const wageStep = Math.max(100, Math.round((l.topBid.wage * 0.05) / 100) * 100);
   const feeStep = Math.max(1000, Math.round((l.topBid.fee * 0.05) / 1000) * 1000);
-  const [wageAdd, setWageAdd] = useState(0);
-  const [feeAdd, setFeeAdd] = useState(0);
+  const [wageAdd, setWageAdd] = useState(wageStep);
+  const [feeAdd, setFeeAdd] = useState(feeStep);
   const myWage = l.topBid.wage + wageAdd;
   const myFee = l.topBid.fee + feeAdd;
   const valid = (wageAdd > 0 || feeAdd > 0) && (myWage > l.topBid.wage || (myWage === l.topBid.wage && myFee > l.topBid.fee)) && myFee <= budget;
@@ -9723,7 +9723,7 @@ function ListingCard({ l, budget, onBid, marketOpen, now }) {
             <StepperField label="เพิ่มค่าตัว" value={feeAdd} step={feeStep} onChange={setFeeAdd} />
           </div>
           <div style={{ fontSize: 11, color: C.textDim, marginBottom: 6, fontFamily: MONO_FONT }}>ข้อเสนอของคุณ: ค่าเหนื่อย {formatMoney(myWage)} · ค่าตัว {formatMoney(myFee)}</div>
-          <button disabled={!valid} onClick={() => { onBid(l.listingId, myWage, myFee); setWageAdd(0); setFeeAdd(0); }} style={{ ...btnStyle(valid ? C.good : "#2b332f", valid ? "#08150e" : C.textDim), cursor: valid ? "pointer" : "not-allowed" }}>ยื่นประมูลแข่ง</button>
+          <button disabled={!valid} onClick={() => { onBid(l.listingId, myWage, myFee); setWageAdd(wageStep); setFeeAdd(feeStep); }} style={{ ...btnStyle(valid ? C.good : "#2b332f", valid ? "#08150e" : C.textDim), cursor: valid ? "pointer" : "not-allowed" }}>ยื่นประมูลแข่ง</button>
         </div>
       ) : <div style={{ marginTop: 8, fontSize: 11.5, color: C.textDim }}>ตลาดปิดอยู่ รอช่วงเวลาเปิดตลาดเพื่อประมูล</div>}
     </Panel>
@@ -13895,6 +13895,7 @@ function OnlineMatchCenterView({ uiLang = "th" }) {
         )}
       </Panel>
       {error && <div style={{ fontSize: 11, color: C.crimson, padding: "8px 10px", borderRadius: 8, background: "rgba(193,68,14,.15)" }}>{error}</div>}
+      {(!myMatch || myMatch.status === "scheduled") && <OnlineNextKickoffBanner />}
 
       {myMatch && (
         <OnlineLiveMatchPanel
