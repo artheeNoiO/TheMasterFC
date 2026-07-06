@@ -60,9 +60,10 @@ export const STARTER_MASTER_COINS = BETA_TEST ? BETA_STARTER_MASTER_COINS : 10;
 /** เปิดซองการ์ดสตาฟฟรี — รีเซ็ตทุกวันตามเวลาจริง (ISO date) */
 export const DAILY_STAFF_CARD_DRAWS = 100;
 
-/** ออนไลน์: จบ 1 ฤดูกาล (15 นัด) ภายใน 1 วันจริง — แต่แข่งเฉพาะช่วง 9:00-20:00 (เวลาไทย) เท่านั้น
- * หลัง 20:00 ถึง 9:00 วันถัดไป = ช่วงพักฟื้นนักเตะ/อีเวนต์/ตลาดซื้อขาย (ห้ามแข่ง) */
-export const MATCH_DAYS_PER_SEASON = 15;
+/** ออนไลน์: จบ 1 ฤดูกาล (30 นัด, double round-robin เจอกันเหย้า-เยือน) ภายใน 1 วันจริง — แต่แข่งเฉพาะช่วง 9:00-20:00 (เวลาไทย) เท่านั้น
+ * หลัง 20:00 ถึง 9:00 วันถัดไป = ช่วงพักฟื้นนักเตะ/อีเวนต์/ตลาดซื้อขาย (ห้ามแข่ง)
+ * เดิม 15 นัด (เจอกันครั้งเดียว) ห่างรอบละ ~44 นาที รู้สึกรอนาน — เพิ่มเป็น 30 ให้ห่างรอบละ ~22 นาทีแทน ยังจบใน 11 ชม.เท่าเดิม */
+export const MATCH_DAYS_PER_SEASON = 30;
 export const ACTIVE_WINDOW_START_HOUR = 9;
 export const ACTIVE_WINDOW_END_HOUR = 20;
 export const ACTIVE_WINDOW_HOURS = ACTIVE_WINDOW_END_HOUR - ACTIVE_WINDOW_START_HOUR; // 11

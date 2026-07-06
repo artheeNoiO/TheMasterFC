@@ -27,10 +27,11 @@ export function roundRobin(teamIds) {
   return rounds;
 }
 
+/** double round-robin — เจอกันครั้งแรก (เหย้า) แล้วสลับเหย้า-เยือนรอบสอง ให้ครบ MATCH_DAYS_PER_SEASON (16 ทีม × 2 = 30 นัด) */
 export function buildSeasonFixtures(teamIds) {
-  const rounds = roundRobin(teamIds);
-  return rounds.map((round, ri) => ({
-    day: ri + 1,
+  const firstLegRounds = roundRobin(teamIds);
+  const toFixture = (round, day) => ({
+    day,
     matches: round.map(([home, away]) => ({
       id: uid("mt"),
       homeClubId: home,
@@ -39,7 +40,13 @@ export function buildSeasonFixtures(teamIds) {
       homeGoals: null,
       awayGoals: null,
     })),
-  }));
+  });
+  const firstLeg = firstLegRounds.map((round, ri) => toFixture(round, ri + 1));
+  const secondLeg = firstLegRounds.map((round, ri) => toFixture(
+    round.map(([home, away]) => [away, home]),
+    firstLegRounds.length + ri + 1,
+  ));
+  return [...firstLeg, ...secondLeg];
 }
 
 export function emptyStanding(clubId) {

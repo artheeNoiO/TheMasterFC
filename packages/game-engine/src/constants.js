@@ -43,4 +43,6 @@ export const ALL_ATTRS = [...ATTR_GROUPS.technical, ...ATTR_GROUPS.mental, ...AT
 
 export const LEAGUE_NAME = "Challenger League";
 export const TEAMS_PER_SHARD = 16;
-export const MATCH_DAYS_PER_SEASON = 15;
+/** 30 = double round-robin (เจอกันทั้งเหย้า-เยือน, 16 ทีม) — เดิม 15 (เจอกันครั้งเดียว) ทำให้ห่างรอบละ ~44 นาที
+ * รู้สึกรอนาน ตอนนี้ห่างรอบละ ~22 นาที (ยังจบ 1 ฤดูกาลภายในช่วงแข่งขัน 9:00-20:00 เท่าเดิม) */
+export const MATCH_DAYS_PER_SEASON = 30;
