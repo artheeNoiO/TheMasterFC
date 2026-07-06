@@ -508,6 +508,21 @@ a.fc-header-chip {
   }
 }
 
+/* รายชื่อนักเตะในสควอด (แยกตามตำแหน่ง) — จอกว้างจัด 2 คอลัมน์แทนเรียงยาวคอลัมน์เดียว */
+.fc-squad-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+@media (min-width: 900px) {
+  .fc-squad-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 20px;
+    row-gap: 0;
+  }
+}
+
 /* ตลาดประมูล — จอกว้างจัดการ์ดนักเตะเป็นกริดแทนเรียงยาวคอลัมน์เดียว ให้ความรู้สึกเหมือนสนามประมูลจริง */
 .fc-auction-grid {
   display: flex;

@@ -8548,7 +8548,7 @@ function SquadView({ squad, xi, squadSize, injuredCount, canKickoff, xiAfterFill
       {groups.map((g) => (
         <Panel key={g}>
           <SectionLabel>{POS_TH[g]} ({sorted.filter((p) => p.position === g).length})</SectionLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="fc-squad-grid">
             {sorted.filter((p) => p.position === g).map((p) => (
               <PlayerRow key={p.id} p={p} isXI={xi.includes(p.id)} squadSize={squadSize} onSell={onSell} allowSell={allowSell} currentDay={currentDay} budget={budget} onRenewContract={onRenewContract} uiLang={uiLang} teams={teams} leagueId={leagueId} />
             ))}
