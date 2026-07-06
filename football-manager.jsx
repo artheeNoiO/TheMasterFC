@@ -299,6 +299,30 @@ const FACILITY_DESC = {
   medical: "ลดจำนวนวันพักฟื้นเมื่อบาดเจ็บ",
 };
 function facilityUpgradeCost(level) { return Math.round(1200000 * Math.pow(level + 1, 1.8)); }
+/** คิวก่อสร้าง — ใช้เวลาจริง (นาฬิกาเครื่อง) ไม่ใช่วันในเกม ยิ่งระดับเป้าหมายสูงยิ่งใช้เวลานาน */
+const FACILITY_BUILD_MIN_PER_LEVEL = 25;
+const STADIUM_BUILD_MIN_PER_LEVEL = 40;
+function facilityBuildMs(toLevel) { return toLevel * FACILITY_BUILD_MIN_PER_LEVEL * 60000; }
+function stadiumBuildMs(toLevel) { return toLevel * STADIUM_BUILD_MIN_PER_LEVEL * 60000; }
+/** ปิดคิวก่อสร้างที่ครบเวลาแล้ว (เรียกตอนโหลดเซฟ + ทุกรอบ tick) — ใช้ Date.now() จริง ทำงานได้แม้ปิดแอปไปแล้วเปิดใหม่ */
+function processConstructionQueue(c) {
+  const queue = c.constructionQueue || [];
+  if (!queue.length) return c;
+  const now = Date.now();
+  const stillPending = [];
+  queue.forEach((q) => {
+    if (now < q.finishAt) { stillPending.push(q); return; }
+    if (q.kind === "stadium") {
+      c.stadiumLevel = q.toLevel;
+      c.log = [`✅ ก่อสร้างสนามเสร็จแล้ว! ระดับ ${q.toLevel}`, ...c.log];
+    } else {
+      c.facilities = { ...c.facilities, [q.facilityType]: q.toLevel };
+      c.log = [`✅ ก่อสร้าง${FACILITY_TH[q.facilityType]}เสร็จแล้ว! ระดับ ${q.toLevel}`, ...c.log];
+    }
+  });
+  c.constructionQueue = stillPending;
+  return c;
+}
 const TRAINING_CAMP_COOLDOWN_DAYS = 21;
 function trainingCampCost(facilities) { return 3000000 + (((facilities || {}).training || 1) - 1) * 500000; }
 const STAFF_SPECS = ["GK", "DF", "MF", "FW", "FITNESS", "PHYSIO", "PHYSIOTHERAPIST"];
@@ -2014,6 +2038,8 @@ function normalizeCareerSave(c) {
   if (!c.legendOwnership) c.legendOwnership = initLegendOwnership(c.legendLeagueId, c.teams, c.players);
   if (c.globalFanbase == null) c.globalFanbase = 0;
   if (c.ownerXp == null) c.ownerXp = 0;
+  if (!Array.isArray(c.constructionQueue)) c.constructionQueue = [];
+  processConstructionQueue(c); // ปิดคิวที่ครบเวลาไปแล้วระหว่างที่ปิดแอป
   if (c.pendingLeaguePick == null) c.pendingLeaguePick = false;
   c.matchPrep = { ...defaultMatchPrep(), ...(c.matchPrep || {}) };
   // เซฟเก่าอาจมีคำสั่ง higher_line/deeper ค้างอยู่ — ย้ายไประบบแนวรับ (defLine) แล้วลบทิ้ง
@@ -3516,7 +3542,7 @@ function createNewCareer(customClub, managerName = "ผู้จัดการ"
     matchPrep: defaultMatchPrep(),
     fanBase: 2500, sponsorTier: 0, badSeasonStreak: 0, lastSeasonSnapshot: null, fanDeltaToday: 0,
     stadiumLevel: 1,
-    globalFanbase: 0, ownerXp: 0,
+    globalFanbase: 0, ownerXp: 0, constructionQueue: [],
     monthlyGoals: {}, monthlyApps: {}, sockerCupSeason: null,
     saveVersion: SAVE_VERSION,
     gameVersion: GAME_VERSION,
@@ -3954,6 +3980,28 @@ function KitPreview({ shirt, shorts, trim, size = 70 }) {
 function MiniBar({ value, color, bg = C.steel }) {
   return <div style={{ width: "100%", height: 5, background: bg, borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${clamp(value, 0, 100)}%`, height: "100%", background: color }} /></div>;
 }
+function formatBuildRemaining(ms) {
+  if (ms <= 0) return "เสร็จแล้ว";
+  const totalMin = Math.ceil(ms / 60000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h} ชม. ${m} นาที` : `${m} นาที`;
+}
+/** แถบแสดงสถานะ "กำลังก่อสร้าง" — นับถอยหลังเองทุกวินาที ไม่ต้องรอ parent re-render */
+function ConstructionBadge({ queued }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
+  if (!queued) return null;
+  const total = queued.finishAt - queued.startedAt;
+  const elapsed = clamp(now - queued.startedAt, 0, total);
+  const remaining = queued.finishAt - now;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontSize: 10.5, color: C.amber, fontWeight: 700, marginBottom: 3 }}>🏗️ กำลังก่อสร้าง → ระดับ {queued.toLevel} · เหลือ {formatBuildRemaining(remaining)}</div>
+      <MiniBar value={(elapsed / total) * 100} color={C.amber} />
+    </div>
+  );
+}
 function RadarStats({ stats }) {
   const keys = Object.keys(stats);
   return (
@@ -4124,6 +4172,18 @@ export default function App({
   };
 
   useEffect(() => { const iv = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(iv); }, []);
+  // ปิดคิวก่อสร้างห้อง/สนามที่ครบเวลาจริงแล้ว — เช็คทุก 20 วิขณะเปิดแอปค้างไว้ (ปิดแอปไปก็ยังปิดคิวได้ตอนโหลดเซฟใหม่ผ่าน normalizeCareerSave)
+  useEffect(() => {
+    const iv = setInterval(() => {
+      updateCareer((prev) => {
+        if (!(prev.constructionQueue || []).length) return prev;
+        const c = JSON.parse(JSON.stringify(prev));
+        processConstructionQueue(c);
+        return c;
+      });
+    }, 20000);
+    return () => clearInterval(iv);
+  }, []);
   // นับคนออนไลน์ — heartbeat ไม่ระบุตัวตนทุก 45 วิ ขณะเปิดแอปค้างอยู่ (ไม่ว่าจะอยู่หน้าไหนในเกม)
   // sessionId สุ่มใหม่ทุกครั้งที่โหลดหน้าเว็บ ไม่ผูกกับผู้เล่นจริง แค่ใช้นับจำนวนแท็บที่เปิดอยู่
   useEffect(() => {
@@ -5539,7 +5599,9 @@ export default function App({
           if (Math.random() > 0.35) return;
           const wageStep = Math.round((l.wage * 0.04) / 100) * 100 || 100;
           const feeStep = Math.round((l.value * 0.05) / 1000) * 1000 || 1000;
-          l.topBid = { wage: l.topBid.wage + wageStep, fee: l.topBid.fee + feeStep, bidder: choice(c.teams.filter((t) => !t.isUser)).short, isUser: false };
+          const bidder = choice(c.teams.filter((t) => !t.isUser)).short;
+          l.topBid = { wage: l.topBid.wage + wageStep, fee: l.topBid.fee + feeStep, bidder, isUser: false };
+          l.bidHistory = [{ wage: l.topBid.wage, fee: l.topBid.fee, bidder }, ...(l.bidHistory || [])].slice(0, 8);
         });
         return c;
       });
@@ -5586,33 +5648,40 @@ export default function App({
   function upgradeStadium() {
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
+      processConstructionQueue(c);
+      if ((c.constructionQueue || []).some((q) => q.kind === "stadium")) return c;
       const level = getStadiumLevel(c);
       const maxLevel = Math.min(STADIUM_LEVELS.length, getMaxRoomLevel(c.globalFanbase));
       if (level >= maxLevel) return c;
       const cost = stadiumUpgradeCost(level);
       if (c.budget < cost) return c;
       c.budget -= cost;
-      c.stadiumLevel = level + 1;
-      const def = getStadiumDef(c);
-      c.log = [`🏟️ อัปเกรดสนาม → ${def.nameTh} (ความจุ ${def.capacity.toLocaleString()} · รายได้เหย้า ×${def.matchRevMult}) · ${formatMoney(cost)}`, ...c.log];
+      const toLevel = level + 1;
+      const finishAt = Date.now() + stadiumBuildMs(toLevel);
+      c.constructionQueue = [...(c.constructionQueue || []), { id: uid("bld"), kind: "stadium", toLevel, startedAt: Date.now(), finishAt }];
+      c.log = [`🏗️ เริ่มก่อสร้างสนาม → ระดับ ${toLevel} (${formatMoney(cost)}) ใช้เวลาก่อสร้าง ${Math.round(stadiumBuildMs(toLevel) / 60000)} นาที`, ...c.log];
       return c;
     });
-    showToast("อัปเกรดสนามสำเร็จ!");
+    showToast("เริ่มก่อสร้างสนามแล้ว!");
   }
   function upgradeFacility(type) {
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
+      processConstructionQueue(c);
+      if ((c.constructionQueue || []).some((q) => q.kind === "facility" && q.facilityType === type)) return c;
       const level = (c.facilities || {})[type] || 1;
       const maxLevel = getMaxRoomLevel(c.globalFanbase);
       if (level >= maxLevel) return c;
       const cost = facilityUpgradeCost(level);
       if (c.budget < cost) return c;
       c.budget -= cost;
-      c.facilities = { ...c.facilities, [type]: level + 1 };
-      c.log = [`🏗️ อัปเกรด${FACILITY_TH[type]}เป็นระดับ ${level + 1} แล้ว (${formatMoney(cost)})`, ...c.log];
+      const toLevel = level + 1;
+      const finishAt = Date.now() + facilityBuildMs(toLevel);
+      c.constructionQueue = [...(c.constructionQueue || []), { id: uid("bld"), kind: "facility", facilityType: type, toLevel, startedAt: Date.now(), finishAt }];
+      c.log = [`🏗️ เริ่มก่อสร้าง${FACILITY_TH[type]} → ระดับ ${toLevel} (${formatMoney(cost)}) ใช้เวลาก่อสร้าง ${Math.round(facilityBuildMs(toLevel) / 60000)} นาที`, ...c.log];
       return c;
     });
-    showToast("อัปเกรดสำเร็จ!");
+    showToast("เริ่มก่อสร้างแล้ว!");
   }
   function allocateSkillPoint(statKey) {
     updateCareer((prev) => {
@@ -6528,7 +6597,8 @@ export default function App({
             onSetDrillPlan={setDrillPlan} onAutoDrills={autoAssignDrills} onRunDrills={runDrillSessionNow}
             trainingReports={career.trainingReports || []}
             staffBonuses={staffSupportBonuses(career, uTeam.id)}
-            onAutoAnalystDrills={autoAssignAnalystDrills} onAutoAnalystAll={autoAssignAllAnalystDrills} />
+            onAutoAnalystDrills={autoAssignAnalystDrills} onAutoAnalystAll={autoAssignAllAnalystDrills}
+            constructionQueue={career.constructionQueue || []} />
         )}
         {tab === "academy" && (
           <AcademyView career={career} budget={career.budget}
@@ -7874,6 +7944,7 @@ function ClubStadiumPanel({ career, uiLang = "th", onUpgradeStadium }) {
   const cost = stadiumUpgradeCost(level);
   const canAfford = (career.budget || 0) >= cost;
   const nextDef = !maxed ? STADIUM_LEVELS[level] : null;
+  const stadiumQueued = (career.constructionQueue || []).find((q) => q.kind === "stadium");
   return (
     <Panel accent={C.blue}>
       <SectionLabel sub={`${t(uiLang, "club.stadiumCap")} ${def.capacity.toLocaleString()} · ${t(uiLang, "club.stadiumRev")} ×${def.matchRevMult}`}>
@@ -7948,7 +8019,9 @@ function ClubStadiumPanel({ career, uiLang = "th", onUpgradeStadium }) {
             : `ความจุ ${nextDef.capacity.toLocaleString()} · เพดานแฟน +${nextDef.fanCapBonus.toLocaleString()} · รายได้แมตช์เหย้า ×${nextDef.matchRevMult}`}
         </div>
       )}
-      {!maxed ? (
+      {stadiumQueued ? (
+        <ConstructionBadge queued={stadiumQueued} />
+      ) : !maxed ? (
         <button type="button" disabled={!canAfford} onClick={onUpgradeStadium} style={{
           ...btnStyle(canAfford ? C.good : "#2b332f", canAfford ? "#08150e" : C.textDim),
           width: "100%", fontSize: 11, padding: "8px 0", cursor: canAfford ? "pointer" : "not-allowed",
@@ -8792,6 +8865,50 @@ function ShirtToken({ player, teamColor, slotPos, size = 46, ghost }) {
   );
 }
 
+/** ความเข้าขา (chemistry) ระหว่างนักเตะ 2 คน — สัญชาติเดียวกัน + มูดเฉลี่ยของทั้งคู่ (proxy แทนการนับนัดที่เล่นด้วยกันจริง) */
+function chemistryScore(a, b) {
+  if (!a || !b) return 0;
+  let score = 40;
+  if (a.nationality && a.nationality === b.nationality) score += 25;
+  score += Math.round(((a.morale ?? 50) + (b.morale ?? 50)) / 2 * 0.35);
+  return clamp(score, 0, 100);
+}
+/** หา 2 ช่องที่อยู่ใกล้ที่สุดของแต่ละช่อง (ตามพิกัด x,y ของฟอร์เมชัน) ไว้วาดเป็นเส้นเชื่อมคู่ที่ยืนใกล้กัน */
+function nearestSlotPairs(slotDefs) {
+  return slotDefs.map((s, i) => {
+    const order = slotDefs.map((_, j) => j).filter((j) => j !== i)
+      .sort((a, b) => Math.hypot(s.x - slotDefs[a].x, s.y - slotDefs[a].y) - Math.hypot(s.x - slotDefs[b].x, s.y - slotDefs[b].y));
+    return order.slice(0, 2);
+  });
+}
+/** เส้นเชื่อมนักเตะ (Player Interaction) — สีเขียว/ส้ม/เทา ตามความเข้าขา วาดทับสนามใต้หมุดนักเตะ */
+function ChemistryLinesSVG({ slotDefs, slots, byId }) {
+  const neighborIdx = nearestSlotPairs(slotDefs);
+  const seen = new Set();
+  const lines = [];
+  neighborIdx.forEach((neighbors, i) => {
+    const pA = slots[i] ? byId[slots[i]] : null;
+    if (!pA) return;
+    neighbors.forEach((j) => {
+      const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const pB = slots[j] ? byId[slots[j]] : null;
+      if (!pB) return;
+      const score = chemistryScore(pA, pB);
+      const color = score >= 75 ? "#3dba6a" : score >= 55 ? "#e0a458" : "#8d88ad";
+      lines.push({ key, x1: slotDefs[i].x, y1: slotDefs[i].y, x2: slotDefs[j].x, y2: slotDefs[j].y, color, score });
+    });
+  });
+  if (!lines.length) return null;
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+      {lines.map((l) => (
+        <line key={l.key} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={l.color} strokeWidth="0.6" strokeOpacity="0.6" strokeDasharray={l.score < 55 ? "2,1.5" : undefined} />
+      ))}
+    </svg>
+  );
+}
 function SquadPitchBoard({ team, squad, slots, benchIds, editable, onMove, highlightId }) {
   const slotDefs = FORMATIONS[resolveFormation(team.formation)].slots;
   const benchRef = useRef(null);
@@ -8872,6 +8989,7 @@ function SquadPitchBoard({ team, squad, slots, benchIds, editable, onMove, highl
         borderRadius: "8px 8px 0 0", overflow: "hidden",
       }}>
         <PitchMarkingsSVG layout="portrait" />
+        <ChemistryLinesSVG slotDefs={slotDefs} slots={slots} byId={byId} />
         {slotDefs.map((slot, i) => {
           const player = slots[i] ? byId[slots[i]] : null;
           const isDragSrc = drag?.src.kind === "slot" && drag.src.index === i;
@@ -9257,6 +9375,48 @@ function TeamStyleCards({ matchPrep, onSetPrepField, squad, xi }) {
   );
 }
 
+/** สรุปคู่เข้าขาที่สุด/ตึงที่สุดในตัวจริง — วิเคราะห์จากเส้นเชื่อมความเข้าขา (ChemistryLinesSVG) แบบสรุปเป็นข้อความ */
+function ChemistrySummaryPanel({ squad, slots, formation }) {
+  const slotDefs = FORMATIONS[resolveFormation(formation)].slots;
+  const byId = Object.fromEntries(squad.map((p) => [p.id, p]));
+  const neighborIdx = nearestSlotPairs(slotDefs);
+  const seen = new Set();
+  const pairs = [];
+  neighborIdx.forEach((neighbors, i) => {
+    const pA = slots[i] ? byId[slots[i]] : null;
+    if (!pA) return;
+    neighbors.forEach((j) => {
+      const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const pB = slots[j] ? byId[slots[j]] : null;
+      if (!pB) return;
+      pairs.push({ key, pA, pB, score: chemistryScore(pA, pB) });
+    });
+  });
+  if (pairs.length < 2) return null;
+  const sorted = [...pairs].sort((a, b) => b.score - a.score);
+  const best = sorted[0];
+  const worst = sorted[sorted.length - 1];
+  return (
+    <Panel>
+      <SectionLabel sub="คำนวณจากสัญชาติที่ตรงกัน + มูดของทั้งคู่ในสควอดตัวจริงตอนนี้">🔗 ความเข้าขาในทีม</SectionLabel>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", borderRadius: 8, background: "rgba(61,186,106,.1)", border: `1px solid ${C.good}` }}>
+          <div style={{ fontSize: 11.5 }}>💚 <b>{best.pA.name}</b> ↔ <b>{best.pB.name}</b></div>
+          <div style={{ fontSize: 11, fontFamily: MONO_FONT, color: C.good, fontWeight: 700 }}>{best.score}%</div>
+        </div>
+        {worst.score < 55 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", borderRadius: 8, background: "rgba(224,90,74,.08)", border: `1px solid ${C.crimson}` }}>
+            <div style={{ fontSize: 11.5 }}>⚠️ <b>{worst.pA.name}</b> ↔ <b>{worst.pB.name}</b></div>
+            <div style={{ fontSize: 11, fontFamily: MONO_FONT, color: C.crimson, fontWeight: 700 }}>{worst.score}%</div>
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
 function TacticsView({
   career, squad, team, xi, matchScout, matchPrep, seasonOver,
   onSetFormation, onToggleAuto, onSetPlayerRole, onSetPlayerDuty, onSetSetPieceTaker, onBoardMove, onSetPrepField, onAutoPick,
@@ -9344,6 +9504,8 @@ function TacticsView({
           onBoardMove={onBoardMove} editable={!team.autoMode} highlightId={highlightId}
         />
       </div>
+
+      <ChemistrySummaryPanel squad={squad} slots={slots} formation={formation} />
 
       <TeamStyleCards matchPrep={career.matchPrep} onSetPrepField={onSetPrepField} squad={squad} xi={xi} />
 
@@ -9822,8 +9984,30 @@ function ListingCard({ l, budget, onBid, marketOpen, now }) {
         <b style={{ color: iLead ? C.good : C.amber, fontSize: 13 }}>{l.topBid.bidder}</b>
         <div style={{ color: C.textDim, marginTop: 2 }}>ค่าเหนื่อย {formatMoney(l.topBid.wage)}/วัน · ค่าตัว {formatMoney(l.topBid.fee)}</div>
       </div>
+      {l.bidHistory?.length > 0 && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 2, maxHeight: 54, overflowY: "auto" }}>
+          {l.bidHistory.slice(0, 3).map((b, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 9.5, color: C.textDim, fontFamily: MONO_FONT }}>
+              <span>{b.bidder}</span><span>{formatMoney(b.fee)}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {marketOpen ? (
         <div style={{ marginTop: 10 }}>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {[[0.05, "+5%"], [0.15, "+15%"], [0.3, "+30%"]].map(([pct, label]) => (
+              <button
+                key={pct}
+                type="button"
+                onClick={() => {
+                  setWageAdd(Math.max(wageStep, Math.round((l.topBid.wage * pct) / 100) * 100));
+                  setFeeAdd(Math.max(feeStep, Math.round((l.topBid.fee * pct) / 1000) * 1000));
+                }}
+                style={{ flex: 1, background: C.panel2, border: `1px solid ${C.steel}`, borderRadius: 6, color: C.amber, fontSize: 10.5, fontWeight: 700, padding: "5px 0", cursor: "pointer" }}
+              >⚡ {label}</button>
+            ))}
+          </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
             <StepperField label="เพิ่มค่าเหนื่อย" value={wageAdd} step={wageStep} onChange={setWageAdd} />
             <StepperField label="เพิ่มค่าตัว" value={feeAdd} step={feeStep} onChange={setFeeAdd} />
@@ -10977,34 +11161,47 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           )}
         </div>
 
-        {/* สถิติแมตช์ — กระชับ ไม่ซ้ำแถบครองบอลบนสนาม */}
-        <Panel style={{ marginBottom: 10, padding: "10px 12px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <span style={{ fontSize: 10, color: C.textDim }}>โมเมนตัม</span>
-            <span style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT }}>{possHomePct}% — {possAwayPct}%</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", height: 22, gap: 1, marginBottom: 10 }}>
-            {momentum.length === 0 && <div style={{ fontSize: 10, color: C.textDim }}>รอข้อมูล...</div>}
-            {momentum.slice(-18).map((v, i) => (
-              <div key={i} style={{ flex: 1, height: "100%", position: "relative" }}>
-                <div style={{
-                  position: "absolute", left: 0, right: 0, height: `${Math.abs(v) / 2}%`,
-                  background: v >= 0 ? "#ffd54f" : "#64b5f6",
-                  top: v >= 0 ? `${50 - Math.abs(v) / 2}%` : "50%",
-                  borderRadius: 1,
-                }} />
-              </div>
-            ))}
-          </div>
+        {/* จัดแถว ตัวจริง/สถิติ/ไทม์ไลน์ ใต้สนาม (แบบ FM) — จอกว้างวาง 3 คอลัมน์เคียงกัน มือถือซ้อนยาวเหมือนเดิม */}
+        <div className="fc-live-split" style={{ marginBottom: 10 }}>
+          <FMSquadBar squad={mySquad} xi={myXI} ratings={playerRatings} subsUsed={subsUsed} team={myTeam} />
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
-            <StatRow label="ยิงประตู" home={stats.shotsH} away={stats.shotsA} />
-            <StatRow label="ยิงตรงกรอบ" home={stats.sotH} away={stats.sotA} />
-            <StatRow label="เตะมุม" home={stats.cornersH} away={stats.cornersA} />
-            <StatRow label="ฟาวล์" home={stats.foulsH} away={stats.foulsA} />
-            <StatRow label="ใบเหลือง/แดง" home={stats.cardsH} away={stats.cardsA} />
-          </div>
-        </Panel>
+          {/* สถิติแมตช์ — กระชับ ไม่ซ้ำแถบครองบอลบนสนาม */}
+          <Panel style={{ padding: "10px 12px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 10, color: C.textDim }}>โมเมนตัม</span>
+              <span style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT }}>{possHomePct}% — {possAwayPct}%</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", height: 22, gap: 1, marginBottom: 10 }}>
+              {momentum.length === 0 && <div style={{ fontSize: 10, color: C.textDim }}>รอข้อมูล...</div>}
+              {momentum.slice(-18).map((v, i) => (
+                <div key={i} style={{ flex: 1, height: "100%", position: "relative" }}>
+                  <div style={{
+                    position: "absolute", left: 0, right: 0, height: `${Math.abs(v) / 2}%`,
+                    background: v >= 0 ? "#ffd54f" : "#64b5f6",
+                    top: v >= 0 ? `${50 - Math.abs(v) / 2}%` : "50%",
+                    borderRadius: 1,
+                  }} />
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+              <StatRow label="ยิงประตู" home={stats.shotsH} away={stats.shotsA} />
+              <StatRow label="ยิงตรงกรอบ" home={stats.sotH} away={stats.sotA} />
+              <StatRow label="เตะมุม" home={stats.cornersH} away={stats.cornersA} />
+              <StatRow label="ฟาวล์" home={stats.foulsH} away={stats.foulsA} />
+              <StatRow label="ใบเหลือง/แดง" home={stats.cardsH} away={stats.cardsA} />
+            </div>
+          </Panel>
+
+          <Panel>
+            <SectionLabel>ไทม์ไลน์เหตุการณ์</SectionLabel>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 220, overflowY: "auto" }}>
+              {events.slice(0, 24).map((e, i) => <div key={i} style={{ fontSize: 12, fontFamily: MONO_FONT, color: i === 0 ? C.chalk : C.textDim }}>{e}</div>)}
+              {events.length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>เกมเริ่มแล้ว รอลุ้นจังหวะแรก...</div>}
+            </div>
+          </Panel>
+        </div>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <button type="button" onClick={() => setPaused((p) => !p)} disabled={halftimeOpen} style={{ ...btnStyle(C.steel, C.chalk), flex: 1, minWidth: 90, opacity: halftimeOpen ? 0.5 : 1 }}>{paused ? "▶ เล่นต่อ" : "⏸ หยุด"}</button>
@@ -11040,14 +11237,6 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
             <SectionLabel>เปลี่ยนตัว — ใช้แผงพักครึ่งด้านบน</SectionLabel>
           </Panel>
         )}
-
-        <Panel>
-          <SectionLabel>ไทม์ไลน์เหตุการณ์</SectionLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 120, overflowY: "auto" }}>
-            {events.slice(0, 24).map((e, i) => <div key={i} style={{ fontSize: 12, fontFamily: MONO_FONT, color: i === 0 ? C.chalk : C.textDim }}>{e}</div>)}
-            {events.length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>เกมเริ่มแล้ว รอลุ้นจังหวะแรก...</div>}
-          </div>
-        </Panel>
       </div>
     </div>
   );
@@ -12036,7 +12225,7 @@ function TrainingView({
   trainingPlan, autoTraining, currentSlot, onSetDay, onToggleAuto, onAutoAssign, facilities, budget, onUpgradeFacility, globalFanbase,
   squad, staff, individualFocus, onSetFocus, campCooldownDay, currentDay, onRunCamp,
   drillPlans, drillDoneDay, onSetDrillPlan, onAutoDrills, onRunDrills,
-  trainingReports, staffBonuses, onAutoAnalystDrills, onAutoAnalystAll,
+  trainingReports, staffBonuses, onAutoAnalystDrills, onAutoAnalystAll, constructionQueue,
 }) {
   const focusSlots = (facilities || {}).techLab || 1;
   const focusUsed = Object.keys(individualFocus || {}).length;
@@ -12055,11 +12244,12 @@ function TrainingView({
               const cost = facilityUpgradeCost(level);
               const tierCap = getMaxRoomLevel(globalFanbase || 0);
               const maxed = level >= Math.min(9, tierCap);
+              const queued = (constructionQueue || []).find((q) => q.kind === "facility" && q.facilityType === type);
               return (
-                <div key={type} style={{ padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
+                <div key={type} style={{ padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${queued ? C.amber : C.steel}` }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                     <div style={{ fontSize: 12.5, fontWeight: 700 }}>{FACILITY_TH[type]} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>Lv.{level}/{tierCap}</span></div>
-                    {!maxed ? (
+                    {queued ? null : !maxed ? (
                       <button disabled={budget < cost} onClick={() => onUpgradeFacility(type)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 6, border: "none", background: budget >= cost ? C.good : "#2b332f", color: budget >= cost ? "#08150e" : C.textDim, cursor: budget >= cost ? "pointer" : "not-allowed", fontWeight: 700 }}>อัปเกรด {formatMoney(cost)}</button>
                     ) : level >= 9 ? (
                       <span style={{ fontSize: 9.5, color: C.gold }}>สูงสุดแล้ว</span>
@@ -12068,7 +12258,7 @@ function TrainingView({
                     )}
                   </div>
                   <div style={{ fontSize: 10.5, color: C.textDim, marginBottom: 4 }}>{FACILITY_DESC[type]}</div>
-                  <MiniBar value={(level / 9) * 100} color={C.amber} />
+                  {queued ? <ConstructionBadge queued={queued} /> : <MiniBar value={(level / 9) * 100} color={C.amber} />}
                 </div>
               );
             })}
@@ -12178,6 +12368,7 @@ function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, o
   const medicalTierCap = getMaxRoomLevel(career.globalFanbase || 0);
   const medicalMaxed = medicalLevel >= medicalTierCap;
   const medicalCards = (career.staffCardBag || []).filter((c) => c.type === "DOCTOR");
+  const medicalQueued = (career.constructionQueue || []).find((q) => q.kind === "facility" && q.facilityType === "medical");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -12223,18 +12414,20 @@ function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, o
       <Panel>
         <SectionLabel>{FACILITY_TH.medical} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>Lv.{medicalLevel}/{medicalTierCap}</span></SectionLabel>
         <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 8 }}>{FACILITY_DESC.medical}</div>
-        <MiniBar value={(medicalLevel / 9) * 100} color={C.amber} />
-        <div style={{ marginTop: 10 }}>
-          {medicalMaxed ? (
-            medicalLevel >= 9
-              ? <span style={{ fontSize: 11, color: C.gold }}>อัปเกรดสูงสุดแล้ว</span>
-              : <span style={{ fontSize: 11, color: C.textDim }}>🔒 ต้อง Club Tier {medicalLevel + 1} ก่อน (ดูที่แท็บสโมสร)</span>
-          ) : (
-            <button disabled={budget < medicalCost} onClick={() => onUpgradeFacility("medical")} style={{ fontSize: 11, padding: "7px 12px", borderRadius: 6, border: "none", background: budget >= medicalCost ? C.good : "#2b332f", color: budget >= medicalCost ? "#08150e" : C.textDim, cursor: budget >= medicalCost ? "pointer" : "not-allowed", fontWeight: 700 }}>
-              อัปเกรด {formatMoney(medicalCost)}
-            </button>
-          )}
-        </div>
+        {medicalQueued ? <ConstructionBadge queued={medicalQueued} /> : <MiniBar value={(medicalLevel / 9) * 100} color={C.amber} />}
+        {!medicalQueued && (
+          <div style={{ marginTop: 10 }}>
+            {medicalMaxed ? (
+              medicalLevel >= 9
+                ? <span style={{ fontSize: 11, color: C.gold }}>อัปเกรดสูงสุดแล้ว</span>
+                : <span style={{ fontSize: 11, color: C.textDim }}>🔒 ต้อง Club Tier {medicalLevel + 1} ก่อน (ดูที่แท็บสโมสร)</span>
+            ) : (
+              <button disabled={budget < medicalCost} onClick={() => onUpgradeFacility("medical")} style={{ fontSize: 11, padding: "7px 12px", borderRadius: 6, border: "none", background: budget >= medicalCost ? C.good : "#2b332f", color: budget >= medicalCost ? "#08150e" : C.textDim, cursor: budget >= medicalCost ? "pointer" : "not-allowed", fontWeight: 700 }}>
+                อัปเกรด {formatMoney(medicalCost)}
+              </button>
+            )}
+          </div>
+        )}
       </Panel>
     </div>
   );

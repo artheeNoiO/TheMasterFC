@@ -613,6 +613,21 @@ a.fc-header-chip {
   }
 }
 
+/* Live match — จอกว้างวางพาเนล ตัวจริง/สถิติ/ไทม์ไลน์ เรียงแถวใต้สนาม (แบบ FM) แทนซ้อนยาวคอลัมน์เดียว */
+.fc-live-split {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+@media (min-width: 1024px) {
+  .fc-live-split {
+    display: grid;
+    grid-template-columns: 1fr 1.3fr 1fr;
+    align-items: start;
+    gap: 12px;
+  }
+}
+
 @keyframes fc-auction-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(193, 68, 14, 0.45); }
   50% { box-shadow: 0 0 0 6px rgba(193, 68, 14, 0); }
