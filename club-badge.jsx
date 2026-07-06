@@ -11,7 +11,24 @@ export const LOGO_ICONS = [
   { id: "flame", path: "M12 2c1 4-3 5-3 9a3 3 0 006 0c0-2-1-3-1-5 2 1 4 4 4 7a6 6 0 01-12 0c0-5 4-7 6-11z" },
   { id: "diamond", path: "M12 2l6 8-6 12-6-12z" },
   { id: "ring", ring: true },
+  { id: "cross", path: "M10 2h4v6h6v4h-6v6h-4v-6H2v-4h6z" },
+  { id: "hexagon", path: "M12 2l8.66 5v10L12 22l-8.66-5V7z" },
+  { id: "pentagon", path: "M12 2l9.5 6.9-3.6 11.1H6.1L2.5 8.9z" },
+  { id: "arrowUp", path: "M12 2l7 7h-4v11h-6V9H5z" },
+  { id: "chevronDouble", path: "M12 3l9 7.5-2.2 2-6.8-5.7-6.8 5.7-2.2-2z M12 12l9 7.5-2.2 2-6.8-5.7-6.8 5.7-2.2-2z" },
+  { id: "triangleUp", path: "M12 3l9 17H3z" },
+  { id: "wave", path: "M2 9c2-3 4-3 6 0s4 3 6 0 4-3 6 0v4c-2 3-4 3-6 0s-4-3-6 0-4 3-6 0z" },
+  { id: "leaf", path: "M4 20C4 10 12 4 20 4c0 8-6 16-16 16z" },
+  { id: "trophyCup", path: "M7 3h10l-1 6a4 4 0 01-8 0z M9 15h6v2H9z M8 19h8v2H8z" },
+  { id: "compassStar", path: "M12 2l2.5 7.5L22 12l-7.5 2.5L12 22l-2.5-7.5L2 12l7.5-2.5z" },
 ];
+
+/** รูปทรงกรอบตราสโมสร — เพิ่มความหลากหลายนอกเหนือจากไอคอนด้านใน */
+const BADGE_SHAPES = ["square", "circle", "shield", "hex"];
+const BADGE_CLIP = {
+  shield: "polygon(50% 0%, 100% 20%, 100% 55%, 50% 100%, 0% 55%, 0% 20%)",
+  hex: "polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)",
+};
 
 export function shadeColor(hex, percent) {
   try {
@@ -22,41 +39,54 @@ export function shadeColor(hex, percent) {
   } catch (e) { return hex; }
 }
 
+function seedHash(str) {
+  return [...String(str)].reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
+}
+
 /** แปลงข้อมูลทีมจากเซฟ/ออนไลน์ให้ตรงกับ ClubBadge ทุกที่ */
 export function teamForBadge(team) {
-  if (!team) return { color: "#2d4a3a", secondaryColor: "#e8ece9", logoIndex: 0 };
+  if (!team) return { color: "#2d4a3a", secondaryColor: "#e8ece9", logoIndex: 0, shape: "square" };
   const color = team.color || team.primaryColor || "#2d4a3a";
+  const seed = team.legendTeamKey || team.id || team.short || "team";
   let logoIndex = team.logoIndex;
   if (logoIndex == null || logoIndex === "") {
-    const seed = team.legendTeamKey || team.id || team.short || "team";
-    logoIndex = [...String(seed)].reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0) % LOGO_ICONS.length;
+    logoIndex = seedHash(seed) % LOGO_ICONS.length;
+  }
+  let shape = team.badgeShape;
+  if (!shape) {
+    shape = BADGE_SHAPES[Math.abs(seedHash(seed + "_shape")) % BADGE_SHAPES.length];
   }
   return {
     color,
     secondaryColor: team.secondaryColor || "#e8ece9",
     logoIndex: ((Number(logoIndex) % LOGO_ICONS.length) + LOGO_ICONS.length) % LOGO_ICONS.length,
+    shape,
   };
 }
 
-/** ตราโลโก้ทีม — gradient + ไอคอนที่เลือกตอนสร้างสโมสร */
+/** ตราโลโก้ทีม — gradient + ไอคอนที่เลือกตอนสร้างสโมสร + รูปทรงกรอบหลากหลาย (สี่เหลี่ยม/วงกลม/โล่/หกเหลี่ยม) */
 export function ClubBadge({ team, size = 40, fill = false, secondaryFallback = "#e8ece9", iconScale = 0.52 }) {
   const crest = teamForBadge(team);
   const logo = LOGO_ICONS[crest.logoIndex];
   const primary = crest.color;
   const secondary = crest.secondaryColor || secondaryFallback;
   const px = typeof size === "number" ? size : 40;
+  // เมื่อฝังอยู่ในกรอบอื่น (เช่น HexTeamBadge) ใช้สี่เหลี่ยมมนเสมอ กันรูปทรงซ้อนกันดูรก
+  const shape = fill ? "square" : crest.shape;
+  const clipPath = BADGE_CLIP[shape];
 
   return (
     <div style={{
       width: fill ? "100%" : px,
       height: fill ? "100%" : px,
       aspectRatio: "1",
-      borderRadius: fill ? "28%" : px * 0.28,
+      borderRadius: shape === "circle" ? "50%" : shape === "square" ? (fill ? "28%" : px * 0.28) : 0,
+      clipPath,
       flexShrink: 0,
       background: `linear-gradient(155deg, ${primary}, ${shadeColor(primary, -22)})`,
       display: "flex", alignItems: "center", justifyContent: "center",
       boxShadow: "0 3px 8px rgba(0,0,0,.35)",
-      border: `2px solid ${secondary}55`,
+      border: clipPath ? "none" : `2px solid ${secondary}55`,
     }}>
       <svg viewBox="0 0 24 24" width={fill ? `${iconScale * 100}%` : px * iconScale} height={fill ? `${iconScale * 100}%` : px * iconScale}>
         {logo.circle ? <circle cx="12" cy="12" r="9" fill={secondary} /> :

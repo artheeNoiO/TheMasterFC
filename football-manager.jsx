@@ -132,7 +132,7 @@ const CHALLENGER_TEAM_DEFS = [
   { name: "อุตรดิตถ์ ธันเดอร์โบลท์", short: "UTB", color: "#4a4e69", tier: -10 },
 ];
 
-/* 10 selectable crest icons + color-shade helper, used by ClubBadge for every team in the league */
+/* selectable crest icons + shape variants + color-shade helper, used by ClubBadge for every team in the league */
 /* ============================== ตำแหน่งละเอียดแบบ FM (14 ตำแหน่ง) ============================== */
 /* p.position = กลุ่มหยาบ (GK/DF/MF/FW) ใช้กับโค้ช/ซ้อม/engine เหมือนเดิม
    p.pos      = ตำแหน่งละเอียดแบบ FM · p.altPos = ตำแหน่งรอง (เล่นได้ โดนโทษน้อย) */
@@ -612,7 +612,7 @@ function createLegendMasterTeams(leagueId, startDay) {
     short: t.short,
     color: t.color,
     secondaryColor: C.chalk,
-    logoIndex: idx % 10,
+    logoIndex: idx % LOGO_ICONS.length,
     tier: t.tier,
     division: 0,
     isUser: false,
@@ -2096,7 +2096,7 @@ function normalizeCareerSave(c) {
     if (t.primaryColor && !t.color) t.color = t.primaryColor;
     if (t.logoIndex == null || t.logoIndex === "") {
       const seed = t.legendTeamKey || t.id || t.short || "team";
-      t.logoIndex = [...String(seed)].reduce((h, ch) => ((h << 5) - h + ch.charCodeAt(0)) | 0, 0) % 10;
+      t.logoIndex = Math.abs([...String(seed)].reduce((h, ch) => ((h << 5) - h + ch.charCodeAt(0)) | 0, 0)) % LOGO_ICONS.length;
     }
   });
   ensureStaffCardFields(c); // เซฟเก่าก่อนมีระบบภาพเหมือนการ์ดสตาฟ — เติม portrait ย้อนหลังให้ครบทุกใบ
@@ -3475,7 +3475,7 @@ function createNewCareer(customClub, managerName = "ผู้จัดการ"
   const legendLeagueId = "england";
   const masterBots = createLegendMasterTeams(legendLeagueId, 1);
   const challengerBots = CHALLENGER_TEAM_DEFS.map((t, idx) => ({
-    id: "c" + idx, name: t.name, short: t.short, color: t.color, secondaryColor: C.chalk, logoIndex: idx % 10, tier: t.tier,
+    id: "c" + idx, name: t.name, short: t.short, color: t.color, secondaryColor: C.chalk, logoIndex: idx % LOGO_ICONS.length, tier: t.tier,
     division: 1, isUser: false, formation: "4-4-2", budget: rand(1500000, 4000000),
     manager: genManager(), autoMode: true, chemistry: 50,
   }));
@@ -8394,25 +8394,35 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
           </div>
         ) : opponent ? (
           <div style={{ padding: "0 12px 12px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <div style={{ textAlign: "center" }}>
-                <ClubBadge team={uTeam} size={40} />
-                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4 }}>{uTeam.short}</div>
-              </div>
-              <div style={{ textAlign: "center" }}>
-                <div style={{ fontFamily: MONO_FONT, fontSize: 10, color: C.textDim }}>{isHome ? "H" : "A"}</div>
-                <div style={{ fontSize: 11, color: C.textDim }}>vs</div>
-              </div>
-              <div style={{ textAlign: "center" }}>
-                <ClubBadge team={opponent} size={40} />
-                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4 }}>{opponent.short}</div>
-              </div>
-            </div>
             {career.playMode === "online" ? (
-              <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8, lineHeight: 1.6, padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
-                🔴 โหมดออนไลน์แข่งอัตโนมัติตามเวลาจริง — ไปที่แท็บ "แข่งขันสด" เพื่อดู/สั่งกลางแมท
-              </div>
+              <>
+                <div style={{ textAlign: "center", marginBottom: 10 }}>
+                  <ClubBadge team={uTeam} size={40} />
+                  <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4 }}>{uTeam.short}</div>
+                </div>
+                <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8, lineHeight: 1.6, padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
+                  🔴 โหมดออนไลน์แข่งอัตโนมัติตามเวลาจริง — ไปที่แท็บ "แข่งขันสด" เพื่อดูคู่แข่งจริง/สั่งกลางแมท
+                </div>
+              </>
             ) : (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                  <div style={{ textAlign: "center" }}>
+                    <ClubBadge team={uTeam} size={40} />
+                    <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4 }}>{uTeam.short}</div>
+                  </div>
+                  <div style={{ textAlign: "center" }}>
+                    <div style={{ fontFamily: MONO_FONT, fontSize: 10, color: C.textDim }}>{isHome ? "H" : "A"}</div>
+                    <div style={{ fontSize: 11, color: C.textDim }}>vs</div>
+                  </div>
+                  <div style={{ textAlign: "center" }}>
+                    <ClubBadge team={opponent} size={40} />
+                    <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4 }}>{opponent.short}</div>
+                  </div>
+                </div>
+              </>
+            )}
+            {career.playMode !== "online" && (
               <>
                 <button type="button" onClick={onKickoff} disabled={!canKickoff} style={fmBtnPrimary({ marginBottom: 8, opacity: canKickoff ? 1 : 0.45, cursor: canKickoff ? "pointer" : "not-allowed" })}>
                   {canKickoff ? "▶ ลงสนาม" : `▶ ลงสนามไม่ได้ (${xiAfterFill}/11)`}
