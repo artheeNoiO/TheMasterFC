@@ -8286,7 +8286,7 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {career.playMode === "online" && <OnlineNextKickoffBanner />}
+      {career.playMode === "online" && <OnlineLiveHomeCard />}
       <RoadmapDashboardPanel
         career={career} uTeam={uTeam}
         onPressChoice={onPressChoice}
@@ -13983,6 +13983,69 @@ function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
         </div>
       )}
     </Panel>
+  );
+}
+
+/** การ์ดกะทัดรัดบนหน้าหลัก (โหมดออนไลน์) — โชว์สถานะ/สกอร์ย่อ กดแล้วเปิดหน้าต่างดูแมทสดเต็มจอ */
+function OnlineLiveHomeCard() {
+  const [myClub, setMyClub] = useState(null);
+  const [data, setData] = useState(null);
+  const [open, setOpen] = useState(false);
+
+  async function poll() {
+    try {
+      const club = await fetchMyShardClub();
+      setMyClub(club);
+      if (club) setData(await fetchShardMatchesToday());
+    } catch {
+      /* เงียบไว้ — ไม่ให้การ์ดหน้าหลักพังเพราะโพลล้มเหลว */
+    }
+  }
+  useEffect(() => { poll(); const id = setInterval(poll, 15000); return () => clearInterval(id); }, []);
+
+  const myMatch = data?.matches?.find((m) => m.home?.id === myClub?.id || m.away?.id === myClub?.id);
+  const isLive = myMatch?.status === "live";
+  const statusLabel = !myClub
+    ? "ยังไม่ได้เชื่อมต่อสโมสรออนไลน์"
+    : isLive
+      ? `🔴 สด — ${myMatch.homeGoals}-${myMatch.awayGoals}`
+      : myMatch?.status === "scheduled"
+        ? "⏳ รอคิกอฟรอบถัดไป"
+        : "วันนี้ยังไม่มีแมทของทีมคุณ";
+
+  return (
+    <>
+      <Panel style={{ border: `1px solid ${isLive ? C.crimson : C.amber}`, cursor: myClub ? "pointer" : "default" }} onClick={() => myClub && setOpen(true)}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 800, color: isLive ? C.crimson : C.amber }}>🔴 แข่งขันสด</div>
+            <div style={{ fontSize: 12, color: C.chalk, marginTop: 2 }}>{statusLabel}</div>
+          </div>
+          {myClub && (
+            <button type="button" onClick={(e) => { e.stopPropagation(); setOpen(true); }} style={{ ...btnStyle(C.crimson, "#fff"), width: "auto", padding: "8px 16px", fontSize: 11, fontWeight: 800, flexShrink: 0 }}>
+              ดูแมทสด
+            </button>
+          )}
+        </div>
+      </Panel>
+      {open && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 66, background: "rgba(0,0,0,.82)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, overflowY: "auto" }}
+          onClick={() => setOpen(false)}
+        >
+          <div style={{ maxWidth: 640, width: "100%", marginTop: 16 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+              <button onClick={() => setOpen(false)} style={{
+                background: C.panel, border: `1px solid ${C.steel}`, borderRadius: "50%",
+                width: 36, height: 36, color: C.chalk, fontSize: 18, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>✕</button>
+            </div>
+            <OnlineMatchCenterView />
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
