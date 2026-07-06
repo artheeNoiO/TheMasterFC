@@ -331,6 +331,15 @@ const STAFF_SPECS = ["GK", "DF", "MF", "FW", "FITNESS", "PHYSIO", "PHYSIOTHERAPI
 /** ทั้งสองตำแหน่งมาจากการ์ดประเภท DOCTOR — หมอลดโอกาส/ความรุนแรงบาดเจ็บ, นักกายภาพเร่งพักฟื้น */
 const MEDICAL_CARD_SPECIALTIES = ["PHYSIO", "PHYSIOTHERAPIST"];
 const MANAGER_STAT_TH = { development: "ปั้นนักเตะ", tactics: "แทคติก", manManagement: "จิตวิทยา/ห้องแต่งตัว", negotiation: "เจรจาต่อรอง", scouting: "ขุดดาวรุ่ง", reputation: "บารมี" };
+/** สัญชาตญาณผจก. — ผูกกับสเตตที่แข็งแรงที่สุดของผจก.คนนั้น (ตอนสร้างจะมีสเตต "แข็ง" 2 ตัวอยู่แล้ว) ให้ทุกคนมีจุดเด่นจริงไม่ใช่แค่ตัวเลข */
+const MANAGER_TRAITS = {
+  development: { th: "นักปั้นเยาวชน", en: "Youth Developer", descTh: "ปั้นนักเตะได้เร็วขึ้นอีก", effectKey: "devMult", effectVal: 0.05 },
+  tactics: { th: "จอมยุทธวิธี", en: "Tactical Genius", descTh: "ทีมคุ้นเคยแผนใหม่เร็วขึ้น + วางแผนก่อนแมทดีขึ้น", effectKey: "famBonus", effectVal: 0.4 },
+  manManagement: { th: "นักจิตวิทยาห้องแต่งตัว", en: "Man Manager", descTh: "มูดนักเตะดีขึ้นง่ายกว่าปกติ", effectKey: "moraleBonus", effectVal: 1 },
+  negotiation: { th: "นักเจรจาตัวยง", en: "Master Negotiator", descTh: "ต่อรองค่าตัว/ค่าเหนื่อยได้ถูกลงอีก", effectKey: "negotiationPct", effectVal: 0.04 },
+  scouting: { th: "สายตาแมวมอง", en: "Scouting Eye", descTh: "รายงานสอดแนมก่อนแมทแม่นยำขึ้น", effectKey: "insight", effectVal: 0.04 },
+  reputation: { th: "บารมีสูงส่ง", en: "High Reputation", descTh: "สะสม XP ผจก. ได้เร็วขึ้น", effectKey: "xpMult", effectVal: 0.1 },
+};
 /** สิทธิประโยชน์ตามดาวการ์ดผจก. — ยิ่งดาวสูงยิ่งมีผลในเกมจริง */
 const MANAGER_TIER_DEFS = {
   1: { title: "มือใหม่", prepBonus: -0.06, performanceBonus: 0, devMult: 1.0, famBonus: 0, moraleBonus: 0, negotiationPct: 0, xpMult: 1, autoPlan: false, perks: ["วางแผนพื้นฐาน — คำแนะนำจำกัด"] },
@@ -735,10 +744,11 @@ function genManager(scaleDown) {
   const keys = Object.keys(stats);
   const strong = [...keys].sort(() => Math.random() - 0.5).slice(0, 2);
   strong.forEach((k) => { stats[k] = rand(scaleDown ? 60 : 75, scaleDown ? 85 : 97); });
+  const trait = strong.reduce((best, k) => (stats[k] > (stats[best] || 0) ? k : best), strong[0]);
   const avgStat = Object.values(stats).reduce((a, b) => a + b, 0) / 6;
   const scale = scaleDown ? 0.35 : 1;
   return {
-    id: uid("mg"), name: choice(MANAGER_FIRST) + " " + choice(LAST_NAMES), stats,
+    id: uid("mg"), name: choice(MANAGER_FIRST) + " " + choice(LAST_NAMES), stats, trait,
     preferredFormation: choice(FORMATION_KEYS),
     signingCost: Math.round((avgStat * 4000 * scale + rand(0, 80000 * scale)) / 1000) * 1000,
     weeklyWage: scaleStaffDailyWage(avgStat * 350 * scale + rand(0, 3000 * scale)),
@@ -1120,9 +1130,12 @@ function groupStaffCards(bag) {
   return Object.values(map).sort((a, b) => b.stars - a.stars || a.type.localeCompare(b.type));
 }
 
+function highestManagerStat(stats) {
+  return Object.keys(MANAGER_STAT_TH).reduce((best, k) => ((stats?.[k] || 0) > (stats?.[best] || 0) ? k : best), "tactics");
+}
 function staffCardToManager(card) {
   return {
-    id: uid("mg"), name: card.name, stats: { ...card.stats },
+    id: uid("mg"), name: card.name, stats: { ...card.stats }, trait: highestManagerStat(card.stats),
     preferredFormation: card.preferredFormation,
     signingCost: 0, weeklyWage: card.weeklyWage,
     wins: 0, draws: 0, losses: 0, xp: 0, level: 1, skillPoints: 0,
@@ -1250,12 +1263,21 @@ function managerPlanProfile(team) {
   const prepMult = clamp(0.86 + tactics / 220 + stars * 0.018 + tier.prepBonus, 0.82, 1.18);
   const markMult = clamp(0.55 + tactics / 130 + stars * 0.025, 0.55, 1.2);
   const label = tier.title;
-  return {
+  const plan = {
     name: mgr.name, stars, tactics, scouting, manManagement, insight, prepMult, markMult, label,
     tierTitle: tier.title, perks: tier.perks, autoPlan: tier.autoPlan,
     performanceBonus: tier.performanceBonus, devMult: tier.devMult, famBonus: tier.famBonus,
     moraleBonus: tier.moraleBonus, negotiationPct: tier.negotiationPct, xpMult: tier.xpMult,
   };
+  // สัญชาตญาณผจก. — บวกเพิ่มเล็กน้อยบนตัวคูณที่มีอยู่แล้ว (ไม่แทนที่สูตรเดิม)
+  const traitKey = mgr.trait || highestManagerStat(mgr.stats);
+  const trait = MANAGER_TRAITS[traitKey];
+  if (trait) {
+    plan.trait = traitKey;
+    plan[trait.effectKey] += trait.effectVal;
+    if (traitKey === "tactics") plan.prepMult += 0.03; // จอมยุทธวิธี: บวกทั้งความคุ้นเคยแผน (famBonus) และคุณภาพวางแผนก่อนเกม
+  }
+  return plan;
 }
 
 /** ผจก. + โบนัสจากผู้ช่วย/Data Analyst (ไม่แตะ engine แมตช์สด) */
@@ -2100,6 +2122,7 @@ function normalizeCareerSave(c) {
       const seed = t.legendTeamKey || t.id || t.short || "team";
       t.logoIndex = Math.abs([...String(seed)].reduce((h, ch) => ((h << 5) - h + ch.charCodeAt(0)) | 0, 0)) % LOGO_ICONS.length;
     }
+    if (t.manager && !t.manager.trait) t.manager.trait = highestManagerStat(t.manager.stats);
   });
   ensureStaffCardFields(c); // เซฟเก่าก่อนมีระบบภาพเหมือนการ์ดสตาฟ — เติม portrait ย้อนหลังให้ครบทุกใบ
   Object.values(c.staff || {}).forEach((teamStaff) => {
@@ -7181,6 +7204,11 @@ function ManagerView({ career, uTeam, userMatch, opponent, isHome, seasonOver, m
               <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 {mgr.name}
                 {mgrStars ? <StarGlyphs count={mgrStars} size={10} /> : null}
+                {mgrPlan?.trait && MANAGER_TRAITS[mgrPlan.trait] && (
+                  <span title={MANAGER_TRAITS[mgrPlan.trait].descTh} style={{ fontSize: 9.5, color: C.gold, fontWeight: 700, background: "rgba(212,175,55,.12)", border: `1px solid ${C.gold}55`, borderRadius: 5, padding: "1px 6px" }}>
+                    🌟 {MANAGER_TRAITS[mgrPlan.trait].th}
+                  </span>
+                )}
               </div>
             </div>
           </div>
