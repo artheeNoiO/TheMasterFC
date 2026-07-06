@@ -2822,15 +2822,38 @@ function resolvePlayerRole(p) {
   if (p.role === "defensive") return [...roles].sort((a, b) => b.defMult - a.defMult)[0];
   return roles[Math.floor((roles.length - 1) / 2)];
 }
-/** โบนัส/บทลงโทษของบทบาทถูกขยาย/หดตามว่าผู้เล่นมีสเตตที่เหมาะกับบทบาทนั้นแค่ไหน (เล่นผิดบทบาทได้ผลน้อยลง) */
+/** หน้าที่ซ้อนบนบทบาท (FM-style Duty) — เอียงบทบาทเดิมให้บุก/รับมากขึ้นอีกชั้น ไม่มีผลกับโกล (ไม่มี duty concept) */
+const DUTY_DEFS = {
+  attack: { id: "attack", label: "บุก (Attack)", atk: 1.08, def: 0.92 },
+  support: { id: "support", label: "สนับสนุน (Support)", atk: 1.0, def: 1.0 },
+  defend: { id: "defend", label: "รับ (Defend)", atk: 0.9, def: 1.08 },
+};
+const DUTY_LIST = [DUTY_DEFS.defend, DUTY_DEFS.support, DUTY_DEFS.attack];
+function resolvePlayerDuty(p) {
+  return DUTY_DEFS[p.duty] || DUTY_DEFS.support;
+}
+/** ย่อหน้าที่เป็นรหัสสั้นแบบ FM (เช่น "PF-At", "IF-Su") ต่อท้ายชื่อบทบาทในป้าย/แผนผัง */
+const DUTY_SUFFIX = { attack: "At", support: "Su", defend: "De" };
+function roleDutyShortCode(p) {
+  const role = resolvePlayerRole(p);
+  const short = (role.id.split("_")[1] || role.id).slice(0, 2).toUpperCase();
+  if (role.id.startsWith("gk_")) return short;
+  return `${short}-${DUTY_SUFFIX[p.duty] || "Su"}`;
+}
+/** โบนัส/บทลงโทษของบทบาทถูกขยาย/หดตามว่าผู้เล่นมีสเตตที่เหมาะกับบทบาทนั้นแค่ไหน (เล่นผิดบทบาทได้ผลน้อยลง)
+ *  ซ้อนทับด้วย duty (บุก/สนับสนุน/รับ) อีกชั้นหนึ่ง — ยกเว้นโกลที่ไม่มี duty */
 function roleAttackDefenseMult(p) {
   const role = resolvePlayerRole(p);
   const bonusAvg = role.bonusAttrs?.length ? role.bonusAttrs.reduce((s, k) => s + (p.attrs?.[k] || 10), 0) / role.bonusAttrs.length : 10;
   const fit = clamp(1 + (bonusAvg - 10) * 0.012, 0.85, 1.15);
-  return {
-    atk: role.atkMult >= 1 ? role.atkMult * fit : role.atkMult,
-    def: role.defMult >= 1 ? role.defMult * fit : role.defMult,
-  };
+  let atk = role.atkMult >= 1 ? role.atkMult * fit : role.atkMult;
+  let def = role.defMult >= 1 ? role.defMult * fit : role.defMult;
+  if (!role.id.startsWith("gk_")) {
+    const duty = resolvePlayerDuty(p);
+    atk *= duty.atk;
+    def *= duty.def;
+  }
+  return { atk, def };
 }
 
 /* ============================== TEMPO / PRESSING / DEFENSIVE LINE ============================== */
@@ -5636,6 +5659,14 @@ export default function App({
       return c;
     });
   }
+  function setPlayerDuty(playerId, duty) {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      const p = c.players.find((pl) => pl.id === playerId);
+      if (p) p.duty = duty;
+      return c;
+    });
+  }
   /** kind: "corner" | "freekick" | "penalty" */
   function setSetPieceTaker(kind, playerId) {
     updateCareer((prev) => {
@@ -6374,6 +6405,7 @@ export default function App({
             onSetFormation={setFormation}
             onToggleAuto={toggleAutoMode}
             onSetPlayerRole={setPlayerRole}
+            onSetPlayerDuty={setPlayerDuty}
             onSetSetPieceTaker={setSetPieceTaker}
             onBoardMove={moveBoardPiece}
             onSetPrepField={setMatchPrepField}
@@ -8842,7 +8874,7 @@ function PosBadge({ pos, tier, oop }) {
   );
 }
 
-function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onAutoPick, onBoardMove, editable, highlightId }) {
+function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onSetPlayerDuty, onAutoPick, onBoardMove, editable, highlightId }) {
   const [expandedId, setExpandedId] = useState(null);
   const [pick, setPick] = useState(null); // { kind, index?, playerId? }
   const [dragOver, setDragOver] = useState(null);
@@ -8960,21 +8992,37 @@ function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onAutoPick, o
               fontSize: 8.5, padding: "4px 4px", borderRadius: 6, cursor: "pointer", textAlign: "center",
               border: `1px solid ${expanded ? C.amber : C.steel}`, background: expanded ? "rgba(224,164,88,.15)" : C.panel2,
               color: expanded ? C.amber : C.chalk, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-            }}>{role.label}</button>
+            }}>{p ? roleDutyShortCode(p) : ""} · {role.label}</button>
           ) : <span />}
         </div>
         {expanded && p && (
-          <div style={{ padding: "2px 10px 8px", display: "flex", flexWrap: "wrap", gap: 4 }} onClick={(e) => e.stopPropagation()}>
-            {rolesForPlayer(p).map((r) => {
-              const on = role.id === r.id;
-              return (
-                <button key={r.id} type="button" onClick={() => { onSetPlayerRole(p.id, r.id); setExpandedId(null); }} style={{
-                  fontSize: 9, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
-                  border: `1px solid ${on ? C.amber : C.steel}`, background: on ? "rgba(224,164,88,.15)" : "transparent",
-                  color: on ? C.amber : C.textDim,
-                }}>{r.label}{on ? " ✓" : ""}</button>
-              );
-            })}
+          <div style={{ padding: "2px 10px 8px" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {rolesForPlayer(p).map((r) => {
+                const on = role.id === r.id;
+                return (
+                  <button key={r.id} type="button" onClick={() => onSetPlayerRole(p.id, r.id)} style={{
+                    fontSize: 9, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
+                    border: `1px solid ${on ? C.amber : C.steel}`, background: on ? "rgba(224,164,88,.15)" : "transparent",
+                    color: on ? C.amber : C.textDim,
+                  }}>{r.label}{on ? " ✓" : ""}</button>
+                );
+              })}
+            </div>
+            {!role.id.startsWith("gk_") && onSetPlayerDuty && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                {DUTY_LIST.map((d) => {
+                  const on = (p.duty || "support") === d.id;
+                  return (
+                    <button key={d.id} type="button" onClick={() => { onSetPlayerDuty(p.id, d.id); setExpandedId(null); }} style={{
+                      fontSize: 9, padding: "4px 8px", borderRadius: 6, cursor: "pointer",
+                      border: `1px solid ${on ? C.blue : C.steel}`, background: on ? "rgba(90,155,213,.15)" : "transparent",
+                      color: on ? C.blue : C.textDim,
+                    }}>{d.label}{on ? " ✓" : ""}</button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -9104,7 +9152,7 @@ function TeamStyleCards({ matchPrep, onSetPrepField, squad, xi }) {
 
 function TacticsView({
   career, squad, team, xi, matchScout, matchPrep, seasonOver,
-  onSetFormation, onToggleAuto, onSetPlayerRole, onSetSetPieceTaker, onBoardMove, onSetPrepField, onAutoPick,
+  onSetFormation, onToggleAuto, onSetPlayerRole, onSetPlayerDuty, onSetSetPieceTaker, onBoardMove, onSetPrepField, onAutoPick,
   onSetMentality, onToggleInstruction, onSetTeamTalk, onApplySuggested,
 }) {
   const formation = team.formation;
@@ -9184,7 +9232,7 @@ function TacticsView({
 
       <TacticsSquadTable
         career={career} squad={squad} team={team}
-        onSetPlayerRole={onSetPlayerRole} onAutoPick={onAutoPick}
+        onSetPlayerRole={onSetPlayerRole} onSetPlayerDuty={onSetPlayerDuty} onAutoPick={onAutoPick}
         onBoardMove={onBoardMove} editable={!team.autoMode} highlightId={highlightId}
       />
 
