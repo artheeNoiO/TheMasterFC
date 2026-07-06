@@ -12878,13 +12878,15 @@ function StaffCardPickerRow({ cards, icon = "🎴", title, career, onHire }) {
   const [open, setOpen] = useState(false);
   if (!cards.length) return null;
   return (
-    <Panel style={{ border: `1px solid ${C.blue}` }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <SectionLabel style={{ color: C.blue }} sub={`มี ${cards.length} ใบในกระเป๋า`}>{icon} {title}</SectionLabel>
-        <button type="button" onClick={() => setOpen(true)} style={{ ...btnStyle(C.blue, "#fff"), width: "auto", padding: "8px 14px", fontSize: 11, flexShrink: 0, whiteSpace: "nowrap" }}>
-          เปลี่ยนการ์ด
-        </button>
-      </div>
+    <>
+      <Panel style={{ border: `1px solid ${C.blue}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <SectionLabel style={{ color: C.blue }} sub={`มี ${cards.length} ใบในกระเป๋า`}>{icon} {title}</SectionLabel>
+          <button type="button" onClick={() => setOpen(true)} style={{ ...btnStyle(C.blue, "#fff"), width: "auto", padding: "8px 14px", fontSize: 11, flexShrink: 0, whiteSpace: "nowrap" }}>
+            เปลี่ยนการ์ด
+          </button>
+        </div>
+      </Panel>
       {open && (
         <div
           style={{ position: "fixed", inset: 0, zIndex: 65, background: "rgba(0,0,0,.75)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
@@ -12905,7 +12907,7 @@ function StaffCardPickerRow({ cards, icon = "🎴", title, career, onHire }) {
           </div>
         </div>
       )}
-    </Panel>
+    </>
   );
 }
 
