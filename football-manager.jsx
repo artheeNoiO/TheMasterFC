@@ -1006,6 +1006,16 @@ function ensureStaffCardFields(c) {
   if (Array.isArray(c.lastStaffPull)) ensureStaffCardIds(c.lastStaffPull);
   if (c.lastStaffPull == null) c.lastStaffPull = null;
   if (!c.autoMergeTiers) c.autoMergeTiers = { 1: false, 2: false, 3: false, 4: false };
+  // เซฟเก่าก่อนที่ระบบ portrait จะพ่วงติดไปกับ manager/coach ที่จ้างแล้ว (staffCardToManager/staffCardToCoach) — เติมย้อนหลังให้
+  (c.teams || []).forEach((team) => {
+    if (team.manager && !team.manager.portrait) team.manager.portrait = pickStaffPortrait("MANAGER", null, team.manager.cardStars || 3);
+    if (team.staff) {
+      Object.keys(team.staff).forEach((spec) => {
+        const co = team.staff[spec];
+        if (co && !co.portrait) co.portrait = pickStaffPortrait("COACH", co.specialty, co.cardStars || 3);
+      });
+    }
+  });
   return resetDailyStaffDraws(c);
 }
 
@@ -1086,7 +1096,7 @@ function staffCardToManager(card) {
     preferredFormation: card.preferredFormation,
     signingCost: 0, weeklyWage: card.weeklyWage,
     wins: 0, draws: 0, losses: 0, xp: 0, level: 1, skillPoints: 0,
-    cardStars: card.stars,
+    cardStars: card.stars, portrait: card.portrait,
   };
 }
 
@@ -1097,7 +1107,7 @@ function staffCardToCoach(card) {
     technique: card.technique, motivation: card.motivation, drillSkill: card.drillSkill,
     coachingStyle: card.coachingStyle, focusAttrs: card.focusAttrs,
     signingCost: 0, weeklyWage: card.weeklyWage,
-    cardStars: card.stars,
+    cardStars: card.stars, portrait: card.portrait,
   }, card.specialty);
   return base;
 }
@@ -7047,9 +7057,14 @@ function ManagerView({ career, uTeam, userMatch, opponent, isHome, seasonOver, m
       {mgr ? (
         <Panel>
           <SectionLabel>ผู้จัดการทีม</SectionLabel>
-          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            {mgr.name}
-            {mgrStars ? <StarGlyphs count={mgrStars} size={10} /> : null}
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 8, flexWrap: "wrap" }}>
+            <StaffPackCardFace card={{ type: "MANAGER", name: mgr.name, portrait: mgr.portrait, stars: mgr.cardStars || 3, stats: mgr.stats, preferredFormation: mgr.preferredFormation }} />
+            <div style={{ flex: 1, minWidth: 160 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {mgr.name}
+                {mgrStars ? <StarGlyphs count={mgrStars} size={10} /> : null}
+              </div>
+            </div>
           </div>
           <div style={{ fontSize: 11.5, color: C.textDim, fontFamily: MONO_FONT, marginBottom: 8 }}>
             Lv.{mgr.level || 1} · ถนัด {mgr.preferredFormation} · ผลงาน {mgr.wins}ช-{mgr.draws}ส-{mgr.losses}พ
@@ -8423,18 +8438,21 @@ function StaffOfferCard({ spec, co, offer, locked, budget, onHire, uiLang = "th"
     <div style={{ padding: "8px 10px", borderRadius: 8, background: co ? "rgba(111,174,90,.1)" : C.panel2, border: `1px solid ${co ? C.good : C.steel}` }}>
       <div style={{ fontSize: 11, fontFamily: MONO_FONT, color: C.textDim, marginBottom: 4 }}>{STAFF_TH[spec]}</div>
       {co && (
-        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          {co.name}
-          {staffEntityStars(co) ? <StarGlyphs count={staffEntityStars(co)} size={8} /> : null}
-          {["GK", "DF", "MF", "FW", "FITNESS"].includes(spec) && (
-            <span style={{ fontSize: 10, color: C.blue, fontWeight: 600 }}>
-              {COACHING_STYLES[co.coachingStyle]?.th || ""} · ~{Math.round(coachDailyAttrBump(co) * 1000) / 10}%/วัน
-            </span>
-          )}
-          {!["GK", "DF", "MF", "FW", "FITNESS"].includes(spec) && (
-            <span style={{ fontSize: 10, color: C.textDim, fontWeight: 500 }}>+{co.boost}</span>
-          )}
-          {locked && <span style={{ fontSize: 9.5, color: C.textDim }}>🔒 เปลี่ยนได้ตอนขึ้นฤดูกาลหน้า</span>}
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 6, flexWrap: "wrap" }}>
+          <StaffPackCardFace card={{ type: "COACH", name: co.name, portrait: co.portrait, stars: co.cardStars || 3, specialty: co.specialty, grade: co.grade || 1, boost: co.boost, technique: co.technique, motivation: co.motivation, drillSkill: co.drillSkill, coachingStyle: co.coachingStyle }} />
+          <div style={{ flex: 1, minWidth: 140, fontSize: 12.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            {co.name}
+            {staffEntityStars(co) ? <StarGlyphs count={staffEntityStars(co)} size={8} /> : null}
+            {["GK", "DF", "MF", "FW", "FITNESS"].includes(spec) && (
+              <span style={{ fontSize: 10, color: C.blue, fontWeight: 600 }}>
+                {COACHING_STYLES[co.coachingStyle]?.th || ""} · ~{Math.round(coachDailyAttrBump(co) * 1000) / 10}%/วัน
+              </span>
+            )}
+            {!["GK", "DF", "MF", "FW", "FITNESS"].includes(spec) && (
+              <span style={{ fontSize: 10, color: C.textDim, fontWeight: 500 }}>+{co.boost}</span>
+            )}
+            {locked && <span style={{ fontSize: 9.5, color: C.textDim }}>🔒 เปลี่ยนได้ตอนขึ้นฤดูกาลหน้า</span>}
+          </div>
         </div>
       )}
       {co && ["GK", "DF", "MF", "FW", "FITNESS"].includes(spec) && <CoachStatMini co={co} lang={uiLang} />}
@@ -12877,9 +12895,11 @@ function StaffCardPickerRow({ cards, icon = "🎴", title, career, onHire }) {
               <SectionLabel style={{ color: C.blue }}>{icon} เลือกการ์ด — {title}</SectionLabel>
               <button onClick={() => setOpen(false)} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="fc-scroll-x fc-hide-scrollbar" style={{ display: "flex", flexDirection: "row", gap: 8, paddingBottom: 4 }}>
               {cards.map((card) => (
-                <StaffCardTile key={card.cardId} card={card} onHire={(id) => { onHire(id); setOpen(false); }} {...staffCardLockInfo(career, card)} />
+                <div key={card.cardId} style={{ width: 240, flexShrink: 0 }}>
+                  <StaffCardTile card={card} onHire={(id) => { onHire(id); setOpen(false); }} {...staffCardLockInfo(career, card)} />
+                </div>
               ))}
             </div>
           </div>
