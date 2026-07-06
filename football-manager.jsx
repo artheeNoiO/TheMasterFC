@@ -4342,6 +4342,15 @@ export default function App({
     });
   }, [persist]);
 
+  /* career.liveMatch เป็นระบบจำลองแมทฝั่ง sandbox ล้วนๆ — ไม่ควรมีอยู่เลยในโหมดออนไลน์ (แมทออนไลน์จริงคำนวณฝั่งเซิร์ฟเวอร์แยกต่างหาก)
+   * ถ้าเจอ liveMatch ค้างอยู่ในเซฟที่ playMode="online" (เช่น เผลอกดปุ่ม "▶ ลงสนาม" เดิมแล้วปิดแอปก่อนจบ 90 นาที)
+   * ล้างทิ้งอัตโนมัติแทนที่จะเปิดจอเดิมซ้ำไปเรื่อยๆ ทุกครั้งที่เข้าเกม */
+  useEffect(() => {
+    if (career?.playMode === "online" && career?.liveMatch) {
+      updateCareer((prev) => ({ ...prev, liveMatch: null }));
+    }
+  }, [career?.playMode, career?.liveMatch, updateCareer]);
+
   function showToast(msg) { setToast(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(null), 2600); }
   async function enterOnlineMode() {
     const fin = computeTeamFinances(career);
@@ -6353,7 +6362,7 @@ export default function App({
         />
       )}
 
-      {career.liveMatch && <LiveMatchModal career={career} liveMatch={career.liveMatch} userAutoMode={uTeam.autoMode} onFinish={finishLiveMatch} suggestTacticSwitch={suggestTacticSwitch} fullOnlineMode={career.playMode === "online"} />}
+      {career.liveMatch && career.playMode !== "online" && <LiveMatchModal career={career} liveMatch={career.liveMatch} userAutoMode={uTeam.autoMode} onFinish={finishLiveMatch} suggestTacticSwitch={suggestTacticSwitch} fullOnlineMode={false} />}
       {career.playMode === "online" && tab !== "onlinematch" && (
         <OnlineFloatingScoreWidget onOpen={() => setTab("onlinematch")} />
       )}
@@ -8236,13 +8245,21 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
                 <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4 }}>{opponent.short}</div>
               </div>
             </div>
-            <button type="button" onClick={onKickoff} disabled={!canKickoff} style={fmBtnPrimary({ marginBottom: 8, opacity: canKickoff ? 1 : 0.45, cursor: canKickoff ? "pointer" : "not-allowed" })}>
-              {canKickoff ? "▶ ลงสนาม" : `▶ ลงสนามไม่ได้ (${xiAfterFill}/11)`}
-            </button>
-            {!canKickoff && (
-              <div style={{ fontSize: 10, color: C.crimson, marginBottom: 8, lineHeight: 1.5 }}>
-                ต้องมีนักเตะพร้อมเล่นครบ 11 คนตามแผน — บาดเจ็บ {injuredCount} คน · ไปแท็บทีมเพื่อดูสถานะ
+            {career.playMode === "online" ? (
+              <div style={{ fontSize: 11, color: C.textDim, marginBottom: 8, lineHeight: 1.6, padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
+                🔴 โหมดออนไลน์แข่งอัตโนมัติตามเวลาจริง — ไปที่แท็บ "แข่งขันสด" เพื่อดู/สั่งกลางแมท
               </div>
+            ) : (
+              <>
+                <button type="button" onClick={onKickoff} disabled={!canKickoff} style={fmBtnPrimary({ marginBottom: 8, opacity: canKickoff ? 1 : 0.45, cursor: canKickoff ? "pointer" : "not-allowed" })}>
+                  {canKickoff ? "▶ ลงสนาม" : `▶ ลงสนามไม่ได้ (${xiAfterFill}/11)`}
+                </button>
+                {!canKickoff && (
+                  <div style={{ fontSize: 10, color: C.crimson, marginBottom: 8, lineHeight: 1.5 }}>
+                    ต้องมีนักเตะพร้อมเล่นครบ 11 คนตามแผน — บาดเจ็บ {injuredCount} คน · ไปแท็บทีมเพื่อดูสถานะ
+                  </div>
+                )}
+              </>
             )}
             <div style={{ display: "flex", gap: 6 }}>
               <button type="button" onClick={onGoTactics} style={fmBtnGhost()}>จัดทีม · {xiPicked}/11</button>
