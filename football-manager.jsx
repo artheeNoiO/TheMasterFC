@@ -8216,7 +8216,8 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
         onSetDelegation={onSetDelegation}
         onRestartAfterSack={onRestartAfterSack}
       />
-
+      <div className="fc-dash-split">
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
       {/* Hero: นัดวันนี้ */}
       <Panel accent={C.amber} style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ padding: "10px 12px 0" }}>
@@ -8335,7 +8336,9 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
           )}
         </Panel>
       )}
+      </div>
 
+      <div className="fc-dash-side" style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
       {/* สรุปอันดับ */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
         {[
@@ -8396,6 +8399,8 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
           ))}
         </Panel>
       )}
+      </div>
+      </div>
     </div>
   );
 }

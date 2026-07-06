@@ -470,6 +470,25 @@ a.fc-header-chip {
   }
 }
 
+/* Dashboard — จอกว้างจัดเป็น 2 คอลัมน์ (หลัก+ข้าง) แบบ FM Overview แทนซ้อนยาวคอลัมน์เดียว */
+.fc-dash-split {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@media (min-width: 1024px) {
+  .fc-dash-split {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    align-items: start;
+    gap: 16px;
+  }
+  .fc-dash-split > .fc-dash-side {
+    position: sticky;
+    top: 70px;
+  }
+}
+
 /* หน้า Tactics — จอกว้างวางสนาม+ตารางผู้เล่นเคียงข้างกัน (แบบ FM) แทนซ้อนบน-ล่างยาว */
 .fc-tactics-split {
   display: flex;
