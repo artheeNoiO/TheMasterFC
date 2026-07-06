@@ -7088,16 +7088,7 @@ function ManagerView({ career, uTeam, userMatch, opponent, isHome, seasonOver, m
         </Panel>
       )}
 
-      {managerCards.length > 0 && (
-        <Panel style={{ border: `1px solid ${C.blue}` }}>
-          <SectionLabel style={{ color: C.blue }} sub={`มี ${managerCards.length} ใบในกระเป๋า — กด "จ้าง" เพื่อติดตั้งเป็นผจก.ทันที${managerCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดผจก.ที่สุ่มได้</SectionLabel>
-          <CardListScroll>
-            {managerCards.map((card) => (
-              <StaffCardTile key={card.cardId} card={card} compact onHire={onHireManagerCard} {...staffCardLockInfo(career, card)} />
-            ))}
-          </CardListScroll>
-        </Panel>
-      )}
+      <StaffCardPickerRow cards={managerCards} title="การ์ดผจก.ที่สุ่มได้" career={career} onHire={onHireManagerCard} />
 
       {userMatch && opponent && !seasonOver && (
         <Panel style={{ border: `1px solid ${C.purple}` }}>
@@ -7950,10 +7941,7 @@ function ClubExtraStaffPanel({ career, uiLang = "th", onHireCard }) {
       </div>
       {bagCards.length > 0 && (
         <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6 }}>{t(uiLang, "club.extraStaffCards")}</div>
-          <CardListScroll>
-            {bagCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireCard} {...staffCardLockInfo(career, card)} />)}
-          </CardListScroll>
+          <StaffCardPickerRow cards={bagCards} title={t(uiLang, "club.extraStaffCards")} career={career} onHire={onHireCard} />
         </div>
       )}
     </Panel>
@@ -8478,14 +8466,7 @@ function CoachRoomView({ career, staff, coachOffers, budget, onHireCoach, onHire
           <br />สนามฝึก Lv.{trainLevel} บัพเพิ่ม · โค้ชฟิตเนสฟื้นสตามินาทั้งทีม
         </div>
       </Panel>
-      {cards.length > 0 && (
-        <Panel style={{ border: `1px solid ${C.blue}` }}>
-          <SectionLabel style={{ color: C.blue }} sub={`มี ${cards.length} ใบในกระเป๋า — กด "จ้าง" เพื่อติดตั้งทันที${cards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดโค้ชที่สุ่มได้</SectionLabel>
-          <CardListScroll>
-            {cards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireCard} {...staffCardLockInfo(career, card)} />)}
-          </CardListScroll>
-        </Panel>
-      )}
+      <StaffCardPickerRow cards={cards} title="การ์ดโค้ชที่สุ่มได้" career={career} onHire={onHireCard} />
       <Panel>
         <SectionLabel>ผู้สมัครรายสัปดาห์</SectionLabel>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -9618,14 +9599,7 @@ function MarketScoutView({ scoutFinds, budget, onBuyScoutFind, onScoutSearch, on
         ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
       </Panel>
 
-      {scoutCards.length > 0 && (
-        <Panel style={{ border: `1px solid ${C.blue}` }}>
-          <SectionLabel style={{ color: C.blue }} sub={`มี ${scoutCards.length} ใบในกระเป๋า — ติดตั้งได้ทั้งแมวมองชุดใหญ่/เยาวชน${scoutCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดแมวมองที่สุ่มได้</SectionLabel>
-          <CardListScroll>
-            {scoutCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireScoutCard} {...staffCardLockInfo(career, card)} />)}
-          </CardListScroll>
-        </Panel>
-      )}
+      <StaffCardPickerRow cards={scoutCards} title="การ์ดแมวมองที่สุ่มได้" career={career} onHire={onHireScoutCard} />
       <Panel style={{ border: `1px solid ${hasScout ? C.blue : C.steel}` }}>
         <SectionLabel sub={hasScout ? `${scout.name} · เกรด ${scout.grade}/5 · สูงสุด ${maxFinds} รายการ` : "จ้างแมวมองด้านบนก่อน"}>
           🔭 รายงานจากแมวมอง
@@ -12092,14 +12066,7 @@ function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, o
         {packCount === 0 && <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 8 }}>ไม่มีชุดปฐมพยาบาล — ไปซื้อที่ร้านค้า (10 เหรียญ · ซื้อได้วันละ 5 ครั้ง)</div>}
       </Panel>
 
-      {medicalCards.length > 0 && (
-        <Panel style={{ border: `1px solid ${C.blue}` }}>
-          <SectionLabel style={{ color: C.blue }} sub={`มี ${medicalCards.length} ใบในกระเป๋า — กด "จ้าง" เพื่อติดตั้งทันที${medicalCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดหมอ/นักกายภาพที่สุ่มได้</SectionLabel>
-          <CardListScroll>
-            {medicalCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireCard} {...staffCardLockInfo(career, card)} />)}
-          </CardListScroll>
-        </Panel>
-      )}
+      <StaffCardPickerRow cards={medicalCards} title="การ์ดหมอ/นักกายภาพที่สุ่มได้" career={career} onHire={onHireCard} />
 
       <Panel>
         <SectionLabel sub="หมอลดโอกาส/ความรุนแรงบาดเจ็บ · นักกายภาพเร่งพักฟื้นหลังบาดเจ็บ">ทีมแพทย์ — ผู้สมัครรายสัปดาห์</SectionLabel>
@@ -12158,14 +12125,7 @@ function AcademyView({ career, budget, onHireScout, onHireScoutCard, onHireAcade
         ) : <div style={{ fontSize: 12, color: C.textDim }}>รอผู้สมัครใหม่สัปดาห์หน้า</div>}
       </Panel>
 
-      {scoutCards.length > 0 && (
-        <Panel style={{ border: `1px solid ${C.blue}` }}>
-          <SectionLabel style={{ color: C.blue }} sub={`มี ${scoutCards.length} ใบในกระเป๋า — ติดตั้งได้ทั้งแมวมองชุดใหญ่/เยาวชน${scoutCards.length > 3 ? " · เลื่อนดูที่เหลือ" : ""}`}>🎴 การ์ดแมวมองที่สุ่มได้</SectionLabel>
-          <CardListScroll>
-            {scoutCards.map((card) => <StaffCardTile key={card.cardId} card={card} compact onHire={onHireScoutCard} {...staffCardLockInfo(career, card)} />)}
-          </CardListScroll>
-        </Panel>
-      )}
+      <StaffCardPickerRow cards={scoutCards} title="การ์ดแมวมองที่สุ่มได้" career={career} onHire={onHireScoutCard} />
 
       <Panel>
         <SectionLabel>ผจก.อคาเดมี</SectionLabel>
@@ -12854,6 +12814,40 @@ function StaffCardTile({ card, compact, onHire, locked, fee, afford }) {
         )
       )}
     </div>
+  );
+}
+
+/** แถวการ์ดสตาฟแบบกดปุ่ม "เปลี่ยนการ์ด" แล้วเปิด modal เลือก — แทนที่ CardListScroll แนวนอนที่โชว์ทุกใบค้างอยู่ตลอด */
+function StaffCardPickerRow({ cards, icon = "🎴", title, career, onHire }) {
+  const [open, setOpen] = useState(false);
+  if (!cards.length) return null;
+  return (
+    <Panel style={{ border: `1px solid ${C.blue}` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <SectionLabel style={{ color: C.blue }} sub={`มี ${cards.length} ใบในกระเป๋า`}>{icon} {title}</SectionLabel>
+        <button type="button" onClick={() => setOpen(true)} style={{ ...btnStyle(C.blue, "#fff"), width: "auto", padding: "8px 14px", fontSize: 11, flexShrink: 0, whiteSpace: "nowrap" }}>
+          เปลี่ยนการ์ด
+        </button>
+      </div>
+      {open && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 65, background: "rgba(0,0,0,.75)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          onClick={() => setOpen(false)}
+        >
+          <div style={{ background: C.panel, border: `1px solid ${C.blue}`, borderRadius: 10, padding: 16, maxWidth: 420, width: "100%", maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <SectionLabel style={{ color: C.blue }}>{icon} เลือกการ์ด — {title}</SectionLabel>
+              <button onClick={() => setOpen(false)} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {cards.map((card) => (
+                <StaffCardTile key={card.cardId} card={card} onHire={(id) => { onHire(id); setOpen(false); }} {...staffCardLockInfo(career, card)} />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </Panel>
   );
 }
 
