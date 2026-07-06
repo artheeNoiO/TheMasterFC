@@ -10873,7 +10873,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
           <button type="button" onClick={() => setPaused((p) => !p)} disabled={halftimeOpen} style={{ ...btnStyle(C.steel, C.chalk), flex: 1, minWidth: 90, opacity: halftimeOpen ? 0.5 : 1 }}>{paused ? "▶ เล่นต่อ" : "⏸ หยุด"}</button>
           {!fullOnlineMode && (
-            <button type="button" onClick={() => setSpeed((s) => (s === 1 ? 3 : s === 3 ? 6 : 1))} disabled={halftimeOpen} style={{ ...btnStyle(C.amber, "#0b2318"), flex: 1, minWidth: 90, opacity: halftimeOpen ? 0.5 : 1 }}>ความเร็ว x{speed}</button>
+            <button type="button" onClick={() => setSpeed((s) => (s === 1 ? 3 : s === 3 ? 6 : s === 6 ? 12 : 1))} disabled={halftimeOpen} style={{ ...btnStyle(C.amber, "#0b2318"), flex: 1, minWidth: 90, opacity: halftimeOpen ? 0.5 : 1 }}>ความเร็ว x{speed}</button>
           )}
           <button type="button" onClick={toggleCrowdMute} style={{ ...btnStyle(crowdMuted ? C.steel : C.good, crowdMuted ? C.textDim : "#0b2318"), flex: 1, minWidth: 90 }} title="เสียงกองเชียในสนาม">{crowdMuted ? "🔇 ปิดเสียง" : "🔊 กองเชีย"}</button>
           <button type="button" onClick={() => setShowSubs((s) => !s)} style={{ ...btnStyle(showSubs ? C.purple : C.steel, showSubs ? "#fff" : C.chalk), flex: 1, minWidth: 90 }}>{showSubs ? "ซ่อนเปลี่ยนตัว" : "เปลี่ยนตัว"} ({subsUsed}/5)</button>
