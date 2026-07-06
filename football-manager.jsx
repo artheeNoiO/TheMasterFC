@@ -10878,7 +10878,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           <button type="button" onClick={toggleCrowdMute} style={{ ...btnStyle(crowdMuted ? C.steel : C.good, crowdMuted ? C.textDim : "#0b2318"), flex: 1, minWidth: 90 }} title="เสียงกองเชียในสนาม">{crowdMuted ? "🔇 ปิดเสียง" : "🔊 กองเชีย"}</button>
           <button type="button" onClick={() => setShowSubs((s) => !s)} style={{ ...btnStyle(showSubs ? C.purple : C.steel, showSubs ? "#fff" : C.chalk), flex: 1, minWidth: 90 }}>{showSubs ? "ซ่อนเปลี่ยนตัว" : "เปลี่ยนตัว"} ({subsUsed}/5)</button>
           {!fullOnlineMode && (
-            <button type="button" onClick={skipToFullTime} disabled={halftimeOpen} style={{ ...btnStyle("transparent", C.textDim), flex: 1, minWidth: 90, border: `1px dashed ${C.steel}`, opacity: halftimeOpen ? 0.5 : 1 }}>⏭ จบเกม (เบต้า)</button>
+            <button type="button" onClick={skipToFullTime} disabled={halftimeOpen} style={{ ...btnStyle(C.crimson, "#fff"), flex: 1, minWidth: 90, fontWeight: 800, opacity: halftimeOpen ? 0.5 : 1 }}>⏭ ข้ามไปดูผล</button>
           )}
         </div>
         {crowdNeedsUnlock && !crowdMuted && (
