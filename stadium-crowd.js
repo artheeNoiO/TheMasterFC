@@ -219,6 +219,13 @@ export class StadiumCrowdAudio {
       this._noiseBurst({ duration: 0.75, peak: 0.32, filterHz: 760, attack: 0.06, decay: 0.35, pan });
     } else if (kind === "kickoff") {
       this.whistle("kickoff");
+    } else if (kind === "card") {
+      // เสียง "โห่/อื้ออึง" แบบสั้นแหลมกว่า groan ปกติ — ใช้ตอนได้ใบเหลือง/แดง
+      this._noiseBurst({ duration: 1.1, peak: 0.5, filterHz: 1400, attack: 0.015, decay: 0.4, pan });
+      this._noiseBurst({ duration: 1.3, peak: 0.34, filterHz: 480, attack: 0.05, decay: 0.7, pan: -pan * 0.4 });
+    } else if (kind === "sub") {
+      // เสียงปรบมือเบาๆ ระลอกเดียว — ใช้ตอนเปลี่ยนตัว
+      this._noiseBurst({ duration: 1.2, peak: 0.24, filterHz: 2200, attack: 0.1, decay: 0.9, pan: 0 });
     }
   }
 
@@ -252,13 +259,17 @@ export class StadiumCrowdAudio {
     harmonic.stop(startTime + duration + 0.03);
   }
 
-  /** kind: "short" = เป่าครั้งเดียว, "kickoff" = เป่า 2 ครั้ง (เริ่มเกม / ครึ่งหลัง) */
+  /** kind: "short" = เป่าครั้งเดียว, "kickoff" = เป่า 2 ครั้ง (เริ่มเกม / ครึ่งหลัง), "fulltime" = เป่ายาว 3 ครั้ง (จบเกม) */
   whistle(kind = "short") {
     if (!this.ctx || !this.cheerBus) return;
     const t = this.ctx.currentTime;
     if (kind === "kickoff") {
       this._singleWhistleBlast(t, { peak: 0.13, duration: 0.19, freq: 940 });
       this._singleWhistleBlast(t + 0.26, { peak: 0.13, duration: 0.19, freq: 960 });
+    } else if (kind === "fulltime") {
+      this._singleWhistleBlast(t, { peak: 0.15, duration: 0.28, freq: 940 });
+      this._singleWhistleBlast(t + 0.38, { peak: 0.15, duration: 0.28, freq: 940 });
+      this._singleWhistleBlast(t + 0.76, { peak: 0.17, duration: 0.5, freq: 940 });
     } else {
       this._singleWhistleBlast(t, { peak: 0.1, duration: 0.22, freq: 900 });
     }
@@ -282,6 +293,8 @@ export function useStadiumCrowd({
   muted,
   onNeedsUnlock,
   unlockTick = 0,
+  refereeCard,
+  subTick = 0,
 }) {
   const crowdRef = useRef(null);
   const lastBuildupRef = useRef(0);
@@ -290,6 +303,9 @@ export function useStadiumCrowd({
   const prevHighlightStageRef = useRef(null);
   const kickoff1Ref = useRef(false);
   const prevUnlockTickRef = useRef(unlockTick);
+  const prevEndedRef = useRef(ended);
+  const lastCardKeyRef = useRef(null);
+  const prevSubTickRef = useRef(subTick);
 
   useEffect(() => {
     if (!crowdRef.current) crowdRef.current = new StadiumCrowdAudio();
@@ -369,6 +385,31 @@ export function useStadiumCrowd({
     if (stage === "buildup") crowdRef.current?.cheer("buildup", { homeSide });
     if (stage === "shot") crowdRef.current?.cheer("shot", { homeSide });
   }, [highlightSeq, muted]);
+
+  // นกหวีดยาว 3 ครั้งตอนจบเกม — เล่นก่อนเสียงกองเชียจะค่อยๆ เงียบลง (useEffect ตัวแรกจัดการ stop() ให้แล้ว)
+  useEffect(() => {
+    if (ended && !prevEndedRef.current && !muted) {
+      crowdRef.current?.whistle("fulltime");
+    }
+    prevEndedRef.current = ended;
+  }, [ended, muted]);
+
+  // ใบเหลือง/แดง — เสียงโห่สั้นๆ
+  useEffect(() => {
+    if (!refereeCard || muted) return;
+    const key = `${refereeCard.kind}-${refereeCard.minute}-${refereeCard.team}`;
+    if (lastCardKeyRef.current === key) return;
+    lastCardKeyRef.current = key;
+    crowdRef.current?.cheer("card", { homeSide: refereeCard.team === "home" });
+  }, [refereeCard, muted]);
+
+  // เปลี่ยนตัว — เสียงปรบมือเบาๆ (subTick เพิ่มค่าทุกครั้งที่มีการเปลี่ยนตัวจริง)
+  useEffect(() => {
+    if (subTick > prevSubTickRef.current && !muted) {
+      crowdRef.current?.cheer("sub");
+    }
+    prevSubTickRef.current = subTick;
+  }, [subTick, muted]);
 
   return crowdRef;
 }

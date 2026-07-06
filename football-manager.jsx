@@ -46,6 +46,7 @@ import {
   buildSquadTrainingRecommendations, suggestDrillPlanForGroup, formatDeltaSummary,
 } from "@training";
 import { useStadiumCrowd, isCrowdMuted, setCrowdMuted } from "@crowd";
+import { playUiSound, inferToastSound, isSfxMuted, setSfxMuted, getSfxVolume, setSfxVolume } from "@uisound";
 import { TrackerMatchView, pitchToWide, V0PitchSVG, TrackerPlayerDots } from "@tracker";
 import { ClubBadge, LOGO_ICONS, shadeColor } from "./club-badge.jsx";
 import IntroCutscene, { INTRO_SEEN_KEY } from "./intro-cutscene.jsx";
@@ -4468,7 +4469,7 @@ export default function App({
     }
   }, [career?.playMode, career?.liveMatch, updateCareer]);
 
-  function showToast(msg) { setToast(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(null), 2600); }
+  function showToast(msg) { setToast(msg); playUiSound(inferToastSound(msg)); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(null), 2600); }
   async function enterOnlineMode() {
     const fin = computeTeamFinances(career);
     if (!career?.onlineUnlocked || !canUnlockOnline(fin)) return;
@@ -10527,6 +10528,8 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
     muted: crowdMuted,
     onNeedsUnlock: setCrowdNeedsUnlock,
     unlockTick: crowdUnlockTick,
+    refereeCard,
+    subTick: subsUsed,
   });
 
   // หน้ารายชื่อผู้เล่น ~5 วิ/ฝั่ง แล้วไปต่ออัตโนมัติ (กดข้ามได้ผ่าน skipPreMatch)
@@ -12638,6 +12641,40 @@ function AcademyView({ career, budget, onHireScout, onHireScoutCard, onHireAcade
 }
 
 /* ============================== SETTINGS ============================== */
+/** ตั้งค่าเสียง UI ทั่วเกม (แยกจากเสียงกองเชียในสนาม ซึ่งมีปุ่มปิด/เปิดของตัวเองในหน้า Live match) */
+function SoundSettingsPanel() {
+  const [muted, setMutedState] = useState(() => isSfxMuted());
+  const [volume, setVolumeState] = useState(() => getSfxVolume());
+  return (
+    <Panel accent={C.purple}>
+      <SectionLabel sub="เสียงกดปุ่ม/แจ้งเตือน/เงิน — แยกจากเสียงกองเชียในสนามแข่ง">🔊 เสียง UI</SectionLabel>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: C.chalk }}>เปิดเสียง UI</span>
+        <button
+          type="button"
+          onClick={() => { const next = !muted; setSfxMuted(next); setMutedState(next); if (!next) playUiSound("confirm"); }}
+          style={{ ...btnStyle(muted ? C.steel : C.good, muted ? C.textDim : "#08150e"), width: "auto", padding: "6px 16px", fontSize: 11, fontWeight: 700 }}
+        >
+          {muted ? "ปิดอยู่" : "เปิดอยู่"}
+        </button>
+      </div>
+      <div style={{ opacity: muted ? 0.4 : 1, pointerEvents: muted ? "none" : "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: C.textDim, marginBottom: 4 }}>
+          <span>ระดับเสียง</span>
+          <span style={{ fontFamily: MONO_FONT }}>{volume}%</span>
+        </div>
+        <input
+          type="range" min={0} max={100} value={volume}
+          onChange={(e) => setVolumeState(Number(e.target.value))}
+          onMouseUp={() => { setSfxVolume(volume); playUiSound("click"); }}
+          onTouchEnd={() => { setSfxVolume(volume); playUiSound("click"); }}
+          style={{ width: "100%" }}
+        />
+      </div>
+    </Panel>
+  );
+}
+
 function SettingsView({ career, onReset, onEnterOnline, uiLang = "th", onSetUiLang, accountUser, onOpenAuth, onOpenOnlinePortal, onLogout }) {
   const [confirming, setConfirming] = useState(false);
   const fin = computeTeamFinances(career);
@@ -12714,6 +12751,7 @@ function SettingsView({ career, onReset, onEnterOnline, uiLang = "th", onSetUiLa
           ))}
         </div>
       </Panel>
+      <SoundSettingsPanel />
       <Panel accent={C.blue}>
         <SectionLabel>Discord · Feedback</SectionLabel>
         <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10, lineHeight: 1.55 }}>{GAME_DISCORD_HINT}</div>
@@ -13257,7 +13295,7 @@ function StaffCardPickerRow({ cards, icon = "🎴", title, career, onHire }) {
       <Panel style={{ border: `1px solid ${C.blue}` }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
           <SectionLabel style={{ color: C.blue }} sub={`มี ${cards.length} ใบในกระเป๋า`}>{icon} {title}</SectionLabel>
-          <button type="button" onClick={() => setOpen(true)} style={{ ...btnStyle(C.blue, "#fff"), width: "auto", padding: "8px 14px", fontSize: 11, flexShrink: 0, whiteSpace: "nowrap" }}>
+          <button type="button" onClick={() => { setOpen(true); playUiSound("modalOpen"); }} style={{ ...btnStyle(C.blue, "#fff"), width: "auto", padding: "8px 14px", fontSize: 11, flexShrink: 0, whiteSpace: "nowrap" }}>
             เปลี่ยนการ์ด
           </button>
         </div>
@@ -13265,12 +13303,12 @@ function StaffCardPickerRow({ cards, icon = "🎴", title, career, onHire }) {
       {open && (
         <div
           style={{ position: "fixed", inset: 0, zIndex: 65, background: "rgba(0,0,0,.75)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
-          onClick={() => setOpen(false)}
+          onClick={() => { setOpen(false); playUiSound("modalClose"); }}
         >
           <div style={{ background: C.panel, border: `1px solid ${C.blue}`, borderRadius: 10, padding: 16, maxWidth: 960, width: "95vw", maxHeight: "85vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <SectionLabel style={{ color: C.blue }}>{icon} เลือกการ์ด — {title}</SectionLabel>
-              <button onClick={() => setOpen(false)} style={{
+              <button onClick={() => { setOpen(false); playUiSound("modalClose"); }} style={{
                 background: C.panel2, border: `1px solid ${C.steel}`, borderRadius: "50%",
                 width: 32, height: 32, color: C.chalk, fontSize: 16, cursor: "pointer",
                 display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
@@ -14318,14 +14356,14 @@ function OnlineLiveHomeCard() {
 
   return (
     <>
-      <Panel style={{ border: `1px solid ${isLive ? C.crimson : C.amber}`, cursor: myClub ? "pointer" : "default" }} onClick={() => myClub && setOpen(true)}>
+      <Panel style={{ border: `1px solid ${isLive ? C.crimson : C.amber}`, cursor: myClub ? "pointer" : "default" }} onClick={() => { if (myClub) { setOpen(true); playUiSound("modalOpen"); } }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 800, color: isLive ? C.crimson : C.amber }}>🔴 แข่งขันสด</div>
             <div style={{ fontSize: 12, color: C.chalk, marginTop: 2 }}>{statusLabel}</div>
           </div>
           {myClub && (
-            <button type="button" onClick={(e) => { e.stopPropagation(); setOpen(true); }} style={{ ...btnStyle(C.crimson, "#fff"), width: "auto", padding: "8px 16px", fontSize: 11, fontWeight: 800, flexShrink: 0 }}>
+            <button type="button" onClick={(e) => { e.stopPropagation(); setOpen(true); playUiSound("modalOpen"); }} style={{ ...btnStyle(C.crimson, "#fff"), width: "auto", padding: "8px 16px", fontSize: 11, fontWeight: 800, flexShrink: 0 }}>
               ดูแมทสด
             </button>
           )}
@@ -14334,11 +14372,11 @@ function OnlineLiveHomeCard() {
       {open && (
         <div
           style={{ position: "fixed", inset: 0, zIndex: 66, background: "rgba(0,0,0,.82)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, overflowY: "auto" }}
-          onClick={() => setOpen(false)}
+          onClick={() => { setOpen(false); playUiSound("modalClose"); }}
         >
           <div style={{ maxWidth: 640, width: "100%", marginTop: 16 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-              <button onClick={() => setOpen(false)} style={{
+              <button onClick={() => { setOpen(false); playUiSound("modalClose"); }} style={{
                 background: C.panel, border: `1px solid ${C.steel}`, borderRadius: "50%",
                 width: 36, height: 36, color: C.chalk, fontSize: 18, cursor: "pointer",
                 display: "flex", alignItems: "center", justifyContent: "center",
@@ -14622,6 +14660,7 @@ function BottomNav({ tab, setTab, marketOpen, marketSub, setMarketSub, uiLang = 
             type="button"
             className={`fc-bottom-nav-btn${active ? " fc-bottom-nav-btn--active" : ""}`}
             onClick={() => {
+              playUiSound("tabSwitch");
               if (it.id === "market") {
                 setTab("market");
                 if (tab !== "market") setMarketSub("trade");

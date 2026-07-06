@@ -20,6 +20,7 @@ export default defineConfig({
       "@stars": path.resolve(root, "../player-stars.js"),
       "@version": path.resolve(root, "../game-version.js"),
       "@crowd": path.resolve(root, "../stadium-crowd.js"),
+      "@uisound": path.resolve(root, "../ui-sound.js"),
       "@tracker": path.resolve(root, "../tracker-pitch.jsx"),
       "@worldcup": path.resolve(root, "../world-cup-event.js"),
       "@roadmap": path.resolve(root, "../features-roadmap.js"),
