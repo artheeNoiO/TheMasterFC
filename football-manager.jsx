@@ -30,6 +30,7 @@ import {
   isDerbyMatch, derbyMoraleBonus, runPreSeasonFriendlies,
   canRunYouthIntakeCeremony, markYouthIntakeCeremony, addShadowTarget, checkShadowMarketAlerts,
   assignScoutZone, SCOUT_ZONES, INJURY_SEVERITY,
+  INJURY_TYPES, REINJURY_RISK_MULT, markRecoveredFragile, isPlayerFragile,
 } from "@roadmapfx";
 import {
   staffGuideCategories, staffGuideRolesByCategory,
@@ -37,8 +38,8 @@ import {
 } from "@staffguide";
 import {
   buildCoachProfile, ensureCoachProfile, coachDailyAttrBump, coachSynergyExtraBump,
-  coachDrillMult, coachFitnessStaminaPerDay, coachTrainingMoraleTick,
-  coachImpactSummary, coachCardStatRows, COACH_SPECIALTY_DEF, COACHING_STYLES,
+  coachDrillMult, coachFitnessStaminaPerDay, coachTrainingMoraleTick, applyCoachSeasonXp,
+  coachImpactSummary, coachCardStatRows, COACH_SPECIALTY_DEF, COACHING_STYLES, COACH_TRAITS,
 } from "@coach";
 import {
   snapshotPlayerAttrs, computePlayerAttrDeltas, appendTrainingReport, buildTrainingDayReport,
@@ -3467,6 +3468,13 @@ function rolloverSeason(c) {
     markYouthIntakeCeremony(c);
     c.log = [`🎓 Youth Intake Day — พิธีรับเด็กใหม่ประจำฤดูกาล`, ...c.log];
   }
+  // โค้ชที่ทำงานกับสโมสรเราต่อเนื่อง ได้ปีประสบการณ์เพิ่ม — ทุก 2 ฤดูกาลค่อยๆ เก่งขึ้นถาวรเล็กน้อย
+  const uStaff = c.staff[c.userTeamId];
+  if (uStaff) {
+    ["GK", "DF", "MF", "FW", "FITNESS"].forEach((spec) => {
+      if (uStaff[spec]) uStaff[spec] = applyCoachSeasonXp(uStaff[spec]);
+    });
+  }
   c.log = [`เริ่มฤดูกาลที่ ${c.season} แล้ว!`, ...c.log];
   return c;
 }
@@ -4598,14 +4606,16 @@ export default function App({
         const medicalLevel = p.teamId === c.userTeamId && c.facilities ? c.facilities.medical : 1;
         const headBuff = isUserPlayer ? headMedicalTeamBuff((c.staff[c.userTeamId] || {}).HEAD_MEDICAL) : { physioBoostMult: 1 };
         const doctorEff = doctor ? doctor.boost * headBuff.physioBoostMult : 0;
+        const fragile = isPlayerFragile(p, c.day);
         const injuryChance = clamp((100 - p.stamina) / 100 * 0.06 + 0.004, 0.003, 0.07)
           * (doctor ? 1 - doctorEff * 0.3 : 1)
           * (1 - (medicalLevel - 1) * 0.1)
-          * (isUserPlayer ? userInjuryMult : 1);
+          * (isUserPlayer ? userInjuryMult : 1)
+          * (fragile ? REINJURY_RISK_MULT : 1);
         if (Math.random() < injuryChance) {
           const inj = applyInjuryToPlayer(p);
           if (isUserPlayer) {
-            c.log = [`🩹 ${p.name} บาดเจ็บระดับ${inj.label} (${inj.days} วัน)`, ...c.log];
+            c.log = [`🩹 ${p.name}${fragile ? " (กลับมาเจ็บซ้ำ!)" : ""} บาดเจ็บ${inj.typeLabel} ระดับ${inj.label} (${inj.days} วัน)`, ...c.log];
           }
         }
       } else {
@@ -4743,7 +4753,11 @@ export default function App({
           if (longFx.longClear) headMedLongClears.push(p.name);
         }
         p.injuryDays = Math.max(0, p.injuryDays - recoverDays);
-        if (p.injuryDays <= 0) p.injurySeverity = null;
+        if (p.injuryDays <= 0) {
+          markRecoveredFragile(p, c.day);
+          p.injurySeverity = null;
+          p.injuryType = null;
+        }
       }
       // นับวันแบนลดที่นี่แทน (ทุกทีมที่มีนัดแข่งวันนี้ วันละครั้งแน่นอน) แทนที่จะพึ่งเฉพาะตอนลงแข่งสดของทีมเรา —
       // กันบั๊กที่เจอจริง: ถ้าใช้โหมดเดินหน้าเร็ว/จำลองอัตโนมัติแทนลงแข่งสด นัดแบนไม่เคยลดเลย
@@ -4763,9 +4777,10 @@ export default function App({
           const co = ensureCoachProfile(c.staff[teamId][spec], spec);
           const facilityMult = teamId === c.userTeamId ? 1 + (myFacilities.training - 1) * 0.15 : 1;
           const synergyMult = teamId === c.userTeamId ? coachTrainingSynergyMult(spec, trainingType) : 1;
-          const dailyBump = coachDailyAttrBump(co) + coachSynergyExtraBump(co, synergyMult);
+          const synergyBump = coachSynergyExtraBump(co, synergyMult);
           c.players.forEach((p) => {
             if (p.teamId === teamId && p.position === spec && !(teamId === c.userTeamId && playedTodayIds.has(p.id))) {
+              const dailyBump = coachDailyAttrBump(co, p.age) + synergyBump;
               bumpAttrs(p, dailyBump * facilityMult);
               if (teamId === c.userTeamId && synergyMult > 1) {
                 const md = coachTrainingMoraleTick(co, synergyMult);
@@ -8603,6 +8618,14 @@ function StaffOfferCard({ spec, co, offer, locked, budget, onHire, uiLang = "th"
             {!["GK", "DF", "MF", "FW", "FITNESS"].includes(spec) && (
               <span style={{ fontSize: 10, color: C.textDim, fontWeight: 500 }}>+{co.boost}</span>
             )}
+            {co.trait && COACH_TRAITS[co.trait] && (
+              <span title={COACH_TRAITS[co.trait].descTh} style={{ fontSize: 9.5, color: C.gold, fontWeight: 700, background: "rgba(212,175,55,.12)", border: `1px solid ${C.gold}55`, borderRadius: 5, padding: "1px 6px" }}>
+                🌟 {COACH_TRAITS[co.trait].th}
+              </span>
+            )}
+            {co.seasonsServed > 0 && (
+              <span style={{ fontSize: 9.5, color: C.textDim, fontFamily: MONO_FONT }}>· {co.seasonsServed} ฤดูกาล</span>
+            )}
             {locked && <span style={{ fontSize: 9.5, color: C.textDim }}>🔒 เปลี่ยนได้ตอนขึ้นฤดูกาลหน้า</span>}
           </div>
         </div>
@@ -8635,12 +8658,29 @@ function CoachRoomView({ career, staff, coachOffers, budget, onHireCoach, onHire
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Panel accent={C.blue}>
-        <SectionLabel sub="โค้ชมี 3 สเตตหลัก + สไตล์ · ยิ่งดาว/เกรดสูงยิ่งปั้นเร็ว · วันฝึกตรงสายได้ synergy">🧑‍🏫 ห้องโค้ช</SectionLabel>
+        <SectionLabel sub="โค้ชมี 3 สเตตหลัก + สไตล์ + สัญชาตญาณ (trait) · ยิ่งดาว/เกรดสูงยิ่งปั้นเร็ว · วันฝึกตรงสายได้ synergy">🧑‍🏫 ห้องโค้ช</SectionLabel>
         <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.55 }}>
           <b style={{ color: C.chalk }}>เทคนิค</b> = ปั้นสเตตรายวัน · <b style={{ color: C.chalk }}>แรงจูงใจ</b> = มูดหลังซ้อม synergy · <b style={{ color: C.chalk }}>ทักษะซ้อม</b> = บอร์ดซ้อมรายตำแหน่ง
-          <br />สนามฝึก Lv.{trainLevel} บัพเพิ่ม · โค้ชฟิตเนสฟื้นสตามินาทั้งทีม
+          <br />สนามฝึก Lv.{trainLevel} บัพเพิ่ม · โค้ชฟิตเนสฟื้นสตามินาทั้งทีม · โค้ชที่อยู่ครบ 2 ฤดูกาลจะเก่งขึ้นถาวรทีละนิด
         </div>
       </Panel>
+      {specs.some((spec) => staff[spec]) && (
+        <Panel>
+          <SectionLabel sub="สัญชาตญาณของแต่ละโค้ชในทีมตอนนี้">🌟 สัญชาตญาณสตาฟ</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {specs.filter((spec) => staff[spec]).map((spec) => {
+              const co = ensureCoachProfile(staff[spec], spec);
+              const trait = COACH_TRAITS[co.trait];
+              return (
+                <div key={spec} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5 }}>
+                  <span>{STAFF_TH[spec]} — <b>{co.name}</b></span>
+                  {trait ? <span style={{ color: C.gold, fontWeight: 700 }}>🌟 {trait.th}</span> : <span style={{ color: C.textDim }}>—</span>}
+                </div>
+              );
+            })}
+          </div>
+        </Panel>
+      )}
       <StaffCardPickerRow cards={cards} title="การ์ดโค้ชที่สุ่มได้" career={career} onHire={onHireCard} />
       <Panel>
         <SectionLabel>ผู้สมัครรายสัปดาห์</SectionLabel>
@@ -12398,6 +12438,7 @@ function TrainingView({
 /* ============================== MEDICAL ROOM ============================== */
 function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, onUpgradeFacility, onHireCoach, onHireCard }) {
   const injured = squad.filter((p) => p.injuryDays > 0).sort((a, b) => b.injuryDays - a.injuryDays);
+  const fragile = squad.filter((p) => p.injuryDays <= 0 && isPlayerFragile(p, career.day));
   const packCount = inventory?.injury_pack || 0;
   const doctor = career.staff?.[career.userTeamId]?.PHYSIO;
   const physio = career.staff?.[career.userTeamId]?.PHYSIOTHERAPIST;
@@ -12422,7 +12463,9 @@ function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, o
                 <RatingBadge value={p.rating} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name}</div>
-                  <div style={{ fontSize: 11, color: C.crimson, fontFamily: MONO_FONT }}>บาดเจ็บอีก {p.injuryDays} วัน</div>
+                  <div style={{ fontSize: 11, color: C.crimson, fontFamily: MONO_FONT }}>
+                    {p.injuryType && (INJURY_TYPES[p.injurySeverity] || []).find((t) => t.id === p.injuryType)?.label}อีก {p.injuryDays} วัน
+                  </div>
                 </div>
                 <button type="button" disabled={packCount <= 0} onClick={() => onUseItemFromBag("injury_pack", p.id)} style={{ fontSize: 10, padding: "6px 10px", borderRadius: 6, border: "none", fontWeight: 700, background: packCount > 0 ? C.good : "#2b332f", color: packCount > 0 ? "#08150e" : C.textDim, cursor: packCount > 0 ? "pointer" : "not-allowed" }}>
                   ใช้ 🩹
@@ -12433,6 +12476,20 @@ function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, o
         )}
         {packCount === 0 && <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 8 }}>ไม่มีชุดปฐมพยาบาล — ไปซื้อที่ร้านค้า (10 เหรียญ · ซื้อได้วันละ 5 ครั้ง)</div>}
       </Panel>
+
+      {fragile.length > 0 && (
+        <Panel accent={C.amber}>
+          <SectionLabel sub="เพิ่งหายเจ็บ — เสี่ยงกลับมาเจ็บซ้ำสูงกว่าปกติถ้าลงเล่นตอนนี้">⚠️ ช่วงเปราะบาง</SectionLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {fragile.map((p) => (
+              <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderTop: `1px solid ${C.steel}` }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600 }}>{p.name}</div>
+                <div style={{ fontSize: 10.5, color: C.amber, fontFamily: MONO_FONT }}>เสี่ยงอีก {p.fragileUntilDay - career.day} วัน</div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
 
       <StaffCardPickerRow cards={medicalCards} title="การ์ดหมอ/นักกายภาพที่สุ่มได้" career={career} onHire={onHireCard} />
 

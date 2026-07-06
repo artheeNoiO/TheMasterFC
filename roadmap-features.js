@@ -26,6 +26,29 @@ export const INJURY_SEVERITY = {
   heavy: { days: [11, 28], label: "หนัก", trainBlock: true },
 };
 
+/** ประเภทการบาดเจ็บ — ผูกกับระดับความรุนแรง ใช้เพิ่มสีสัน/ความสมจริงในห้องพยาบาล */
+export const INJURY_TYPES = {
+  light: [
+    { id: "knock", label: "ฟกช้ำ" },
+    { id: "cramp", label: "ตะคริว" },
+    { id: "bruise", label: "ฟกช้ำเนื้อเยื่อ" },
+  ],
+  medium: [
+    { id: "muscle", label: "กล้ามเนื้อฉีก" },
+    { id: "ankle", label: "ข้อเท้าพลิก" },
+    { id: "hamstring", label: "กล้ามเนื้อต้นขาด้านหลัง" },
+  ],
+  heavy: [
+    { id: "knee", label: "เอ็นข้อเข่า" },
+    { id: "fracture", label: "กระดูกร้าว" },
+    { id: "concussion", label: "กระทบกระเทือนสมอง" },
+  ],
+};
+
+/** จำนวนวัน "เปราะบาง" หลังหายจากอาการ — ถ้าลงเล่นช่วงนี้เสี่ยงกลับมาเจ็บซ้ำสูงขึ้น */
+export const INJURY_FRAGILE_DAYS = { light: 0, medium: 3, heavy: 7 };
+export const REINJURY_RISK_MULT = 2.2;
+
 export const PRESS_CHOICES = [
   { id: "confident", label: "มั่นใจทีม", morale: 3, fan: 2, board: 1 },
   { id: "humble", label: "ถ่อมตัว", morale: 1, fan: 3, board: 2 },
@@ -353,7 +376,22 @@ export function applyInjuryToPlayer(p, severityKey = null) {
   const days = def.days[0] + Math.floor(Math.random() * (def.days[1] - def.days[0] + 1));
   p.injuryDays = Math.max(p.injuryDays || 0, days);
   p.injurySeverity = key;
-  return { severity: key, days, label: def.label };
+  const typePool = INJURY_TYPES[key] || INJURY_TYPES.medium;
+  const type = typePool[Math.floor(Math.random() * typePool.length)];
+  p.injuryType = type.id;
+  p.fragileUntilDay = null; // เคลียร์สถานะเปราะบางเก่า (โดนเจ็บซ้ำระหว่างเปราะบางไปแล้ว)
+  p.injuryHistory = [{ severity: key, type: type.id, typeLabel: type.label, days }, ...(p.injuryHistory || [])].slice(0, 5);
+  return { severity: key, days, label: def.label, type: type.id, typeLabel: type.label };
+}
+
+/** ตั้งช่วง "เปราะบาง" หลังหายเจ็บ — เรียกตอน injuryDays แตะ 0 */
+export function markRecoveredFragile(p, currentDay) {
+  const fragileDays = INJURY_FRAGILE_DAYS[p.injurySeverity || "light"] || 0;
+  p.fragileUntilDay = fragileDays > 0 ? currentDay + fragileDays : null;
+}
+
+export function isPlayerFragile(p, currentDay) {
+  return !!(p.fragileUntilDay && currentDay <= p.fragileUntilDay);
 }
 
 export function blocksHeavyTraining(p) {

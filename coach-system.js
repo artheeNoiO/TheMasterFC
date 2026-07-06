@@ -12,6 +12,22 @@ export const COACHING_STYLES = {
   balanced: { th: "บาลานซ์", en: "Balanced" },
 };
 
+/** สัญชาตญาณโค้ช (trait) — สุ่มติดตัวตอนสร้างโปรไฟล์ ให้โค้ชแต่ละคนมีบุคลิก/จุดเด่นต่างกัน ไม่ใช่แค่เลขสเตต */
+export const COACH_TRAITS = {
+  youthGuru: { th: "กูรูดาวรุ่ง", en: "Youth Guru", descTh: "ปั้นนักเตะอายุ ≤21 ได้เร็วขึ้น 40%", descEn: "+40% growth for players aged 21 or under" },
+  tactician: { th: "นักวางแผน", en: "Tactician", descTh: "ช่วยให้ทีมคุ้นเคยแผนใหม่เร็วขึ้น", descEn: "Speeds up tactic familiarity gain" },
+  hardTrainer: { th: "จอมโหด", en: "Hard Trainer", descTh: "ฝึกเร็วขึ้น 20% แต่มูดนักเตะขึ้นยากกว่าเดิม", descEn: "+20% training but morale rises slower" },
+  motivator: { th: "นักสร้างแรงบันดาลใจ", en: "Motivator", descTh: "โอกาสมูดขึ้นหลังซ้อมสูงกว่าปกติมาก", descEn: "Much higher chance of morale boost after training" },
+  fitnessFocus: { th: "เข้มฟิตเนส", en: "Fitness-Focused", descTh: "ฟื้นสตามินาให้ทีมเพิ่มอีก 25%", descEn: "+25% extra stamina recovery for the squad" },
+};
+const TRAIT_POOL_BY_SPEC = {
+  GK: ["tactician", "hardTrainer", "motivator"],
+  DF: ["tactician", "hardTrainer", "motivator"],
+  MF: ["tactician", "youthGuru", "motivator"],
+  FW: ["youthGuru", "hardTrainer", "motivator"],
+  FITNESS: ["fitnessFocus", "hardTrainer", "motivator"],
+};
+
 export const COACH_SPECIALTY_DEF = {
   GK: {
     icon: "🧤",
@@ -79,6 +95,7 @@ export function buildCoachProfile(specialty, stars, grade, boost) {
   const motivation = clamp(Math.round(40 + s * 6 + g * 2 + (boost || 0.5) * 6), 35, 96);
   const drillSkill = clamp(Math.round(44 + s * 6 + g * 3 + (boost || 0.5) * 10), 40, 98);
   const coachingStyle = choice(def.stylePool || ["balanced"]);
+  const trait = choice(TRAIT_POOL_BY_SPEC[specialty] || ["motivator"]);
   return {
     specialty,
     grade: g,
@@ -87,22 +104,59 @@ export function buildCoachProfile(specialty, stars, grade, boost) {
     motivation,
     drillSkill,
     coachingStyle,
+    trait,
+    seasonsServed: 0,
     focusAttrs: [...def.attrs],
   };
 }
 
 export function ensureCoachProfile(co, specialty) {
   if (!co) return co;
-  if (co.technique != null) return co;
   const spec = specialty || co.specialty || "MF";
-  const stars = co.cardStars ?? co.grade ?? 3;
-  return { ...co, ...buildCoachProfile(spec, stars, co.grade, co.boost) };
+  if (co.technique == null) return { ...co, ...buildCoachProfile(spec, co.cardStars ?? co.grade ?? 3, co.grade, co.boost) };
+  // เซฟเก่าก่อนมีระบบ trait/seasonsServed — เติมย้อนหลังโดยไม่แตะสเตตเดิม
+  if (co.trait == null) return { ...co, trait: choice(TRAIT_POOL_BY_SPEC[spec] || ["motivator"]), seasonsServed: co.seasonsServed ?? 0 };
+  return co;
 }
 
-/** การปั้นสเตตรายวัน (ก่อนคูณสนามฝึก/synergy) */
-export function coachDailyAttrBump(co) {
+/** เพิ่มปีประสบการณ์ให้โค้ช — เรียกตอนขึ้นฤดูกาลใหม่ ทุก 2 ฤดูกาลที่ทำงานต่อเนื่องได้ +1 เทคนิค/ทักษะซ้อม (เพดาน 99) */
+export function applyCoachSeasonXp(co) {
+  if (!co) return co;
+  const c = ensureCoachProfile(co, co.specialty);
+  const seasonsServed = (c.seasonsServed || 0) + 1;
+  if (seasonsServed % 2 !== 0) return { ...c, seasonsServed };
+  return {
+    ...c,
+    seasonsServed,
+    technique: clamp(c.technique + 1, 38, 99),
+    drillSkill: clamp(c.drillSkill + 1, 40, 99),
+  };
+}
+
+/** ตัวคูณจากสัญชาตญาณ — ใช้ในสูตรฝึก/มูด/สตามินาที่เกี่ยวข้อง */
+export function coachTraitDailyMult(co) {
+  return co?.trait === "hardTrainer" ? 1.2 : 1;
+}
+export function coachTraitYouthMult(co, playerAge) {
+  return co?.trait === "youthGuru" && (playerAge || 99) <= 21 ? 1.4 : 1;
+}
+export function coachTraitMoraleMult(co) {
+  if (co?.trait === "motivator") return 2.2;
+  if (co?.trait === "hardTrainer") return 0.5;
+  return 1;
+}
+export function coachTraitFitnessMult(co) {
+  return co?.trait === "fitnessFocus" ? 1.25 : 1;
+}
+export function coachTraitFamiliarityMult(co) {
+  return co?.trait === "tactician" ? 1.35 : 1;
+}
+
+/** การปั้นสเตตรายวัน (ก่อนคูณสนามฝึก/synergy) — playerAge (ถ้าส่งมา) ใช้เช็คบัพกูรูดาวรุ่ง */
+export function coachDailyAttrBump(co, playerAge = null) {
   const c = ensureCoachProfile(co, co?.specialty);
-  return (c.boost || 0.1) * 0.085 + ((c.technique || 50) / 100) * 0.055;
+  const base = (c.boost || 0.1) * 0.085 + ((c.technique || 50) / 100) * 0.055;
+  return base * coachTraitDailyMult(c) * (playerAge != null ? coachTraitYouthMult(c, playerAge) : 1);
 }
 
 /** โบนัสเพิ่มวันซ้อมตรงสาย */
@@ -123,14 +177,14 @@ export function coachDrillMult(co) {
 export function coachFitnessStaminaPerDay(co) {
   if (!co) return 0;
   const c = ensureCoachProfile(co, "FITNESS");
-  return Math.round((c.boost || 0) * 12 + (c.technique || 50) * 0.07);
+  return Math.round(((c.boost || 0) * 12 + (c.technique || 50) * 0.07) * coachTraitFitnessMult(c));
 }
 
 /** มูด +1 โอกาสหลังซ้อม (วันที่ synergy) */
 export function coachTrainingMoraleTick(co, synergyMult) {
   if (!co || synergyMult <= 1) return 0;
   const c = ensureCoachProfile(co, co.specialty);
-  return Math.random() < (c.motivation || 50) / 120 ? 1 : 0;
+  return Math.random() < clamp(((c.motivation || 50) / 120) * coachTraitMoraleMult(c), 0, 0.9) ? 1 : 0;
 }
 
 /** แสดงผล UI — % โดยประมาณ */
@@ -141,6 +195,7 @@ export function coachImpactSummary(co, lang = "th") {
   const dailyPct = Math.round(coachDailyAttrBump(c) * 1000) / 10;
   const drillPct = Math.round((coachDrillMult(c) - 1) * 100);
   const style = COACHING_STYLES[c.coachingStyle] || COACHING_STYLES.balanced;
+  const trait = COACH_TRAITS[c.trait] || null;
   const focus = en ? def.focusEn : def.focusTh;
   const synergy = en ? def.synergyEn : def.synergyTh;
   const synergyLines = Object.values(synergy);
@@ -163,7 +218,13 @@ export function coachImpactSummary(co, lang = "th") {
   if (synergyLines.length) {
     lines.push(en ? `Synergy: ${synergyLines.join(" · ")}` : `Synergy: ${synergyLines.join(" · ")}`);
   }
-  return { lines, dailyPct, drillPct, def, style: en ? style.en : style.th };
+  if (trait) {
+    lines.push(`🌟 ${en ? trait.en : trait.th}: ${en ? trait.descEn : trait.descTh}`);
+  }
+  if (c.seasonsServed) {
+    lines.push(en ? `${c.seasonsServed} season(s) at the club` : `ทำงานมาแล้ว ${c.seasonsServed} ฤดูกาล`);
+  }
+  return { lines, dailyPct, drillPct, def, style: en ? style.en : style.th, trait };
 }
 
 export function coachCardStatRows(co, lang = "th") {
