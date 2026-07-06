@@ -14,6 +14,7 @@ import {
 import { BetaStrip } from "@beta";
 import { getDefaultGameUiLang } from "@locale";
 import { t, resolveUiLang, UI_LANGS } from "@i18n";
+import { ensurePlayerPortrait, ensureAllPlayerPortraits } from "@portraits";
 import {
   STADIUM_LEVELS, EXTRA_STAFF_EFFECTS, getStadiumLevel, getStadiumDef, stadiumName,
   stadiumUpgradeCost, stadiumAssetValue, stadiumFanCapBonus,
@@ -478,6 +479,8 @@ function genPlayer(position, tier, teamId, forcedAge, startDay, opts = {}) {
   p.wage = computePlayerWage(p.rating);
   p.potential = age <= 21 ? clamp(p.rating + rand(6, 34), p.rating, 99) : age <= 25 ? clamp(p.rating + rand(0, 10), p.rating, 99) : p.rating;
   p.contractEndsDay = (startDay || 1) + rand(150, 400);
+  const team = opts.teams?.find((t) => t.id === teamId);
+  ensurePlayerPortrait(p, team);
   return enrichPlayerContract(p);
 }
 const genSquad = (teamId, tier, startDay, opts = {}) => SQUAD_TEMPLATE.map((pos) => genPlayer(pos, tier, teamId, undefined, startDay || 1, opts));
@@ -651,6 +654,7 @@ function reconcileInactiveLegends(c) {
     }
     if (c.day - lastActive < LEGEND_INACTIVE_DAYS) return;
     player.teamId = homeTeam.id;
+    ensurePlayerPortrait(player, homeTeam);
     player.lastOwnerActivityDay = c.day;
     c.legendOwnership[def.legendId] = homeTeam.id;
     Object.keys(c.lineups).forEach((tid) => {
@@ -677,6 +681,7 @@ function tryAcquireLegendOnCareer(c, legendId) {
   const prevOwner = player.teamId;
   c.budget -= def.acquireCost;
   player.teamId = c.userTeamId;
+  ensurePlayerPortrait(player, uT);
   player.lastOwnerActivityDay = c.day;
   c.legendOwnership[legendId] = c.userTeamId;
   c.lineups[c.userTeamId] = (c.lineups[c.userTeamId] || []).filter((id) => id !== player.id);
@@ -2074,6 +2079,7 @@ function normalizeCareerSave(c) {
     }
   });
   ensureStaffCardFields(c); // เซฟเก่าก่อนมีระบบภาพเหมือนการ์ดสตาฟ — เติม portrait ย้อนหลังให้ครบทุกใบ
+  ensureAllPlayerPortraits(c);
   Object.values(c.staff || {}).forEach((teamStaff) => {
     ["GK", "DF", "MF", "FW", "FITNESS"].forEach((spec) => {
       if (teamStaff[spec]) ensureCoachProfile(teamStaff[spec], spec);
@@ -3950,6 +3956,58 @@ function KitPreview({ shirt, shorts, trim, size = 70 }) {
     </div>
   );
 }
+
+/** โปรไฟล์นักเตะ — portrait (stylized 3D) + KitPreview สีทีมจริง */
+function PlayerProfileCard({ player, team }) {
+  if (!player) return null;
+  const shirt = teamShirtColor(team);
+  const shorts = teamShortsColor(team);
+  const trim = team?.secondaryColor || "#f2f0e6";
+  return (
+    <div style={{
+      borderRadius: 12, overflow: "hidden", marginBottom: 12,
+      background: `linear-gradient(180deg, ${C.panel2} 0%, ${C.pitchDark} 100%)`,
+      border: `1px solid ${C.steel}`,
+      boxShadow: "0 8px 24px rgba(0,0,0,.35)",
+    }}>
+      {player.portrait ? (
+        <img
+          src={player.portrait}
+          alt=""
+          draggable={false}
+          style={{
+            width: "100%", aspectRatio: "3 / 4", maxHeight: 280, objectFit: "cover",
+            objectPosition: "center 12%", display: "block", pointerEvents: "none",
+          }}
+        />
+      ) : (
+        <div style={{
+          width: "100%", aspectRatio: "3 / 4", maxHeight: 280,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: C.panel2, color: C.textDim, fontSize: 12,
+        }}>ไม่มีภาพ</div>
+      )}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 12, padding: "10px 14px 12px",
+        borderTop: `1px solid ${C.steel}`, background: "rgba(7,21,16,.92)",
+      }}>
+        <KitPreview shirt={shirt} shorts={shorts} trim={trim} size={52} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: C.chalk, lineHeight: 1.2 }}>{player.name}</div>
+          <div style={{ fontSize: 10.5, color: C.textDim, marginTop: 3 }}>
+            {playerPosTH(player)} · OVR {player.rating} · อายุ {player.age}
+          </div>
+          {team && (
+            <div style={{ fontSize: 9.5, color: C.amber, marginTop: 4, fontFamily: MONO_FONT }}>
+              {team.short || team.name}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MiniBar({ value, color, bg = C.steel }) {
   return <div style={{ width: "100%", height: 5, background: bg, borderRadius: 3, overflow: "hidden" }}><div style={{ width: `${clamp(value, 0, 100)}%`, height: "100%", background: color }} /></div>;
 }
@@ -4026,7 +4084,7 @@ function playerRadarStats(p) {
 
 /** popup โชว์สเตตนักเตะแบบละเอียด + กราฟเรดาร์ — เปิดจากคลิกชื่อในหน้า Squad/Tactics
  *  squad (optional): รายชื่อนักเตะในทีมเดียวกัน — ถ้ามีจะเปิดให้เลือกนักเตะอีกคนมาเทียบกราฟซ้อนกันได้ */
-function PlayerDetailModal({ player: p, onClose, squad = null }) {
+function PlayerDetailModal({ player: p, onClose, squad = null, team = null }) {
   const [compareId, setCompareId] = useState("");
   if (!p) return null;
   const radarStats = playerRadarStats(p);
@@ -4039,13 +4097,10 @@ function PlayerDetailModal({ player: p, onClose, squad = null }) {
       onClick={onClose}
     >
       <Panel style={{ maxWidth: 420, width: "100%", maxHeight: "88vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 800 }}>{p.name}{comparePlayer && <span style={{ color: C.blue }}> vs {comparePlayer.name}</span>}</div>
-            <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>{playerPosTH(p)} · อายุ {p.age} · เรตติ้ง {p.rating}</div>
-          </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
           <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
+        <PlayerProfileCard player={p} team={team} />
         {compareOptions.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
             <span style={{ fontSize: 9.5, color: C.textDim }}>เทียบกับ:</span>
@@ -5382,6 +5437,7 @@ export default function App({
         role: "balanced",
         contractEndsDay: c.day + rand(120, 280),
       });
+      ensurePlayerPortrait(newPl, c.teams.find((t) => t.id === c.userTeamId));
       c.players.push(newPl);
       c.scoutFinds.splice(idx, 1);
       registerNewSquadPlayer(c, f.playerId);
@@ -8749,7 +8805,7 @@ function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, 
       <div style={{ textAlign: "center", marginTop: 4 }}>
         <button onClick={() => setOpen((o) => !o)} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 10, cursor: "pointer" }}>{open ? "▲ ซ่อนแอตทริบิวต์" : "▼ ดูแอตทริบิวต์เต็ม (15 ค่า)"}</button>
       </div>
-      {showDetail && <PlayerDetailModal player={p} onClose={() => setShowDetail(false)} />}
+      {showDetail && <PlayerDetailModal player={p} team={teams?.find((t) => t.id === p.teamId)} onClose={() => setShowDetail(false)} />}
     </div>
   );
 }
@@ -9162,7 +9218,7 @@ function TacticsSquadTable({ career, squad, team, onSetPlayerRole, onSetPlayerDu
         </button>
       </div>
     </Panel>
-    {detailPlayer && <PlayerDetailModal player={detailPlayer} squad={squad} onClose={() => setDetailPlayer(null)} />}
+    {detailPlayer && <PlayerDetailModal player={detailPlayer} team={team} squad={squad} onClose={() => setDetailPlayer(null)} />}
     </>
   );
 }
@@ -12963,18 +13019,26 @@ function StaffCardPickerRow({ cards, icon = "🎴", title, career, onHire }) {
           style={{ position: "fixed", inset: 0, zIndex: 65, background: "rgba(0,0,0,.75)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
           onClick={() => setOpen(false)}
         >
-          <div style={{ background: C.panel, border: `1px solid ${C.blue}`, borderRadius: 10, padding: 16, maxWidth: 420, width: "100%", maxHeight: "80vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ background: C.panel, border: `1px solid ${C.blue}`, borderRadius: 10, padding: 16, maxWidth: 960, width: "95vw", maxHeight: "85vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <SectionLabel style={{ color: C.blue }}>{icon} เลือกการ์ด — {title}</SectionLabel>
-              <button onClick={() => setOpen(false)} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
+              <button onClick={() => setOpen(false)} style={{
+                background: C.panel2, border: `1px solid ${C.steel}`, borderRadius: "50%",
+                width: 32, height: 32, color: C.chalk, fontSize: 16, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              }}>✕</button>
             </div>
-            <div className="fc-scroll-x fc-hide-scrollbar" style={{ display: "flex", flexDirection: "row", gap: 8, paddingBottom: 4 }}>
+            <div className="fc-scroll-x fc-hide-scrollbar" style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", gap: 10, paddingBottom: 4 }}>
               {cards.map((card) => (
                 <div key={card.cardId} style={{ width: 240, flexShrink: 0 }}>
                   <StaffCardTile card={card} onHire={(id) => { onHire(id); setOpen(false); }} {...staffCardLockInfo(career, card)} />
                 </div>
               ))}
             </div>
+            <button onClick={() => setOpen(false)} style={{
+              marginTop: 14, width: "100%", padding: "10px 0", borderRadius: 8,
+              border: `1px solid ${C.steel}`, background: "transparent", color: C.textDim, fontSize: 12, cursor: "pointer",
+            }}>ปิดหน้าต่าง</button>
           </div>
         </div>
       )}
