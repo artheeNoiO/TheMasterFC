@@ -10,7 +10,73 @@ export const STADIUM_LEVELS = [
   { level: 3, nameTh: "สนามเมือง", nameEn: "Town Stadium", capacity: 18000, fanCapBonus: 8000, matchRevMult: 1.22 },
   { level: 4, nameTh: "สนามมาตรฐานลีก", nameEn: "League Standard", capacity: 35000, fanCapBonus: 18000, matchRevMult: 1.32 },
   { level: 5, nameTh: "อารena สโมสร", nameEn: "Club Arena", capacity: 55000, fanCapBonus: 35000, matchRevMult: 1.45 },
+  { level: 6, nameTh: "สเตเดียมภูมิภาค", nameEn: "Regional Stadium", capacity: 68000, fanCapBonus: 45000, matchRevMult: 1.55 },
+  { level: 7, nameTh: "สเตเดียมระดับชาติ", nameEn: "National Stadium", capacity: 80000, fanCapBonus: 55000, matchRevMult: 1.65 },
+  { level: 8, nameTh: "เมกะสเตเดียม", nameEn: "Mega Stadium", capacity: 95000, fanCapBonus: 65000, matchRevMult: 1.78 },
+  { level: 9, nameTh: "สเตเดียมระดับโลก", nameEn: "World-Class Stadium", capacity: 110000, fanCapBonus: 75000, matchRevMult: 1.9 },
 ];
+
+/** Club Tier (1-9) — เกตหลักด้วย "แฟนบอลทั่วโลก" (globalFanbase, คนละตัวกับแฟนบอลเข้าสนาม/fanBase ที่เพดานหลักแสน)
+ * แฟนบอลทั่วโลกได้จากผลงานใหญ่ (แชมป์/เลื่อนชั้น/คว้าซูเปอร์สตาร์) ไม่ใช่ชนะรายแมท — ไต่ถึง tier 9 ต้องใช้เวลาเป็นปี */
+export const CLUB_TIER_THRESHOLDS = [0, 50_000, 200_000, 800_000, 3_000_000, 10_000_000, 30_000_000, 60_000_000, 120_000_000];
+export const CLUB_TIER_NAMES = {
+  1: "สโมสรท้องถิ่น", 2: "สโมสรระดับภูมิภาค", 3: "สโมสรที่รู้จักในประเทศ", 4: "สโมสรชั้นนำในประเทศ",
+  5: "สโมสรระดับทวีป", 6: "สโมสรที่มีชื่อเสียงระดับโลก", 7: "สโมสรระดับโลกชั้นนำ", 8: "สโมสรระดับตำนาน", 9: "สโมสรระดับโลก (สูงสุด)",
+};
+export function getClubTier(globalFanbase) {
+  let tier = 1;
+  for (let i = 1; i < CLUB_TIER_THRESHOLDS.length; i++) {
+    if ((globalFanbase || 0) >= CLUB_TIER_THRESHOLDS[i]) tier = i + 1;
+  }
+  return Math.max(1, Math.min(9, tier));
+}
+export function clubTierProgress(globalFanbase) {
+  const tier = getClubTier(globalFanbase);
+  const cur = CLUB_TIER_THRESHOLDS[tier - 1];
+  const next = tier < 9 ? CLUB_TIER_THRESHOLDS[tier] : null;
+  return {
+    tier, name: CLUB_TIER_NAMES[tier],
+    current: globalFanbase || 0, next,
+    pct: next ? clamp(((globalFanbase - cur) / (next - cur)) * 100, 0, 100) : 100,
+  };
+}
+/** ทุกห้อง (สนาม/พยาบาล/สนามซ้อม/เทคฯ) เพดานเลเวลเท่ากับ Club Tier ปัจจุบัน — ไม่ต้องเก็บเพดานแยกรายห้อง */
+export function getMaxRoomLevel(globalFanbase) {
+  return getClubTier(globalFanbase);
+}
+
+/** แฟนบอลทั่วโลกที่ได้จากเหตุการณ์ใหญ่ระดับฤดูกาล/สโมสร (ไม่ใช่รายแมท) */
+export const GLOBAL_FANBASE_AWARDS = {
+  winMatchMin: 500, winMatchMax: 2000,
+  top4Finish: 50_000,
+  promotion: 200_000,
+  masterTop8: 500_000,
+  champion: 5_000_000,
+  legendSigned: 1_000_000,
+  cupWin: 2_000_000,
+};
+
+/** Owner Level (1-100, ผู้เล่นคือเจ้าของสโมสร) — XP ต้องการต่อเลเวลเพิ่มขึ้นเรื่อยๆ (โค้ง RPG มาตรฐาน) */
+export const OWNER_LEVEL_MAX = 100;
+export const OWNER_XP_AWARDS = {
+  matchPlayed: 5, win: 15, draw: 8, loss: 3,
+  promotion: 500, masterTop8: 300, champion: 2000, cupWin: 1000, legendSigned: 200,
+};
+export function xpForNextOwnerLevel(level) {
+  return Math.round(200 * Math.pow(Math.max(1, level), 1.35));
+}
+export function getOwnerLevelProgress(totalXp) {
+  let level = 1, used = 0;
+  const xp = totalXp || 0;
+  while (level < OWNER_LEVEL_MAX) {
+    const need = xpForNextOwnerLevel(level);
+    if (used + need > xp) break;
+    used += need;
+    level += 1;
+  }
+  const need = level < OWNER_LEVEL_MAX ? xpForNextOwnerLevel(level) : null;
+  return { level, xpIntoLevel: xp - used, xpForNext: need, pct: need ? clamp(((xp - used) / need) * 100, 0, 100) : 100 };
+}
 
 export const EXTRA_STAFF_EFFECTS = {
   ASSISTANT: {
@@ -45,8 +111,8 @@ export function stadiumName(c, lang = "th") {
 }
 
 export function stadiumUpgradeCost(currentLevel) {
-  const costs = [0, 4_000_000, 8_000_000, 15_000_000, 25_000_000];
-  return costs[currentLevel] ?? 40_000_000;
+  const costs = [0, 4_000_000, 8_000_000, 15_000_000, 25_000_000, 45_000_000, 80_000_000, 140_000_000, 250_000_000];
+  return costs[currentLevel] ?? 400_000_000;
 }
 
 export function stadiumAssetValue(c) {

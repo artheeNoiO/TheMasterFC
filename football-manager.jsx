@@ -20,6 +20,8 @@ import {
   initBoard, boardTargetLabel, staffSupportBonuses, mergeManagerPlanWithStaff,
   refreshBoardAfterUserMatch, processBoardSeasonEnd,
   headMedicalTeamBuff, dailyMedicalRecoveryDays, headMedicalRehabStaminaBonus, headMedicalLongInjuryClear,
+  getClubTier, clubTierProgress, getMaxRoomLevel, CLUB_TIER_NAMES,
+  GLOBAL_FANBASE_AWARDS, OWNER_XP_AWARDS, getOwnerLevelProgress,
 } from "@club";
 import {
   ensureRoadmapFields, initRoadmapOnCareer, runDailyRoadmapTick, runSeasonEndRoadmap,
@@ -296,7 +298,7 @@ const FACILITY_DESC = {
   techLab: "เพิ่มคุณภาพดาวรุ่งที่แมวมองค้นพบ",
   medical: "ลดจำนวนวันพักฟื้นเมื่อบาดเจ็บ",
 };
-function facilityUpgradeCost(level) { return (level + 1) * 1200000; }
+function facilityUpgradeCost(level) { return Math.round(1200000 * Math.pow(level + 1, 1.8)); }
 const TRAINING_CAMP_COOLDOWN_DAYS = 21;
 function trainingCampCost(facilities) { return 3000000 + (((facilities || {}).training || 1) - 1) * 500000; }
 const STAFF_SPECS = ["GK", "DF", "MF", "FW", "FITNESS", "PHYSIO", "PHYSIOTHERAPIST"];
@@ -679,7 +681,9 @@ function tryAcquireLegendOnCareer(c, legendId) {
   c.legendOwnership[legendId] = c.userTeamId;
   c.lineups[c.userTeamId] = (c.lineups[c.userTeamId] || []).filter((id) => id !== player.id);
   const prevTeam = c.teams.find((t) => t.id === prevOwner);
-  c.log = [`⭐ คว้า ${def.name} จาก ${prevTeam?.short || "?"} ค่าตัว ${formatMoney(def.acquireCost)}`, ...c.log];
+  c.globalFanbase = (c.globalFanbase || 0) + GLOBAL_FANBASE_AWARDS.legendSigned;
+  c.ownerXp = (c.ownerXp || 0) + OWNER_XP_AWARDS.legendSigned;
+  c.log = [`⭐ คว้า ${def.name} จาก ${prevTeam?.short || "?"} ค่าตัว ${formatMoney(def.acquireCost)} · แฟนบอลทั่วโลก +${GLOBAL_FANBASE_AWARDS.legendSigned.toLocaleString()}`, ...c.log];
   return { ok: true, msg: `คว้า ${def.name} สำเร็จ!` };
 }
 
@@ -1627,6 +1631,9 @@ function applyFanChangeAfterMatch(c, m, homeGoals, awayGoals) {
     const sign = c.fanDeltaToday > 0 ? "+" : "";
     c.log = [`${c.fanDeltaToday > 0 ? "📈" : "📉"} แฟนบอล ${sign}${c.fanDeltaToday.toLocaleString()} (รวม ${c.fanBase.toLocaleString()})`, ...c.log];
   }
+  // แฟนบอลทั่วโลก + Owner XP — ได้เล็กน้อยทุกแมท (ตัวใหญ่ๆ มาจากเหตุการณ์ระดับฤดูกาล เช่น เลื่อนชั้น/แชมป์)
+  c.globalFanbase = (c.globalFanbase || 0) + (result === "win" ? rand(GLOBAL_FANBASE_AWARDS.winMatchMin, GLOBAL_FANBASE_AWARDS.winMatchMax) : 0);
+  c.ownerXp = (c.ownerXp || 0) + OWNER_XP_AWARDS.matchPlayed + (result === "win" ? OWNER_XP_AWARDS.win : result === "draw" ? OWNER_XP_AWARDS.draw : OWNER_XP_AWARDS.loss);
 }
 function processSeasonEndFans(c, prevPos, prevRow, prevDivision, wasPromoted, wasRelegated) {
   const uT = c.teams.find((t) => t.id === c.userTeamId);
@@ -1642,6 +1649,19 @@ function processSeasonEndFans(c, prevPos, prevRow, prevDivision, wasPromoted, wa
     c.budget += RELEGATION_PARACHUTE;
     c.fanBase = clamp(Math.round((c.fanBase || 0) * 0.92), 500, getFanCap(uT.division, c));
     c.log = [`🪂 เงินช่วยเหลือตกชั้น +${formatMoney(RELEGATION_PARACHUTE)}`, ...c.log];
+  }
+  // แฟนบอลทั่วโลก + Owner XP จากผลงานระดับฤดูกาล (คนละก้อนกับแฟนบอลเข้าสนามด้านบน)
+  {
+    let globalGain = 0, xpGain = 0;
+    if (prevPos === 1) { globalGain += GLOBAL_FANBASE_AWARDS.champion; xpGain += OWNER_XP_AWARDS.champion; }
+    else if (prevPos <= 4) globalGain += GLOBAL_FANBASE_AWARDS.top4Finish;
+    if (prevDivision === 0 && prevPos <= 8) { globalGain += GLOBAL_FANBASE_AWARDS.masterTop8; xpGain += OWNER_XP_AWARDS.masterTop8; }
+    if (wasPromoted) { globalGain += GLOBAL_FANBASE_AWARDS.promotion; xpGain += OWNER_XP_AWARDS.promotion; }
+    if (globalGain > 0) {
+      c.globalFanbase = (c.globalFanbase || 0) + globalGain;
+      c.ownerXp = (c.ownerXp || 0) + xpGain;
+      c.log = [`🌍 แฟนบอลทั่วโลก +${globalGain.toLocaleString()} (รวม ${c.globalFanbase.toLocaleString()})`, ...c.log];
+    }
   }
   const snap = c.lastSeasonSnapshot;
   const curScore = prevRow.pts * 10 - prevPos;
@@ -1992,6 +2012,8 @@ function normalizeCareerSave(c) {
     });
   }
   if (!c.legendOwnership) c.legendOwnership = initLegendOwnership(c.legendLeagueId, c.teams, c.players);
+  if (c.globalFanbase == null) c.globalFanbase = 0;
+  if (c.ownerXp == null) c.ownerXp = 0;
   if (c.pendingLeaguePick == null) c.pendingLeaguePick = false;
   c.matchPrep = { ...defaultMatchPrep(), ...(c.matchPrep || {}) };
   // เซฟเก่าอาจมีคำสั่ง higher_line/deeper ค้างอยู่ — ย้ายไประบบแนวรับ (defLine) แล้วลบทิ้ง
@@ -3242,9 +3264,15 @@ const TROPHY_DEFS = {
   champ_master: { icon: "🌟", label: "แชมป์ Champ Master", color: "#d4af37" },
   champ_master_runnerup: { icon: "🥈", label: "รองแชมป์ Champ Master", color: "#a9bdb1" },
 };
+// เฉพาะถ้วยแบบน็อกเอาต์ (คนละก้อนกับแชมป์ลีก ที่ได้โบนัสแฟนบอลทั่วโลกจาก processSeasonEndFans ไปแล้ว กันซ้ำ)
+const CUP_TROPHY_IDS = ["socker_cup", "champ_master"];
 function awardTrophy(c, trophyId, season) {
   if (!c.trophyCabinet) c.trophyCabinet = [];
   c.trophyCabinet.push({ id: trophyId, season: season ?? c.season, wonAt: Date.now() });
+  if (CUP_TROPHY_IDS.includes(trophyId)) {
+    c.globalFanbase = (c.globalFanbase || 0) + GLOBAL_FANBASE_AWARDS.cupWin;
+    c.ownerXp = (c.ownerXp || 0) + OWNER_XP_AWARDS.cupWin;
+  }
 }
 
 /* Socker Cup — domestic knockout mid-season (day 15), top 8 of user's division */
@@ -3488,6 +3516,7 @@ function createNewCareer(customClub, managerName = "ผู้จัดการ"
     matchPrep: defaultMatchPrep(),
     fanBase: 2500, sponsorTier: 0, badSeasonStreak: 0, lastSeasonSnapshot: null, fanDeltaToday: 0,
     stadiumLevel: 1,
+    globalFanbase: 0, ownerXp: 0,
     monthlyGoals: {}, monthlyApps: {}, sockerCupSeason: null,
     saveVersion: SAVE_VERSION,
     gameVersion: GAME_VERSION,
@@ -5557,7 +5586,8 @@ export default function App({
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       const level = getStadiumLevel(c);
-      if (level >= STADIUM_LEVELS.length) return c;
+      const maxLevel = Math.min(STADIUM_LEVELS.length, getMaxRoomLevel(c.globalFanbase));
+      if (level >= maxLevel) return c;
       const cost = stadiumUpgradeCost(level);
       if (c.budget < cost) return c;
       c.budget -= cost;
@@ -5572,7 +5602,8 @@ export default function App({
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       const level = (c.facilities || {})[type] || 1;
-      if (level >= 5) return c;
+      const maxLevel = getMaxRoomLevel(c.globalFanbase);
+      if (level >= maxLevel) return c;
       const cost = facilityUpgradeCost(level);
       if (c.budget < cost) return c;
       c.budget -= cost;
@@ -6488,7 +6519,7 @@ export default function App({
         {tab === "training" && (
           <TrainingView trainingPlan={career.trainingPlan} autoTraining={career.autoTraining} currentSlot={(career.day - 1) % 10}
             onSetDay={setTrainingDay} onToggleAuto={toggleAutoTraining} onAutoAssign={autoAssignTraining}
-            facilities={career.facilities} budget={career.budget} onUpgradeFacility={upgradeFacility}
+            facilities={career.facilities} budget={career.budget} onUpgradeFacility={upgradeFacility} globalFanbase={career.globalFanbase}
             squad={uSquad} staff={career.staff[uTeam.id] || {}}
             individualFocus={career.individualFocus || {}} onSetFocus={setIndividualFocus}
             campCooldownDay={career.trainingCampCooldownDay || 0} currentDay={career.day} onRunCamp={runTrainingCamp}
@@ -7837,7 +7868,8 @@ function ClubStadiumPanel({ career, uiLang = "th", onUpgradeStadium }) {
   const level = getStadiumLevel(career);
   const def = getStadiumDef(career);
   const steps = stadiumProgressSteps(level);
-  const maxed = level >= STADIUM_LEVELS.length;
+  const tierCap = Math.min(STADIUM_LEVELS.length, getMaxRoomLevel(career.globalFanbase || 0));
+  const maxed = level >= tierCap;
   const cost = stadiumUpgradeCost(level);
   const canAfford = (career.budget || 0) >= cost;
   const nextDef = !maxed ? STADIUM_LEVELS[level] : null;
@@ -7922,8 +7954,10 @@ function ClubStadiumPanel({ career, uiLang = "th", onUpgradeStadium }) {
         }}>
           {t(uiLang, "club.stadiumUpgrade")} ({formatMoney(cost)})
         </button>
-      ) : (
+      ) : level >= STADIUM_LEVELS.length ? (
         <div style={{ fontSize: 11, color: C.gold }}>{t(uiLang, "club.stadiumMax")}</div>
+      ) : (
+        <div style={{ fontSize: 11, color: C.textDim }}>🔒 ต้อง Club Tier {level + 1} ก่อน (ดูที่แท็บสโมสร)</div>
       )}
     </Panel>
   );
@@ -7963,6 +7997,35 @@ function ClubExtraStaffPanel({ career, uiLang = "th", onHireCard }) {
   );
 }
 
+/** Club Tier (1-9, เกตความสามารถอัพเกรดห้องต่างๆ) + Owner Level (1-100, ตัวผู้เล่นเอง) — คนละแกนกัน */
+function ClubTierPanel({ career }) {
+  const tierInfo = clubTierProgress(career.globalFanbase || 0);
+  const ownerInfo = getOwnerLevelProgress(career.ownerXp || 0);
+  return (
+    <Panel style={{ border: `1px solid ${C.gold}` }}>
+      <SectionLabel style={{ color: C.gold }} sub="เกตการอัพเกรดห้องต่างๆ ในสโมสร (ห้องพยาบาล/โค้ช/สนามซ้อม/สนามแข่ง) — ได้จากผลงานระดับฤดูกาล ไม่ใช่ชนะรายแมท">
+        🌍 Club Tier {tierInfo.tier}/9 — {tierInfo.name}
+      </SectionLabel>
+      <div style={{ height: 8, borderRadius: 4, background: C.panel2, overflow: "hidden", marginBottom: 4 }}>
+        <div style={{ width: `${tierInfo.pct}%`, height: "100%", background: `linear-gradient(90deg, ${C.gold}, ${C.amber})`, borderRadius: 4 }} />
+      </div>
+      <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT }}>
+        แฟนบอลทั่วโลก {tierInfo.current.toLocaleString()}{tierInfo.next ? ` / ${tierInfo.next.toLocaleString()}` : " (สูงสุดแล้ว)"}
+      </div>
+      <div style={{ height: 1, background: C.steel, margin: "10px 0" }} />
+      <SectionLabel sub="ตัวคุณเอง (ผู้จัดการ/เจ้าของสโมสร) — ได้ XP จากเล่นแมท/ผลงาน/ถ้วยรางวัล">
+        👤 Owner Lv.{ownerInfo.level}/100
+      </SectionLabel>
+      <div style={{ height: 8, borderRadius: 4, background: C.panel2, overflow: "hidden", marginBottom: 4 }}>
+        <div style={{ width: `${ownerInfo.pct}%`, height: "100%", background: `linear-gradient(90deg, ${C.blue}, ${C.purple})`, borderRadius: 4 }} />
+      </div>
+      <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT }}>
+        {ownerInfo.xpForNext != null ? `XP ${Math.round(ownerInfo.xpIntoLevel).toLocaleString()} / ${ownerInfo.xpForNext.toLocaleString()}` : "เลเวลสูงสุดแล้ว"}
+      </div>
+    </Panel>
+  );
+}
+
 function ClubHubView({ career, uTeam, standings, seasonOver, onUpgradeSponsor, onUpgradeStadium, onHireCard, uiLang = "th" }) {
   const posInTable = standings.findIndex((s) => s.team.id === uTeam.id) + 1;
   const userRow = standings.find((s) => s.team.id === uTeam.id);
@@ -7981,6 +8044,7 @@ function ClubHubView({ career, uTeam, standings, seasonOver, onUpgradeSponsor, o
         </div>
       </Panel>
 
+      <ClubTierPanel career={career} />
       <ClubFansPanel career={career} uTeam={uTeam} seasonOver={seasonOver} posInTable={posInTable} userRow={userRow} onUpgradeSponsor={onUpgradeSponsor} />
 
       <ClubBoardPanel career={career} uTeam={uTeam} posInTable={posInTable} uiLang={uiLang} />
@@ -11961,7 +12025,7 @@ function TrainingReportPanel({ reports, currentDay }) {
 }
 
 function TrainingView({
-  trainingPlan, autoTraining, currentSlot, onSetDay, onToggleAuto, onAutoAssign, facilities, budget, onUpgradeFacility,
+  trainingPlan, autoTraining, currentSlot, onSetDay, onToggleAuto, onAutoAssign, facilities, budget, onUpgradeFacility, globalFanbase,
   squad, staff, individualFocus, onSetFocus, campCooldownDay, currentDay, onRunCamp,
   drillPlans, drillDoneDay, onSetDrillPlan, onAutoDrills, onRunDrills,
   trainingReports, staffBonuses, onAutoAnalystDrills, onAutoAnalystAll,
@@ -11985,18 +12049,22 @@ function TrainingView({
           {FACILITY_TYPES.filter((type) => type !== "medical").map((type) => {
             const level = (facilities || {})[type] || 1;
             const cost = facilityUpgradeCost(level);
-            const maxed = level >= 5;
+            const tierCap = getMaxRoomLevel(globalFanbase || 0);
+            const maxed = level >= Math.min(9, tierCap);
             return (
               <div key={type} style={{ padding: "8px 10px", borderRadius: 8, background: C.panel2, border: `1px solid ${C.steel}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{FACILITY_TH[type]} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>Lv.{level}</span></div>
-                  {!maxed && (
+                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>{FACILITY_TH[type]} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>Lv.{level}/{tierCap}</span></div>
+                  {!maxed ? (
                     <button disabled={budget < cost} onClick={() => onUpgradeFacility(type)} style={{ fontSize: 10, padding: "4px 10px", borderRadius: 6, border: "none", background: budget >= cost ? C.good : "#2b332f", color: budget >= cost ? "#08150e" : C.textDim, cursor: budget >= cost ? "pointer" : "not-allowed", fontWeight: 700 }}>อัปเกรด {formatMoney(cost)}</button>
+                  ) : level >= 9 ? (
+                    <span style={{ fontSize: 9.5, color: C.gold }}>สูงสุดแล้ว</span>
+                  ) : (
+                    <span style={{ fontSize: 9.5, color: C.textDim }}>🔒 Club Tier {level + 1}</span>
                   )}
-                  {maxed && <span style={{ fontSize: 10, color: C.gold }}>สูงสุดแล้ว</span>}
                 </div>
                 <div style={{ fontSize: 10.5, color: C.textDim, marginBottom: 4 }}>{FACILITY_DESC[type]}</div>
-                <MiniBar value={(level / 5) * 100} color={C.amber} />
+                <MiniBar value={(level / 9) * 100} color={C.amber} />
               </div>
             );
           })}
@@ -12094,7 +12162,8 @@ function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, o
   const headMed = career.staff?.[career.userTeamId]?.HEAD_MEDICAL;
   const medicalLevel = (career.facilities || {}).medical || 1;
   const medicalCost = facilityUpgradeCost(medicalLevel);
-  const medicalMaxed = medicalLevel >= 5;
+  const medicalTierCap = getMaxRoomLevel(career.globalFanbase || 0);
+  const medicalMaxed = medicalLevel >= medicalTierCap;
   const medicalCards = (career.staffCardBag || []).filter((c) => c.type === "DOCTOR");
 
   return (
@@ -12139,12 +12208,14 @@ function MedicalRoomView({ career, squad, budget, inventory, onUseItemFromBag, o
       </Panel>
 
       <Panel>
-        <SectionLabel>{FACILITY_TH.medical} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>Lv.{medicalLevel}</span></SectionLabel>
+        <SectionLabel>{FACILITY_TH.medical} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>Lv.{medicalLevel}/{medicalTierCap}</span></SectionLabel>
         <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 8 }}>{FACILITY_DESC.medical}</div>
-        <MiniBar value={(medicalLevel / 5) * 100} color={C.amber} />
+        <MiniBar value={(medicalLevel / 9) * 100} color={C.amber} />
         <div style={{ marginTop: 10 }}>
           {medicalMaxed ? (
-            <span style={{ fontSize: 11, color: C.gold }}>อัปเกรดสูงสุดแล้ว</span>
+            medicalLevel >= 9
+              ? <span style={{ fontSize: 11, color: C.gold }}>อัปเกรดสูงสุดแล้ว</span>
+              : <span style={{ fontSize: 11, color: C.textDim }}>🔒 ต้อง Club Tier {medicalLevel + 1} ก่อน (ดูที่แท็บสโมสร)</span>
           ) : (
             <button disabled={budget < medicalCost} onClick={() => onUpgradeFacility("medical")} style={{ fontSize: 11, padding: "7px 12px", borderRadius: 6, border: "none", background: budget >= medicalCost ? C.good : "#2b332f", color: budget >= medicalCost ? "#08150e" : C.textDim, cursor: budget >= medicalCost ? "pointer" : "not-allowed", fontWeight: 700 }}>
               อัปเกรด {formatMoney(medicalCost)}
