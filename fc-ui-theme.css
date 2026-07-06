@@ -440,6 +440,35 @@ a.fc-header-chip {
   margin: 0 auto;
   padding: 10px 12px;
 }
+/* จอกว้าง (แท็บเล็ต/เดสก์ท็อป) — ขยายคอลัมน์เนื้อหาให้ใช้พื้นที่มากขึ้น แทนที่จะค้างแคบแบบมือถือเสมอ
+   ทำให้พาเนล/ตาราง/กริดต่างๆ ที่ยืดตาม width:100% อยู่แล้วขยายตามไปด้วยโดยอัตโนมัติ */
+@media (min-width: 900px) {
+  .fc-main-wrap {
+    max-width: 1100px;
+    padding: 16px 28px;
+  }
+  .fc-bottom-nav {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+}
+@media (min-width: 1440px) {
+  .fc-main-wrap {
+    max-width: 1320px;
+  }
+  .fc-bottom-nav {
+    max-width: 1320px;
+  }
+}
+
+/* รายการสถิติเทียบทีมยาวๆ (StatCompareBar ฯลฯ) — จอกว้างจัด 2 คอลัมน์แทนเรียงยาวคอลัมน์เดียว ลดการเลื่อนขึ้นลง */
+@media (min-width: 900px) {
+  .fc-stat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 24px;
+  }
+}
 
 /* Scroll without visible bars — drag or wheel instead */
 .fc-scroll-x,

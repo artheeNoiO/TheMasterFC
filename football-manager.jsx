@@ -7224,20 +7224,27 @@ function MatchStatComparisonPanel({ scout }) {
         </div>
       </div>
       <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>ภาพรวม</div>
-      {scout.attrCompare.filter((r) => !r.key.startsWith("grp_") && !KEY_COMPARE_ATTRS.includes(r.key)).map((r) => (
-        <StatCompareBar key={r.key} label={r.label} us={r.us} them={r.usOnly ? null : r.them} />
-      ))}
+      <div className="fc-stat-grid">
+        {scout.attrCompare.filter((r) => !r.key.startsWith("grp_") && !KEY_COMPARE_ATTRS.includes(r.key)).map((r) => (
+          <StatCompareBar key={r.key} label={r.label} us={r.us} them={r.usOnly ? null : r.them} />
+        ))}
+      </div>
       <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, margin: "10px 0 6px" }}>กลุ่มสเตต</div>
-      {scout.attrCompare.filter((r) => r.key.startsWith("grp_")).map((r) => (
-        <StatCompareBar key={r.key} label={r.label} us={r.us} them={r.them} />
-      ))}
+      <div className="fc-stat-grid">
+        {scout.attrCompare.filter((r) => r.key.startsWith("grp_")).map((r) => (
+          <StatCompareBar key={r.key} label={r.label} us={r.us} them={r.them} />
+        ))}
+      </div>
       <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, margin: "10px 0 6px" }}>สเตตสำคัญ</div>
-      {scout.attrCompare.filter((r) => KEY_COMPARE_ATTRS.includes(r.key)).map((r) => (
-        <StatCompareBar key={r.key} label={r.label} us={r.us} them={r.them} />
-      ))}
+      <div className="fc-stat-grid">
+        {scout.attrCompare.filter((r) => KEY_COMPARE_ATTRS.includes(r.key)).map((r) => (
+          <StatCompareBar key={r.key} label={r.label} us={r.us} them={r.them} />
+        ))}
+      </div>
       {scout.lineCompare && (
         <>
           <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase", letterSpacing: 1, margin: "12px 0 6px" }}>เทียบตามแนว</div>
+          <div className="fc-stat-grid">
           {["GK", "DF", "MF", "FW"].map((line) => {
             const usL = scout.lineCompare.us[line];
             const themL = scout.lineCompare.them[line];
@@ -7251,6 +7258,7 @@ function MatchStatComparisonPanel({ scout }) {
               />
             );
           })}
+          </div>
         </>
       )}
       {scout.slotMatchups?.length > 0 && (
