@@ -340,6 +340,19 @@ const MANAGER_TRAITS = {
   scouting: { th: "สายตาแมวมอง", en: "Scouting Eye", descTh: "รายงานสอดแนมก่อนแมทแม่นยำขึ้น", effectKey: "insight", effectVal: 0.04 },
   reputation: { th: "บารมีสูงส่ง", en: "High Reputation", descTh: "สะสม XP ผจก. ได้เร็วขึ้น", effectKey: "xpMult", effectVal: 0.1 },
 };
+
+/** บุคลิกนักเตะ (personality) — สุ่มติดตัวตอนเกิด มีผลจริงต่อความอดทนนั่งสำรอง + การขอขึ้นค่าเหนื่อยตอนต่อสัญญา */
+const PLAYER_PERSONALITIES = {
+  leader: { th: "หัวหน้าทีม", en: "Team Leader", descTh: "ใจเย็นกว่าปกติ ทนนั่งสำรองได้นานกว่า", benchMult: 0.7, wageDemandMult: 1, renewMoraleBonus: 3 },
+  ambitious: { th: "ทะเยอทะยาน", en: "Ambitious", descTh: "หิวความสำเร็จ ไม่พอใจง่ายถ้านั่งสำรอง + ขอค่าเหนื่อยขึ้นเยอะตอนต่อสัญญา", benchMult: 1.3, wageDemandMult: 1.35, renewMoraleBonus: 0 },
+  loyal: { th: "ซื่อสัตย์ต่อทีม", en: "Loyal", descTh: "รักสโมสร ต่อสัญญาง่าย ขอขึ้นค่าเหนื่อยน้อยกว่าปกติ", benchMult: 0.6, wageDemandMult: 0.7, renewMoraleBonus: 4 },
+  temperamental: { th: "อารมณ์ร้อน", en: "Temperamental", descTh: "อารมณ์แปรปรวน ไม่พอใจง่ายถ้านั่งสำรองบ่อย", benchMult: 1.5, wageDemandMult: 1.1, renewMoraleBonus: 0 },
+  professional: { th: "มืออาชีพ", en: "Professional", descTh: "มูดนิ่ง ไม่ค่อยหวั่นไหวไม่ว่าจะเจออะไร", benchMult: 0.8, wageDemandMult: 0.95, renewMoraleBonus: 1 },
+};
+function rollPlayerPersonality() {
+  const keys = Object.keys(PLAYER_PERSONALITIES);
+  return keys[Math.floor(Math.random() * keys.length)];
+}
 /** สิทธิประโยชน์ตามดาวการ์ดผจก. — ยิ่งดาวสูงยิ่งมีผลในเกมจริง */
 const MANAGER_TIER_DEFS = {
   1: { title: "มือใหม่", prepBonus: -0.06, performanceBonus: 0, devMult: 1.0, famBonus: 0, moraleBonus: 0, negotiationPct: 0, xpMult: 1, autoPlan: false, perks: ["วางแผนพื้นฐาน — คำแนะนำจำกัด"] },
@@ -505,7 +518,7 @@ function genPlayer(position, tier, teamId, forcedAge, startDay, opts = {}) {
   const p = {
     id: uid("pl"), name: genPlayerName(nationality), nationality, position: group, pos: dpos, altPos: rollAltPositions(dpos),
     age, attrs, morale: rand(62, 92), teamId, stamina: 100, injuryDays: 0, appearHistory: [], careerGoals: 0, seasonGoals: 0, careerApps: 0, role: "balanced",
-    seasonYellows: 0, suspendedMatches: 0,
+    seasonYellows: 0, suspendedMatches: 0, personality: rollPlayerPersonality(),
   };
   recomputeDerived(p);
   const ageMult = age <= 23 ? 1.35 : age <= 28 ? 1.05 : age <= 31 ? 0.65 : 0.35;
@@ -2085,6 +2098,7 @@ function normalizeCareerSave(c) {
   (c.players || []).forEach((p) => {
     if (p.seasonYellows == null) p.seasonYellows = 0;
     if (p.suspendedMatches == null) p.suspendedMatches = 0;
+    if (!p.personality) p.personality = rollPlayerPersonality();
   });
   // ตำแหน่งละเอียดแบบ FM — แจกให้นักเตะทุกคนในเซฟเก่าที่ยังไม่มี (จากสเตตเด่น)
   (c.players || []).forEach(ensureDetailedPos);
@@ -3156,7 +3170,9 @@ function checkBenchUnhappiness(c, squad, xiIds) {
     for (const v of hist) { if (v) break; benchStreak += 1; }
     if (benchStreak < 3) return;
     if (benchStreak === 3) {
-      p.morale = clamp(p.morale - 3, 10, 99);
+      const personality = PLAYER_PERSONALITIES[p.personality];
+      const drop = Math.round(3 * (personality?.benchMult ?? 1));
+      p.morale = clamp(p.morale - drop, 10, 99);
       c.log = [`😤 ${p.name} ไม่พอใจ — นั่งสำรองติดต่อกัน ${benchStreak} นัด (OVR ${p.rating})`, ...c.log];
     }
   });
@@ -5676,9 +5692,11 @@ export default function App({
       const fee = Math.round((p.value * 0.06) / 1000) * 1000;
       if (c.budget < fee) return c;
       c.budget -= fee;
-      p.wage = Math.round((p.wage * rand(105, 118)) / 100 / 100) * 100;
+      const personality = PLAYER_PERSONALITIES[p.personality];
+      const raisePct = 5 + (rand(105, 118) - 105) * (personality?.wageDemandMult ?? 1);
+      p.wage = Math.round((p.wage * (100 + raisePct)) / 100 / 100) * 100;
       p.contractEndsDay = c.day + rand(150, 400);
-      p.morale = clamp(p.morale + 5, 10, 99);
+      p.morale = clamp(p.morale + 5 + (personality?.renewMoraleBonus ?? 0), 10, 99);
       c.log = [`✍️ ต่อสัญญา ${p.name} แล้ว (ค่าใช้จ่าย ${formatMoney(fee)})`, ...c.log];
       return c;
     });
@@ -8846,6 +8864,11 @@ function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, 
             )}
             {(p.suspendedMatches || 0) > 0 && <span style={{ fontSize: 9, background: C.amber, color: "#2b1c00", borderRadius: 4, padding: "1px 5px" }}>🚫 ติดแบน {p.suspendedMatches} นัด</span>}
             <span style={{ fontSize: 9, background: STATUS_COLOR[p.status], color: "#08150e", borderRadius: 4, padding: "1px 5px" }}>{STATUS_TH[p.status]}</span>
+            {p.personality && PLAYER_PERSONALITIES[p.personality] && (
+              <span title={PLAYER_PERSONALITIES[p.personality].descTh} style={{ fontSize: 9, background: "transparent", border: `1px solid ${C.gold}55`, color: C.gold, borderRadius: 4, padding: "1px 5px" }}>
+                🎭 {PLAYER_PERSONALITIES[p.personality].th}
+              </span>
+            )}
             {daysLeft != null && <span style={{ fontSize: 9, background: contractColor, color: "#08150e", borderRadius: 4, padding: "1px 5px" }}>{t(uiLang, "player.contract")} {daysLeft > 0 ? `${daysLeft}${t(uiLang, "player.days")}` : t(uiLang, "player.expired")}</span>}
           </div>
           <div style={{ marginTop: 3 }}>
