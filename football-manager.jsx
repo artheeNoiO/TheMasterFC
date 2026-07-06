@@ -613,7 +613,7 @@ function initLegendOwnership(leagueId, teams, players) {
 function installLegendMasterLeague(c, leagueId) {
   const userTeam = c.teams?.find((t) => t.isUser);
   if (!userTeam || !Array.isArray(c.teams)) return c;
-  const challengerTeams = c.teams.filter((t) => t.division === 1);
+  const challengerTeams = c.teams.filter((t) => t.division === 1 && t.id !== userTeam.id);
   const keepIds = new Set([...challengerTeams.map((t) => t.id), userTeam.id]);
   c.players = c.players.filter((p) => keepIds.has(p.teamId) && !p.isLegend);
   const masterTeams = createLegendMasterTeams(leagueId, c.day || 1);
@@ -1972,6 +1972,15 @@ function normalizeCareerSave(c) {
   if (c.onlineUnlocked == null) c.onlineUnlocked = false;
   const hasOldMaster = c.teams?.some((t) => t.division === 0 && /^m\d+$/.test(t.id));
   if (!c.legendLeagueId || hasOldMaster) c = installLegendMasterLeague(c, c.legendLeagueId || "england");
+  // เซฟเก่าบางฉบับเคยมีทีมผู้ใช้ซ้ำในลิสต์ (บั๊กใน installLegendMasterLeague ที่แก้แล้ว) — ล้างทิ้งอัตโนมัติ เก็บตัวแรกไว้
+  if (Array.isArray(c.teams)) {
+    const seen = new Set();
+    c.teams = c.teams.filter((t) => {
+      if (seen.has(t.id)) return false;
+      seen.add(t.id);
+      return true;
+    });
+  }
   if (!c.legendOwnership) c.legendOwnership = initLegendOwnership(c.legendLeagueId, c.teams, c.players);
   if (c.pendingLeaguePick == null) c.pendingLeaguePick = false;
   c.matchPrep = { ...defaultMatchPrep(), ...(c.matchPrep || {}) };
