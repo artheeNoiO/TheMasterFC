@@ -470,6 +470,25 @@ a.fc-header-chip {
   }
 }
 
+/* หน้า Tactics — จอกว้างวางสนาม+ตารางผู้เล่นเคียงข้างกัน (แบบ FM) แทนซ้อนบน-ล่างยาว */
+.fc-tactics-split {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+@media (min-width: 1024px) {
+  .fc-tactics-split {
+    display: grid;
+    grid-template-columns: 400px 1fr;
+    align-items: start;
+    gap: 16px;
+  }
+  .fc-tactics-split > :first-child {
+    position: sticky;
+    top: 70px;
+  }
+}
+
 /* ตลาดประมูล — จอกว้างจัดการ์ดนักเตะเป็นกริดแทนเรียงยาวคอลัมน์เดียว ให้ความรู้สึกเหมือนสนามประมูลจริง */
 .fc-auction-grid {
   display: flex;

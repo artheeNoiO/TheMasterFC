@@ -9234,22 +9234,24 @@ function TacticsView({
           </div>
         </div>
       </Panel>
-      <Panel style={{ padding: 0, overflow: "hidden" }}>
-        <SquadPitchBoard
-          team={team} squad={squad}
-          slots={slots}
-          benchIds={benchSlotIds}
-          editable={!team.autoMode}
-          onMove={onBoardMove}
-          highlightId={highlightId}
-        />
-      </Panel>
+      <div className="fc-tactics-split">
+        <Panel style={{ padding: 0, overflow: "hidden" }}>
+          <SquadPitchBoard
+            team={team} squad={squad}
+            slots={slots}
+            benchIds={benchSlotIds}
+            editable={!team.autoMode}
+            onMove={onBoardMove}
+            highlightId={highlightId}
+          />
+        </Panel>
 
-      <TacticsSquadTable
-        career={career} squad={squad} team={team}
-        onSetPlayerRole={onSetPlayerRole} onSetPlayerDuty={onSetPlayerDuty} onAutoPick={onAutoPick}
-        onBoardMove={onBoardMove} editable={!team.autoMode} highlightId={highlightId}
-      />
+        <TacticsSquadTable
+          career={career} squad={squad} team={team}
+          onSetPlayerRole={onSetPlayerRole} onSetPlayerDuty={onSetPlayerDuty} onAutoPick={onAutoPick}
+          onBoardMove={onBoardMove} editable={!team.autoMode} highlightId={highlightId}
+        />
+      </div>
 
       <TeamStyleCards matchPrep={career.matchPrep} onSetPrepField={onSetPrepField} squad={squad} xi={xi} />
 
