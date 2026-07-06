@@ -3500,8 +3500,8 @@ function createNewCareer(customClub, managerName = "ผู้จัดการ"
 }
 
 /* ============================== UI PRIMITIVES (FC web theme) ============================== */
-function Panel({ children, style, accent, onClick, plain }) {
-  const cls = ["fc-panel", plain && "fc-panel--plain", accent && "fc-panel--accent"].filter(Boolean).join(" ");
+function Panel({ children, style, accent, onClick, plain, className }) {
+  const cls = ["fc-panel", plain && "fc-panel--plain", accent && "fc-panel--accent", className].filter(Boolean).join(" ");
   return (
     <div
       onClick={onClick}
@@ -9544,7 +9544,7 @@ function MarketTradeView({ list, budget, onBid, marketOpen, now, career, onAcqui
         )}
         <div style={{ fontSize: 11.5, color: C.textDim, marginTop: 6 }}>งบคงเหลือ: <span style={{ color: C.amber, fontFamily: MONO_FONT }}>{formatMoney(budget)}</span> — เสนอ "ค่าเหนื่อย" สูงกว่าชนะก่อน ถ้าเท่ากันตัดสินด้วย "ค่าตัว"</div>
       </Panel>
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="fc-auction-grid">
         {list.map((l) => <ListingCard key={l.listingId} l={l} budget={budget} onBid={onBid} marketOpen={marketOpen} now={now} />)}
       </div>
       <Panel accent={C.crimson}>
@@ -9687,17 +9687,44 @@ function ListingCard({ l, budget, onBid, marketOpen, now }) {
   const myWage = l.topBid.wage + wageAdd;
   const myFee = l.topBid.fee + feeAdd;
   const valid = (wageAdd > 0 || feeAdd > 0) && (myWage > l.topBid.wage || (myWage === l.topBid.wage && myFee > l.topBid.fee)) && myFee <= budget;
+  const urgent = secsLeft <= 20;
+  const soon = secsLeft <= 60 && !urgent;
+  const clockColor = urgent ? C.crimson : soon ? C.amber : C.good;
+  const iLead = l.topBid.isUser;
   return (
-    <Panel>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <Panel
+      className={urgent ? "fc-auction-urgent" : undefined}
+      style={{ border: `2px solid ${iLead ? C.good : urgent ? C.crimson : C.steel}`, position: "relative", overflow: "hidden" }}
+    >
+      <div style={{
+        position: "absolute", top: 0, right: 0, padding: "3px 10px 3px 12px", borderBottomLeftRadius: 10,
+        background: clockColor, color: "#08150e", fontFamily: MONO_FONT, fontSize: 12, fontWeight: 800,
+      }}>
+        ⏱ {secsLeft}s
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, paddingRight: 54 }}>
         <RatingBadge value={l.rating} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>{l.name} <span style={{ fontSize: 10, color: playerPosColor(l) }}>{playerPosTH(l)}</span></div>
-          <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT }}>อายุ {l.age} · ศักยภาพ {bandOf(l.potential)} · <span style={{ color: GROUP_COLOR.technical }}>TEC {Math.round(attrGroupAvg(l, "technical"))}</span> · <span style={{ color: GROUP_COLOR.mental }}>MEN {Math.round(attrGroupAvg(l, "mental"))}</span> · <span style={{ color: GROUP_COLOR.physical }}>PHY {Math.round(attrGroupAvg(l, "physical"))}</span> · จาก {l.sourceTeamName}</div>
+          <div style={{ fontSize: 14, fontWeight: 800 }}>{l.name} <span style={{ fontSize: 10, color: playerPosColor(l) }}>{playerPosTH(l)}</span></div>
+          <div style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT }}>อายุ {l.age} · ศักยภาพ {bandOf(l.potential)} · จาก {l.sourceTeamName}</div>
         </div>
-        <div style={{ textAlign: "right", fontFamily: MONO_FONT, fontSize: 11 }}><div style={{ color: secsLeft <= 20 ? C.crimson : C.textDim }}>⏱ {secsLeft}s</div></div>
       </div>
-      <div style={{ marginTop: 8, padding: "8px 10px", background: C.panel2, borderRadius: 8, fontSize: 11.5, fontFamily: MONO_FONT }}>ผู้เสนอสูงสุด: <b style={{ color: l.topBid.isUser ? C.good : C.amber }}>{l.topBid.bidder}</b> — ค่าเหนื่อย {formatMoney(l.topBid.wage)}/วัน · ค่าตัว {formatMoney(l.topBid.fee)}</div>
+      <div style={{ display: "flex", gap: 6, marginTop: 8, fontSize: 9.5, fontFamily: MONO_FONT }}>
+        <span style={{ flex: 1, textAlign: "center", padding: "3px 0", borderRadius: 5, background: C.panel2, color: GROUP_COLOR.technical }}>TEC {Math.round(attrGroupAvg(l, "technical"))}</span>
+        <span style={{ flex: 1, textAlign: "center", padding: "3px 0", borderRadius: 5, background: C.panel2, color: GROUP_COLOR.mental }}>MEN {Math.round(attrGroupAvg(l, "mental"))}</span>
+        <span style={{ flex: 1, textAlign: "center", padding: "3px 0", borderRadius: 5, background: C.panel2, color: GROUP_COLOR.physical }}>PHY {Math.round(attrGroupAvg(l, "physical"))}</span>
+      </div>
+      <div style={{
+        marginTop: 10, padding: "8px 10px", borderRadius: 8, fontSize: 12, fontFamily: MONO_FONT,
+        background: iLead ? "rgba(111,174,90,.14)" : "rgba(224,164,88,.10)",
+        border: `1px solid ${iLead ? C.good : C.amber}`,
+      }}>
+        <div style={{ fontSize: 9, color: C.textDim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 2 }}>
+          {iLead ? "🏆 คุณนำอยู่" : "ผู้เสนอสูงสุด"}
+        </div>
+        <b style={{ color: iLead ? C.good : C.amber, fontSize: 13 }}>{l.topBid.bidder}</b>
+        <div style={{ color: C.textDim, marginTop: 2 }}>ค่าเหนื่อย {formatMoney(l.topBid.wage)}/วัน · ค่าตัว {formatMoney(l.topBid.fee)}</div>
+      </div>
       {marketOpen ? (
         <div style={{ marginTop: 10 }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
@@ -9705,7 +9732,11 @@ function ListingCard({ l, budget, onBid, marketOpen, now }) {
             <StepperField label="เพิ่มค่าตัว" value={feeAdd} step={feeStep} onChange={setFeeAdd} />
           </div>
           <div style={{ fontSize: 11, color: C.textDim, marginBottom: 6, fontFamily: MONO_FONT }}>ข้อเสนอของคุณ: ค่าเหนื่อย {formatMoney(myWage)} · ค่าตัว {formatMoney(myFee)}</div>
-          <button disabled={!valid} onClick={() => { onBid(l.listingId, myWage, myFee); setWageAdd(wageStep); setFeeAdd(feeStep); }} style={{ ...btnStyle(valid ? C.good : "#2b332f", valid ? "#08150e" : C.textDim), cursor: valid ? "pointer" : "not-allowed" }}>ยื่นประมูลแข่ง</button>
+          <button
+            disabled={!valid}
+            onClick={() => { onBid(l.listingId, myWage, myFee); setWageAdd(wageStep); setFeeAdd(feeStep); }}
+            style={{ ...btnStyle(valid ? C.crimson : "#2b332f", valid ? "#fff" : C.textDim), cursor: valid ? "pointer" : "not-allowed", fontWeight: 800, fontSize: 13, letterSpacing: 0.5 }}
+          >🔨 ยื่นประมูลแข่ง</button>
         </div>
       ) : <div style={{ marginTop: 8, fontSize: 11.5, color: C.textDim }}>ตลาดปิดอยู่ รอช่วงเวลาเปิดตลาดเพื่อประมูล</div>}
     </Panel>
