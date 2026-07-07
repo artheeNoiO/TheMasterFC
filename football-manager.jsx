@@ -10459,6 +10459,63 @@ function HalftimeOverlay({ scoreLabel, formation, mentality, instructions, onFor
   );
 }
 
+/** หน้าต่างรายงานผลหลังจบเกม — ใช้ได้ทั้งซานด์บ็อกซ์และออนไลน์ ผู้เล่นต้องกดปิดเอง ไม่ปิดอัตโนมัติ */
+function MatchReportModal({ homeTeam, awayTeam, homeGoals, awayGoals, scorers = [], starMan, onClose }) {
+  const homeScorers = scorers.filter((s) => s.team === "home" || s.side === "home");
+  const awayScorers = scorers.filter((s) => s.team === "away" || s.side === "away");
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(4,10,7,.94)", zIndex: 210,
+      display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 16,
+    }}>
+      <div style={{ width: "100%", maxWidth: 480, marginTop: 32 }}>
+        <div style={{ textAlign: "center", marginBottom: 16 }}>
+          <div style={{ fontFamily: DISPLAY_FONT, fontSize: 20, color: C.gold, letterSpacing: 2 }}>⏹ จบเกม — รายงานผล</div>
+        </div>
+        <Panel accent={C.gold} style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ flex: 1, textAlign: "center" }}>
+              <ClubBadge team={homeTeam} size={48} />
+              <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6 }}>{homeTeam?.short || homeTeam?.name}</div>
+            </div>
+            <div style={{ fontFamily: MONO_FONT, fontSize: 30, fontWeight: 800, padding: "0 12px" }}>{homeGoals} - {awayGoals}</div>
+            <div style={{ flex: 1, textAlign: "center" }}>
+              <ClubBadge team={awayTeam} size={48} />
+              <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6 }}>{awayTeam?.short || awayTeam?.name}</div>
+            </div>
+          </div>
+        </Panel>
+        {scorers.length > 0 && (
+          <Panel style={{ marginBottom: 12 }}>
+            <SectionLabel>⚽ ผู้ทำประตู</SectionLabel>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                {homeScorers.map((s, i) => (
+                  <div key={i} style={{ fontSize: 11.5, fontFamily: MONO_FONT }}>{s.player || s.name || homeTeam?.short} {s.minute}'</div>
+                ))}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, textAlign: "right" }}>
+                {awayScorers.map((s, i) => (
+                  <div key={i} style={{ fontSize: 11.5, fontFamily: MONO_FONT }}>{s.player || s.name || awayTeam?.short} {s.minute}'</div>
+                ))}
+              </div>
+            </div>
+          </Panel>
+        )}
+        {starMan && (
+          <Panel style={{ marginBottom: 12, border: `1px solid ${C.gold}` }}>
+            <SectionLabel style={{ color: C.gold }}>⭐ ผู้เล่นยอดเยี่ยม</SectionLabel>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{starMan.name} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>{Number(starMan.rating).toFixed(1)}</span></div>
+          </Panel>
+        )}
+        <button type="button" onClick={onClose} style={{ ...btnStyle(C.good, "#08150e"), width: "100%", fontSize: 14, fontWeight: 800, padding: "12px 0" }}>
+          ปิดหน้าต่าง
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** หน้ารายชื่อผู้เล่นก่อนเขี่ยเปิดเกม — โชว์ทีละฝั่ง เรียงตามฟอร์เมชัน มีดาว/เรตติ้ง */
 function LineupScreen({ team, squad, xi, onSkip }) {
   const players = xi.map((id) => squad.find((sp) => sp.id === id)).filter(Boolean);
@@ -10552,6 +10609,8 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   const [goalFlash, setGoalFlash] = useState(null);
   const [refereeCard, setRefereeCard] = useState(null); // { team, kind: "yellow"|"red", player, minute }
   const [ended, setEnded] = useState(false);
+  const [matchReport, setMatchReport] = useState(null); // { homeGoals, awayGoals, scorers, starMan } — โชว์เป็นหน้าต่างเด้งหลังจบเกม ต้องกดปิดเอง
+  const pendingFinishRef = useRef(null);
   const [pressure, setPressure] = useState(0);
   const [livePossSide, setLivePossSide] = useState("home");
   const [possBallX, setPossBallX] = useState(0.5);
@@ -10846,7 +10905,24 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       playerId,
       red: redCardIdsRef.current.has(playerId),
     }));
-    onFinish(finalHomeGoals, finalAwayGoals, homeXI, awayXI, cardEvents);
+    // ยังไม่เรียก onFinish ทันที — โชว์รายงานผลก่อน แล้วรอผู้เล่นกดปิดเองค่อยเรียกจริง (เก็บไว้ใน ref)
+    pendingFinishRef.current = () => onFinish(finalHomeGoals, finalAwayGoals, homeXI, awayXI, cardEvents);
+    setEnded(true);
+    let starMan = null;
+    [...homeXI.map((id) => ({ id, side: "home" })), ...awayXI.map((id) => ({ id, side: "away" }))].forEach(({ id, side }) => {
+      const rt = playerRatings[id];
+      if (rt == null) return;
+      if (!starMan || rt > starMan.rating) {
+        const p = [...homeSquad, ...awaySquad].find((pl) => pl.id === id);
+        if (p) starMan = { name: p.name, rating: rt, side };
+      }
+    });
+    setMatchReport({ homeGoals: finalHomeGoals, awayGoals: finalAwayGoals, scorers: goalLog, starMan });
+  }
+
+  function closeMatchReport() {
+    setMatchReport(null);
+    pendingFinishRef.current?.();
   }
 
   /* beta-only: instantly resolve remaining time using expected-goals proportional to time left */
@@ -11254,6 +11330,14 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(4,10,7,.96)", zIndex: 100, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", overflowY: "auto", padding: "8px 4px" }}>
+      {matchReport && (
+        <MatchReportModal
+          homeTeam={homeTeam} awayTeam={awayTeam}
+          homeGoals={matchReport.homeGoals} awayGoals={matchReport.awayGoals}
+          scorers={matchReport.scorers} starMan={matchReport.starMan}
+          onClose={closeMatchReport}
+        />
+      )}
       {preMatchPhase === "lineup-home" && <LineupScreen team={homeTeam} squad={homeSquad} xi={homeXI} onSkip={skipPreMatch} />}
       {preMatchPhase === "lineup-away" && <LineupScreen team={awayTeam} squad={awaySquad} xi={awayXI} onSkip={skipPreMatch} />}
       {preMatchPhase === "walkout" && (
@@ -11281,7 +11365,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           subsUsed={subsUsed}
         />
       )}
-      <div className="fc-live-wrap" style={{ width: "100%", opacity: halftimeOpen ? 0.35 : 1, pointerEvents: halftimeOpen ? "none" : "auto" }}>
+      <div style={{ width: "100%", maxWidth: "min(920px, 100%)", opacity: halftimeOpen ? 0.35 : 1, pointerEvents: halftimeOpen ? "none" : "auto" }}>
         {!halftimeOpen && half === 1 && (
           <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6, textAlign: "center" }}>แผนล็อกระหว่างเกม · ปรับได้อีกครั้งตอนพักครึ่ง</div>
         )}
@@ -14296,6 +14380,8 @@ function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
   const [subIn, setSubIn] = useState("");
   const [subBusy, setSubBusy] = useState(false);
   const [mentalityBusy, setMentalityBusy] = useState(false);
+  const [showReport, setShowReport] = useState(false);
+  const reportShownForRef = useRef(null); // matchId ที่เคยโชว์/ปิดรายงานไปแล้ว — กันเด้งซ้ำทุกครั้งที่ poll
   const pollRef = useRef(null);
 
   async function poll() {
@@ -14312,11 +14398,18 @@ function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
     return () => clearInterval(pollRef.current);
   }, [matchId]);
 
+  const isMine = state?.home?.id === myClubId || state?.away?.id === myClubId;
+  useEffect(() => {
+    if (isMine && state?.finished && reportShownForRef.current !== matchId) {
+      reportShownForRef.current = matchId;
+      setShowReport(true);
+    }
+  }, [isMine, state?.finished, matchId]);
+
   const minute = useSmoothMatchMinute(state?.minute ?? 0, state?.kickoffAt, state?.finished);
 
   if (!state) return <Panel><div style={{ fontSize: 12, color: C.textDim, textAlign: "center", padding: 16 }}>กำลังโหลด...</div></Panel>;
 
-  const isMine = state.home?.id === myClubId || state.away?.id === myClubId;
   const isHome = state.home?.id === myClubId;
 
   async function doSub() {
@@ -14349,7 +14442,16 @@ function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
 
   const isScheduled = state.status === "scheduled";
   return (
-    <Panel style={{ border: `1px solid ${state.finished ? C.steel : isScheduled ? C.amber : C.crimson}` }}>
+    <>
+      {showReport && (
+        <MatchReportModal
+          homeTeam={state.home} awayTeam={state.away}
+          homeGoals={state.homeGoals} awayGoals={state.awayGoals}
+          scorers={state.events || []}
+          onClose={() => setShowReport(false)}
+        />
+      )}
+      <Panel style={{ border: `1px solid ${state.finished ? C.steel : isScheduled ? C.amber : C.crimson}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <span style={{ fontSize: 11, fontWeight: 800, color: state.finished ? C.textDim : isScheduled ? C.amber : C.crimson }}>
           {state.finished ? "⏹ จบการแข่งขัน" : isScheduled ? "⏳ รอคิกอฟรอบถัดไป" : `🔴 สด · นาที ${minute}'`}
@@ -14420,7 +14522,8 @@ function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
           <OnlineActionBtn tone="good" disabled={!subOut || !subIn || subBusy} onClick={doSub}>🔄 ยืนยันเปลี่ยนตัว</OnlineActionBtn>
         </div>
       )}
-    </Panel>
+      </Panel>
+    </>
   );
 }
 
