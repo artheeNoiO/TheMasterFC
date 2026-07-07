@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   LEGEND_LEAGUES, LEGEND_TEAMS, LEGEND_PLAYERS, LEGEND_INACTIVE_DAYS,
   LEGEND_ACQUIRE_MIN_TEAM_VALUE, canBidForLegend,
@@ -4168,7 +4169,9 @@ function PlayerDetailModal({ player: p, onClose, squad = null }) {
   const comparePlayer = compareId ? squad?.find((s) => s.id === compareId) : null;
   const compareStats = comparePlayer ? playerRadarStats(comparePlayer) : null;
   const compareOptions = (squad || []).filter((s) => s.id !== p.id);
-  return (
+  // ใช้ portal ต่อกับ document.body โดยตรง — กัน position:fixed ถูกดักด้วย backdrop-filter/transform ของ .fc-panel
+  // บรรพบุรุษ (บั๊กที่เจอจริง: ป๊อปอัพ "จม" กลายเป็น inline อยู่ในการ์ดแทนที่จะลอยเต็มจอ ตอนเปิดจากในตลาดประมูล)
+  return createPortal(
     <div
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
       onClick={onClose}
@@ -4260,7 +4263,8 @@ function PlayerDetailModal({ player: p, onClose, squad = null }) {
           </div>
         ))}
       </Panel>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -11526,7 +11530,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           subsUsed={subsUsed}
         />
       )}
-      <div style={{ width: "100%", maxWidth: "min(920px, 100%)", opacity: halftimeOpen ? 0.35 : 1, pointerEvents: halftimeOpen ? "none" : "auto" }}>
+      <div className="fc-live-wrap" style={{ width: "100%", opacity: halftimeOpen ? 0.35 : 1, pointerEvents: halftimeOpen ? "none" : "auto" }}>
         {!halftimeOpen && half === 1 && (
           <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6, textAlign: "center" }}>แผนล็อกระหว่างเกม · ปรับได้อีกครั้งตอนพักครึ่ง</div>
         )}
