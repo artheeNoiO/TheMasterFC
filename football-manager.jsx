@@ -66,6 +66,7 @@ import {
 } from "@onlinematch";
 import { createOnlineClubDirect } from "@onlinesession";
 import { fetchBattlePassStatus, claimBattlePassTier as claimOnlineBattlePassTier } from "@battlepass";
+import { pullOnlineStaffMachine } from "./client/src/lib/staff-machine.js";
 import {
   createAmbientPitchState, advanceAmbientPitch, ambientAsBallSim,
   computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene, startPenaltyScene,
@@ -6099,6 +6100,34 @@ export default function App({
     return tier;
   }
 
+  /** ตู้หยอดออนไลน์ — เซิร์ฟเวอร์เป็นคนสุ่ม/หักโควต้า (staffFreeDrawsLeft/staffDrawTickets), การ์ดที่ได้เอามารวมเข้ากระเป๋า local เหมือนเดิม */
+  async function pullOnlineMachine() {
+    let res;
+    try {
+      res = await pullOnlineStaffMachine();
+    } catch (e) {
+      showToast(e.message || "หยอดตู้ไม่ได้");
+      return null;
+    }
+    // เซิร์ฟเวอร์เป็นคนตัดสิน type/stars (คุมโควต้า/ความหายาก) ส่วนสเตตละเอียด+ค่าตัว/ค่าจ้าง/portrait ใช้สูตรเดียวกับ Sandbox เติมฝั่ง client
+    const cards = res.cards.map((card) => ({
+      cardId: card.cardId, type: card.type, stars: card.stars, name: card.name,
+      portrait: pickStaffPortrait(card.type, card.specialty, card.stars),
+      ...buildStaffCardPayload(card.type, card.stars),
+      ...(card.type === "COACH" ? { specialty: card.specialty } : {}),
+    }));
+    const mergeOut = { attempts: [] };
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      ensureStaffCardFields(c);
+      applyPulledCardsToCareer(c, cards, res.tier, mergeOut);
+      return c;
+    });
+    showToast(`หยอดตู้ได้ซอง ${res.tier.label}! การ์ด ${cards.length} ใบ (${res.source === "free" ? "สิทธิ์ฟรี" : "ใช้เหรียญตู้"})`);
+    if (mergeOut.attempts.length) setMergeReport({ attempts: mergeOut.attempts, auto: true });
+    return { tier: res.tier, staffDraws: res.staffDraws };
+  }
+
   function mergeStaffCards(type, stars, pickedCardIds = null) {
     const mergeOut = { applied: false, attempts: null };
     updateCareer((prev) => {
@@ -6787,6 +6816,7 @@ export default function App({
             career={career}
             uiLang={uiLang}
             onPull={pullFromMachine}
+            onPullOnline={pullOnlineMachine}
             onOpenPlatinum={openPlatinumPack}
             onMerge={mergeStaffCards}
             onHire={requestHireFromStaffCard}
@@ -13688,9 +13718,11 @@ function StaffGuideView({ career, uiLang = "th" }) {
   );
 }
 
-function StaffCardsView({ career, uiLang = "th", onPull, onOpenPlatinum, onMerge, onHire, onAutoMerge, onToggleAutoTier, onToggleLock }) {
+function StaffCardsView({ career, uiLang = "th", onPull, onPullOnline, onOpenPlatinum, onMerge, onHire, onAutoMerge, onToggleAutoTier, onToggleLock }) {
   const [sub, setSub] = useState("draw");
   const [openingTier, setOpeningTier] = useState(null);
+  const [onlinePullBusy, setOnlinePullBusy] = useState(false);
+  const [onlineDraws, setOnlineDraws] = useState(null);
   // เลือกการ์ดเองสำหรับรวม — key "type_stars" -> Set ของ cardId ที่ติ๊กไว้ (เฉพาะกลุ่มที่มีเกิน MERGE_CARD_COUNT
   // ใบ ถึงจะมีอะไรให้เลือก ไม่งั้นต้องใช้ทั้งหมดอยู่แล้วไม่มีทางเลือก)
   const [pickMode, setPickMode] = useState(() => new Set());
@@ -13698,8 +13730,16 @@ function StaffCardsView({ career, uiLang = "th", onPull, onOpenPlatinum, onMerge
   // สลับออกจากแท็บ "เปิดการ์ด" ระหว่างที่อนิเมชันเปิดซองค้างอยู่ → ถือว่าปิดไปแล้ว กันปัญหากลับมาแท็บ
   // เดิมแล้วอนิเมชันเล่นซ้ำ/ค้าง เพราะ openingTier ยังไม่ถูกเคลียร์ตอนสลับแท็บ
   useEffect(() => { if (sub !== "draw") setOpeningTier(null); }, [sub]);
-  const machineCoins = career.machineCoins ?? 0;
-  const canPullMachine = machineCoins >= MACHINE_PULL_COST;
+  const isOnline = career.playMode === "online";
+  // ออนไลน์: เซิร์ฟเวอร์เป็นคนคุมโควต้าฟรี/เหรียญตู้ (fetch ครั้งแรกตอนหยอดครั้งแรก เพื่อโชว์ตัวเลขจริง)
+  useEffect(() => {
+    if (!isOnline) return;
+    fetchMyShardClub().then((c) => { if (c?.staffDraws) setOnlineDraws(c.staffDraws); }).catch(() => {});
+  }, [isOnline]);
+  const machineCoins = isOnline ? (onlineDraws?.tickets ?? 0) : (career.machineCoins ?? 0);
+  const onlineFreeLeft = isOnline ? (onlineDraws?.freeLeft ?? 0) : 0;
+  const onlineDailyLimit = isOnline ? (onlineDraws?.dailyLimit ?? DAILY_STAFF_CARD_DRAWS) : 0;
+  const canPullMachine = isOnline ? (onlineFreeLeft > 0 || machineCoins > 0) : machineCoins >= MACHINE_PULL_COST;
   const platinumPacks = career.staffPlatinumPacks || 0;
   const bag = career.staffCardBag || [];
   const groups = groupStaffCards(bag);
@@ -13723,12 +13763,15 @@ function StaffCardsView({ career, uiLang = "th", onPull, onOpenPlatinum, onMerge
       <Panel style={{ border: `1px solid ${C.amber}` }}>
         <SectionLabel style={{ color: C.amber }} sub={`${CARDS_PER_STAFF_PULL} ใบ/ซอง · จบลีกอันดับ 1-3 ได้ซอง Platinum`}>การ์ดสตาฟ</SectionLabel>
         <div style={{ display: "flex", gap: 12, fontSize: 11.5, fontFamily: MONO_FONT, color: C.textDim }}>
+          {isOnline && <span>ฟรีวันนี้ <b style={{ color: C.good }}>{onlineFreeLeft}</b>/{onlineDailyLimit}</span>}
           <span>เหรียญตู้ <b style={{ color: C.gold }}>🪙 {machineCoins}</b></span>
           <span>ซอง Platinum <b style={{ color: "#b9e6ff" }}>{platinumPacks}</b></span>
           <span>กระเป๋า <b style={{ color: C.chalk }}>{bag.length}</b></span>
         </div>
         <div style={{ fontSize: 10, color: C.textDim, marginTop: 4 }}>
-          ได้เหรียญตู้วันละ {DAILY_MACHINE_COIN_GRANT} + จบฤดูกาลอีก {SEASON_END_MACHINE_COINS} (สะสมข้ามวันได้)
+          {isOnline
+            ? "หยอดฟรีวันละ 3 ครั้ง — เกินโควต้าใช้เหรียญตู้ (หาได้จาก Battle Pass + จบฤดูกาลอันดับดี)"
+            : `ได้เหรียญตู้วันละ ${DAILY_MACHINE_COIN_GRANT} + จบฤดูกาลอีก ${SEASON_END_MACHINE_COINS} (สะสมข้ามวันได้)`}
         </div>
       </Panel>
 
@@ -13776,8 +13819,21 @@ function StaffCardsView({ career, uiLang = "th", onPull, onOpenPlatinum, onMerge
               </div>
               <button
                 type="button"
-                disabled={!canPullMachine}
-                onClick={() => { const tier = onPull(); if (tier) setOpeningTier(tier); }}
+                disabled={!canPullMachine || onlinePullBusy}
+                onClick={async () => {
+                  if (isOnline) {
+                    setOnlinePullBusy(true);
+                    try {
+                      const res = await onPullOnline();
+                      if (res) { setOnlineDraws(res.staffDraws); setOpeningTier(res.tier); }
+                    } finally {
+                      setOnlinePullBusy(false);
+                    }
+                  } else {
+                    const tier = onPull();
+                    if (tier) setOpeningTier(tier);
+                  }
+                }}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
                   width: "100%", padding: "14px 16px", borderRadius: 10, cursor: canPullMachine ? "pointer" : "not-allowed",
@@ -13791,7 +13847,9 @@ function StaffCardsView({ career, uiLang = "th", onPull, onOpenPlatinum, onMerge
                   <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, marginTop: 2 }}>Bronze 60% · Silver 30% · Gold 10%</div>
                 </div>
                 <div style={{ textAlign: "right", fontSize: 12, fontWeight: 700, color: canPullMachine ? C.chalk : C.textDim, fontFamily: MONO_FONT }}>
-                  {canPullMachine ? `🪙 ${machineCoins}` : "เหรียญไม่พอ"}
+                  {onlinePullBusy ? "..." : isOnline
+                    ? (onlineFreeLeft > 0 ? "ฟรี" : canPullMachine ? `🪙 ${machineCoins}` : "หมดโควต้า")
+                    : (canPullMachine ? `🪙 ${machineCoins}` : "เหรียญไม่พอ")}
                 </div>
               </button>
               {platinumPacks > 0 && (
