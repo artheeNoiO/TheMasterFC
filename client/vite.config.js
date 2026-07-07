@@ -40,6 +40,8 @@ export default defineConfig({
       "@onlinematch": path.resolve(root, "src/lib/online-match.js"),
       "@onlinesession": path.resolve(root, "src/lib/online-session.js"),
       "@battlepass": path.resolve(root, "src/lib/battlepass.js"),
+      "@portraits": path.resolve(root, "src/lib/player-portraits.js"),
+      "@profilecard": path.resolve(root, "src/components/PlayerProfileCard.jsx"),
     },
   },
 });

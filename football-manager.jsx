@@ -15,6 +15,8 @@ import {
 import { BetaStrip } from "@beta";
 import { getDefaultGameUiLang } from "@locale";
 import { t, resolveUiLang, UI_LANGS } from "@i18n";
+import { ensurePlayerPortrait, ensureAllPlayerPortraits } from "@portraits";
+import PlayerProfileCard from "@profilecard";
 import {
   STADIUM_LEVELS, EXTRA_STAFF_EFFECTS, getStadiumLevel, getStadiumDef, stadiumName,
   stadiumUpgradeCost, stadiumAssetValue, stadiumFanCapBonus,
@@ -528,6 +530,7 @@ function genPlayer(position, tier, teamId, forcedAge, startDay, opts = {}) {
   p.wage = computePlayerWage(p.rating);
   p.potential = age <= 21 ? clamp(p.rating + rand(6, 34), p.rating, 99) : age <= 25 ? clamp(p.rating + rand(0, 10), p.rating, 99) : p.rating;
   p.contractEndsDay = (startDay || 1) + rand(150, 400);
+  ensurePlayerPortrait(p);
   return enrichPlayerContract(p);
 }
 const genSquad = (teamId, tier, startDay, opts = {}) => SQUAD_TEMPLATE.map((pos) => genPlayer(pos, tier, teamId, undefined, startDay || 1, opts));
@@ -568,6 +571,7 @@ function buildRosterPlayer(def, teamId, homeTeamId, startDay) {
   p.wage = computePlayerWage(p.rating);
   p.legendLeagueId = def.leagueId;
   p.lastOwnerActivityDay = startDay || 1;
+  ensurePlayerPortrait(p);
   return p;
 }
 
@@ -2177,6 +2181,7 @@ function normalizeCareerSave(c) {
     if (t.manager && !t.manager.trait) t.manager.trait = highestManagerStat(t.manager.stats);
   });
   ensureStaffCardFields(c); // เซฟเก่าก่อนมีระบบภาพเหมือนการ์ดสตาฟ — เติม portrait ย้อนหลังให้ครบทุกใบ
+  ensureAllPlayerPortraits(c);
   Object.values(c.staff || {}).forEach((teamStaff) => {
     ["GK", "DF", "MF", "FW", "FITNESS"].forEach((spec) => {
       if (teamStaff[spec]) teamStaff[spec] = ensureCoachProfile(teamStaff[spec], spec);
@@ -4167,7 +4172,7 @@ function playerRadarStats(p) {
 
 /** popup โชว์สเตตนักเตะแบบละเอียด + กราฟเรดาร์ — เปิดจากคลิกชื่อในหน้า Squad/Tactics
  *  squad (optional): รายชื่อนักเตะในทีมเดียวกัน — ถ้ามีจะเปิดให้เลือกนักเตะอีกคนมาเทียบกราฟซ้อนกันได้ */
-function PlayerDetailModal({ player: p, onClose, squad = null }) {
+function PlayerDetailModal({ player: p, onClose, squad = null, team = null }) {
   const [compareId, setCompareId] = useState("");
   if (!p) return null;
   const radarStats = playerRadarStats(p);
@@ -4182,13 +4187,28 @@ function PlayerDetailModal({ player: p, onClose, squad = null }) {
       onClick={onClose}
     >
       <Panel style={{ maxWidth: 420, width: "100%", maxHeight: "88vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 800 }}>{p.name}{comparePlayer && <span style={{ color: C.blue }}> vs {comparePlayer.name}</span>}</div>
-            <div style={{ fontSize: 11, color: C.textDim, marginTop: 2 }}>{playerPosTH(p)} · อายุ {p.age} · เรตติ้ง {p.rating}</div>
-          </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 2 }}>
           <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.textDim, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
+        <PlayerProfileCard
+          player={p}
+          team={team}
+          shirtColor={teamShirtColor(team)}
+          shortsColor={teamShortsColor(team)}
+          trimColor={team?.secondaryColor || C.chalk}
+          posLabel={playerPosTH(p)}
+          panelBg={C.panel2}
+          steel={C.steel}
+          chalk={C.chalk}
+          textDim={C.textDim}
+          amber={C.amber}
+          monoFont={MONO_FONT}
+        />
+        {comparePlayer && (
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, textAlign: "center" }}>
+            {p.name}<span style={{ color: C.blue }}> vs {comparePlayer.name}</span>
+          </div>
+        )}
         {compareOptions.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
             <span style={{ fontSize: 9.5, color: C.textDim }}>เทียบกับ:</span>
@@ -5612,6 +5632,7 @@ export default function App({
         role: "balanced",
         contractEndsDay: c.day + rand(120, 280),
       });
+      ensurePlayerPortrait(newPl);
       c.players.push(newPl);
       c.scoutFinds.splice(idx, 1);
       registerNewSquadPlayer(c, f.playerId);
