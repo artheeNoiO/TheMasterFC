@@ -4205,6 +4205,47 @@ function PlayerDetailModal({ player: p, onClose, squad = null }) {
           </div>
         )}
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}><PlayerStarsRow p={p} /></div>
+        {(p.altPos || []).length > 0 && (
+          <div style={{ display: "flex", justifyContent: "center", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 9, color: C.textDim, alignSelf: "center" }}>เล่นได้:</span>
+            {p.altPos.map((ap) => (
+              <span key={ap} style={{ fontSize: 9.5, fontWeight: 700, color: C.chalk, background: C.panel2, border: `1px solid ${C.steel}`, borderRadius: 5, padding: "2px 6px" }}>{ap}</span>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginBottom: 12, fontFamily: MONO_FONT, textAlign: "center" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.chalk }}>{p.careerApps || 0}</div>
+            <div style={{ fontSize: 8.5, color: C.textDim }}>ลงเล่น (รวม)</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.chalk }}>{p.careerGoals || 0}</div>
+            <div style={{ fontSize: 8.5, color: C.textDim }}>ประตู (รวม)</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.good }}>{p.seasonGoals || 0}</div>
+            <div style={{ fontSize: 8.5, color: C.textDim }}>ประตูฤดูนี้</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: p.seasonYellows >= 3 ? C.amber : C.chalk }}>{p.seasonYellows || 0}🟨</div>
+            <div style={{ fontSize: 8.5, color: C.textDim }}>ใบเหลืองฤดูนี้</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: C.textDim, marginBottom: 2 }}><span>มูด</span><span style={{ fontFamily: MONO_FONT, color: C.chalk }}>{p.morale}</span></div>
+            <MiniBar value={p.morale} color={p.morale >= 65 ? C.good : p.morale >= 40 ? C.amber : C.crimson} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: C.textDim, marginBottom: 2 }}><span>สภาพร่างกาย</span><span style={{ fontFamily: MONO_FONT, color: C.chalk }}>{p.stamina}</span></div>
+            <MiniBar value={p.stamina} color={p.stamina >= 65 ? C.good : p.stamina >= 40 ? C.amber : C.crimson} />
+          </div>
+        </div>
+        {p.personality && PLAYER_PERSONALITIES[p.personality] && (
+          <div style={{ fontSize: 10.5, color: C.textDim, marginBottom: 12, textAlign: "center" }}>
+            บุคลิก: <b style={{ color: C.chalk }}>{PLAYER_PERSONALITIES[p.personality].th}</b> — {PLAYER_PERSONALITIES[p.personality].descTh}
+          </div>
+        )}
         {Object.keys(ATTR_GROUPS).map((grp) => (
           <div key={grp} style={{ marginTop: 10 }}>
             <div style={{ fontSize: 9.5, color: GROUP_COLOR[grp], marginBottom: 3, fontWeight: 700 }}>{GROUP_TH[grp]}</div>
@@ -10180,6 +10221,7 @@ function MarketScoutView({ scoutFinds, budget, onBuyScoutFind, onScoutSearch, on
   );
 }
 function ScoutFindCard({ f, budget, currentDay, onBuy }) {
+  const [showDetail, setShowDetail] = useState(false);
   const daysLeft = f.expiresDay - currentDay;
   const canBuy = budget >= f.buyFee;
   return (
@@ -10187,8 +10229,9 @@ function ScoutFindCard({ f, budget, currentDay, onBuy }) {
       <RatingBadge value={f.rating} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 700 }}>
-          {f.name} <span style={{ fontSize: 10, color: playerPosColor(f) }}>{playerPosTH(f)}</span>
+          <span onClick={() => setShowDetail(true)} role="button" style={{ cursor: "pointer", textDecoration: "underline dotted" }}>{f.name}</span> <span style={{ fontSize: 10, color: playerPosColor(f) }}>{playerPosTH(f)}</span>
         </div>
+        {showDetail && <PlayerDetailModal player={f} onClose={() => setShowDetail(false)} />}
         <div style={{ fontSize: 11, color: C.textDim, fontFamily: MONO_FONT, marginTop: 2 }}>
           อายุ {f.age} · ศักยภาพ {bandOf(f.potential)} · {f.sourceNote}
         </div>
@@ -10217,6 +10260,7 @@ function ScoutFindCard({ f, budget, currentDay, onBuy }) {
   );
 }
 function ListingCard({ l, budget, onBid, marketOpen, now }) {
+  const [showDetail, setShowDetail] = useState(false);
   const secsLeft = Math.max(0, Math.round((l.endsAt - now) / 1000));
   const wageStep = Math.max(100, Math.round((l.topBid.wage * 0.05) / 100) * 100);
   const feeStep = Math.max(1000, Math.round((l.topBid.fee * 0.05) / 1000) * 1000);
@@ -10243,8 +10287,11 @@ function ListingCard({ l, budget, onBid, marketOpen, now }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10, paddingRight: 54 }}>
         <RatingBadge value={l.rating} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 800 }}>{l.name} <span style={{ fontSize: 10, color: playerPosColor(l) }}>{playerPosTH(l)}</span></div>
+          <div style={{ fontSize: 14, fontWeight: 800 }}>
+            <span onClick={() => setShowDetail(true)} role="button" style={{ cursor: "pointer", textDecoration: "underline dotted" }}>{l.name}</span> <span style={{ fontSize: 10, color: playerPosColor(l) }}>{playerPosTH(l)}</span>
+          </div>
           <div style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT }}>อายุ {l.age} · ศักยภาพ {bandOf(l.potential)} · จาก {l.sourceTeamName}</div>
+          {showDetail && <PlayerDetailModal player={l} onClose={() => setShowDetail(false)} />}
         </div>
       </div>
       <div style={{ display: "flex", gap: 6, marginTop: 8, fontSize: 9.5, fontFamily: MONO_FONT }}>
