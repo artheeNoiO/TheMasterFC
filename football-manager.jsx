@@ -10630,15 +10630,16 @@ function HalftimeOverlay({ scoreLabel, formation, mentality, instructions, onFor
 }
 
 /** หน้าต่างรายงานผลหลังจบเกม — ใช้ได้ทั้งซานด์บ็อกซ์และออนไลน์ ผู้เล่นต้องกดปิดเอง ไม่ปิดอัตโนมัติ */
-function MatchReportModal({ homeTeam, awayTeam, homeGoals, awayGoals, scorers = [], starMan, onClose }) {
+function MatchReportModal({ homeTeam, awayTeam, homeGoals, awayGoals, scorers = [], starMan, stats, possHomePct, onClose }) {
   const homeScorers = scorers.filter((s) => s.team === "home" || s.side === "home");
   const awayScorers = scorers.filter((s) => s.team === "away" || s.side === "away");
-  return (
+  // ใช้ portal ต่อกับ document.body — กันบั๊กเดียวกับป๊อปอัพโปรไฟล์นักเตะ (position:fixed ถูกดักด้วย backdrop-filter ของ .fc-panel บรรพบุรุษ)
+  return createPortal(
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(4,10,7,.94)", zIndex: 210,
+      position: "fixed", inset: 0, background: "#04100a", zIndex: 210,
       display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: 16,
     }}>
-      <div style={{ width: "100%", maxWidth: 480, marginTop: 32 }}>
+      <div style={{ width: "100%", maxWidth: 480, marginTop: 32, marginBottom: 32 }}>
         <div style={{ textAlign: "center", marginBottom: 16 }}>
           <div style={{ fontFamily: DISPLAY_FONT, fontSize: 20, color: C.gold, letterSpacing: 2 }}>⏹ จบเกม — รายงานผล</div>
         </div>
@@ -10678,11 +10679,23 @@ function MatchReportModal({ homeTeam, awayTeam, homeGoals, awayGoals, scorers = 
             <div style={{ fontSize: 13, fontWeight: 700 }}>{starMan.name} <span style={{ color: C.amber, fontFamily: MONO_FONT }}>{Number(starMan.rating).toFixed(1)}</span></div>
           </Panel>
         )}
+        {stats && (
+          <Panel style={{ marginBottom: 12 }}>
+            <SectionLabel>📊 สถิติการแข่งขัน</SectionLabel>
+            {possHomePct != null && <StatRow label="ครองบอล" home={possHomePct} away={100 - possHomePct} />}
+            <StatRow label="ยิงประตู" home={stats.shotsH} away={stats.shotsA} />
+            <StatRow label="ยิงตรงกรอบ" home={stats.sotH} away={stats.sotA} />
+            <StatRow label="เตะมุม" home={stats.cornersH} away={stats.cornersA} />
+            <StatRow label="ฟาวล์" home={stats.foulsH} away={stats.foulsA} />
+            <StatRow label="ใบเหลือง/แดง" home={stats.cardsH} away={stats.cardsA} />
+          </Panel>
+        )}
         <button type="button" onClick={onClose} style={{ ...btnStyle(C.good, "#08150e"), width: "100%", fontSize: 14, fontWeight: 800, padding: "12px 0" }}>
           ปิดหน้าต่าง
         </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -11129,7 +11142,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         if (p) starMan = { name: p.name, rating: rt, side };
       }
     });
-    setMatchReport({ homeGoals: finalHomeGoals, awayGoals: finalAwayGoals, scorers: goalLog, starMan });
+    setMatchReport({ homeGoals: finalHomeGoals, awayGoals: finalAwayGoals, scorers: goalLog, starMan, stats, possHomePct });
   }
 
   function closeMatchReport() {
