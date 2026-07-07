@@ -825,25 +825,39 @@ function pickStaffPortrait(type, specialty, stars) {
   const file = choice(pool);
   return `/staff-portraits/${folder}/${encodeURIComponent(file)}`;
 }
-const STARTING_STAFF_TICKETS = 20;
-const DAILY_FREE_STAFF_DRAWS = DAILY_STAFF_CARD_DRAWS;
-const CARDS_PER_STAFF_PULL = 10;
+/** ตู้หยอดซองการ์ดสตาฟ — หยอดฟรีวันละ N ครั้ง สุ่มได้ซอง Bronze/Silver/Gold (Bronze ออกบ่อยสุด) */
+const DAILY_FREE_MACHINE_PULLS = 3;
+const CARDS_PER_STAFF_PULL = 5;
 /** สตาฟเริ่มต้น — ทุกตำแหน่ง 3★ สเตตเท่ากัน (ไม่สุ่มการ์ด gacha) */
 const STARTER_STAFF_STARS = 3;
 const STARTER_MANAGER_FORMATION = "4-4-2";
 const STARTER_COACHING_STYLE = "balanced";
 const MERGE_CARD_COUNT = 10;
-const SEASON_STAFF_TICKETS = [10, 8, 6, 4, 2];
+/** ซอง Platinum ได้จากการจบลีกอันดับ 1-3 เท่านั้น (ไม่ขายในตู้) — index 0 = อันดับ 1 */
+const SEASON_PLATINUM_PACKS = [3, 2, 1];
 const STAR_PULL_WEIGHTS = [30, 25, 20, 12, 8, 4, 1];
 
-/** ซองเปิดการ์ด 3 ระดับ (แบบ FIFA Ultimate Team) — น้ำหนักดาว 1-7★ ต่างกันตามซอง
- * freeEligible = ใช้สิทธิ์ฟรีรายวันได้ (เฉพาะ Bronze กันคนฟาร์มฟรีซองแพง) */
+/** ซองเปิดการ์ด (แบบ FIFA Ultimate Team) — น้ำหนักดาว 1-7★ ต่างกันตามซอง
+ * machineWeight = โอกาสสุ่มออกจากตู้หยอด (Bronze ออกบ่อยสุด) — Platinum ไม่อยู่ในตู้ ได้จากรางวัลจบลีกท็อป 3 เท่านั้น
+ * Gold ตอนนี้จำกัดแค่ 5★ สูงสุด — 6-7★ ได้เฉพาะจากซอง Platinum */
 const STAFF_PACK_TIERS = {
-  bronze: { key: "bronze", label: "Bronze", color: "#c9895a", ticketCost: 1, weights: [45, 30, 15, 7, 3, 0, 0], freeEligible: true },
-  silver: { key: "silver", label: "Silver", color: "#c7d1d6", ticketCost: 3, weights: [15, 25, 25, 20, 10, 4, 1], freeEligible: false },
-  gold: { key: "gold", label: "Gold", color: C.gold, ticketCost: 8, weights: [0, 5, 15, 25, 25, 20, 10], freeEligible: false },
+  bronze: { key: "bronze", label: "Bronze", color: "#c9895a", machineWeight: 60, weights: [45, 30, 15, 7, 3, 0, 0] },
+  silver: { key: "silver", label: "Silver", color: "#c7d1d6", machineWeight: 30, weights: [15, 25, 25, 20, 10, 4, 1] },
+  gold: { key: "gold", label: "Gold", color: C.gold, machineWeight: 10, weights: [0, 10, 20, 35, 35, 0, 0] },
+  platinum: { key: "platinum", label: "Platinum", color: "#b9e6ff", machineWeight: 0, weights: [0, 0, 0, 0, 40, 35, 25] },
 };
 const STAFF_PACK_TIER_LIST = [STAFF_PACK_TIERS.bronze, STAFF_PACK_TIERS.silver, STAFF_PACK_TIERS.gold];
+
+/** สุ่มเลือกซองจากตู้หยอดตามน้ำหนัก machineWeight (Bronze/Silver/Gold เท่านั้น) */
+function rollMachineTier() {
+  const total = STAFF_PACK_TIER_LIST.reduce((s, t) => s + t.machineWeight, 0);
+  let r = rand(1, total);
+  for (const tier of STAFF_PACK_TIER_LIST) {
+    r -= tier.machineWeight;
+    if (r <= 0) return tier;
+  }
+  return STAFF_PACK_TIERS.bronze;
+}
 
 function rollStaffCardStars(weights = STAR_PULL_WEIGHTS) {
   const total = weights.reduce((a, b) => a + b, 0);
@@ -1028,10 +1042,10 @@ function genStaffCard(fixedType, fixedStars, weights) {
 function defaultStaffCardState(day = 1) {
   const today = new Date().toISOString().slice(0, 10);
   return {
-    staffDrawTickets: STARTING_STAFF_TICKETS,
-    staffFreeDrawsLeft: DAILY_FREE_STAFF_DRAWS,
+    machinePullsLeft: DAILY_FREE_MACHINE_PULLS,
     staffFreeDrawResetDay: day,
     staffFreeDrawResetDate: today,
+    staffPlatinumPacks: 0,
     staffCardBag: [],
     lastStaffPull: null,
     autoMergeTiers: { 1: false, 2: false, 3: false, 4: false },
@@ -1050,8 +1064,8 @@ function ensureStaffCardIds(bag) {
 }
 
 function ensureStaffCardFields(c) {
-  if (c.staffDrawTickets == null) c.staffDrawTickets = STARTING_STAFF_TICKETS;
-  if (c.staffFreeDrawsLeft == null) c.staffFreeDrawsLeft = DAILY_FREE_STAFF_DRAWS;
+  if (c.machinePullsLeft == null) c.machinePullsLeft = DAILY_FREE_MACHINE_PULLS;
+  if (c.staffPlatinumPacks == null) c.staffPlatinumPacks = 0;
   if (c.staffFreeDrawResetDay == null) c.staffFreeDrawResetDay = c.day || 1;
   if (c.staffFreeDrawResetDate == null) c.staffFreeDrawResetDate = new Date().toISOString().slice(0, 10);
   if (!c.staffCardBag) c.staffCardBag = [];
@@ -1116,19 +1130,19 @@ function resetDailyStaffDraws(c) {
   // เรียกกลับไปกลับมาแบบนี้จะวนไม่รู้จบจน stack overflow (บั๊กที่เจอจริง: สร้างเกมใหม่ไม่ได้เลย)
   const today = new Date().toISOString().slice(0, 10);
   if (c.staffFreeDrawResetDate !== today) {
-    c.staffFreeDrawsLeft = DAILY_STAFF_CARD_DRAWS;
+    c.machinePullsLeft = DAILY_FREE_MACHINE_PULLS;
     c.staffFreeDrawResetDate = today;
     c.staffFreeDrawResetDay = c.day;
   }
   return c;
 }
 
-function awardSeasonStaffTickets(c, rank) {
+function awardSeasonPlatinumPacks(c, rank) {
   ensureStaffCardFields(c);
-  if (rank >= 1 && rank <= 5) {
-    const tickets = SEASON_STAFF_TICKETS[rank - 1];
-    c.staffDrawTickets += tickets;
-    c.log = [`🎫 จบอันดับที่ ${rank} ได้ตั๋วสุ่มการ์ด ${tickets} ใบ`, ...c.log];
+  if (rank >= 1 && rank <= 3) {
+    const packs = SEASON_PLATINUM_PACKS[rank - 1];
+    c.staffPlatinumPacks += packs;
+    c.log = [`✨ จบอันดับที่ ${rank} ได้ซอง Platinum ${packs} ใบ (การ์ด 5-7★)`, ...c.log];
   }
 }
 
@@ -1368,9 +1382,9 @@ const SHOP_ITEMS = [
   },
   {
     id: "staff_ticket",
-    name: "ตั๋วเปิดซองการ์ดสตาฟ",
-    desc: "ได้ตั๋วเปิดการ์ดสตาฟทันที 1 ใบ",
-    icon: "🎫",
+    name: "หยอดตู้พิเศษ",
+    desc: "ได้สิทธิ์หยอดตู้การ์ดสตาฟเพิ่มทันที 1 ครั้ง (นอกเหนือโควตาฟรีวันนี้)",
+    icon: "🎰",
     coinCost: 15,
     instant: true,
   },
@@ -1946,11 +1960,11 @@ function migrateSaveV3ToV4(c) {
   return c;
 }
 
-/** v5 — staff card gacha: tickets, bag, daily free draws */
+/** v5 — staff card gacha: ตู้หยอด (machinePullsLeft), ซอง Platinum, bag, daily free draws */
 function migrateSaveV4ToV5(c) {
   const init = defaultStaffCardState(c.day || 1);
-  if (c.staffDrawTickets == null) c.staffDrawTickets = init.staffDrawTickets;
-  if (c.staffFreeDrawsLeft == null) c.staffFreeDrawsLeft = init.staffFreeDrawsLeft;
+  if (c.machinePullsLeft == null) c.machinePullsLeft = init.machinePullsLeft;
+  if (c.staffPlatinumPacks == null) c.staffPlatinumPacks = init.staffPlatinumPacks;
   if (c.staffFreeDrawResetDay == null) c.staffFreeDrawResetDay = init.staffFreeDrawResetDay;
   if (!c.staffCardBag) c.staffCardBag = init.staffCardBag;
   if (c.lastStaffPull == null) c.lastStaffPull = null;
@@ -3428,7 +3442,7 @@ function rolloverSeason(c) {
   processSeasonEndFans(c, prevPos, prevRow, prevDivision,
     !!promotedTeams.find((t) => t.id === c.userTeamId),
     !!relegatedTeams.find((t) => t.id === c.userTeamId));
-  awardSeasonStaffTickets(c, prevPos);
+  awardSeasonPlatinumPacks(c, prevPos);
 
   // --- trophy cabinet: league titles + promotion ---
   if (prevPos === 1) awardTrophy(c, prevDivision === 0 ? "master_champion" : "challenger_champion");
@@ -3602,7 +3616,7 @@ function createNewCareer(customClub, managerName = "ผู้จัดการ"
     ...defaultStaffCardState(1),
     worldNews: [],
     flashWorldNewsId: null,
-    log: [`📰 [โลก TMFC] สโมสรใหม่ ${userTeam.name} (${managerName}) ถูกจัดตั้งใน The Master FC Online`, `ยินดีต้อนรับสู่ตำแหน่งไดเรคเตอร์ฟุตบอลของ ${userTeam.name}! เริ่มในโลกจำลอง — Master League คือ ${legendLeagueLabel(legendLeagueId)} (ทีม/ซูเปอร์สตาร์ล้อโลกจริง)`, `งบเริ่มต้น ${formatMoney(STARTING_BUDGET)}`, `สร้างมูลค่าสโมสรรวมถึง ${formatMoney(ONLINE_UNLOCK_TEAM_VALUE)} เพื่อปลดล็อกออนไลน์`, `เริ่มต้นที่ Challenger League ไต่อันดับเพื่อเลื่อนชั้นสู่ Master League`, `👥 ฐานแฟนบอลเริ่มต้น 2,500 คน`, `🎫 เปิดการ์ดฟรีวันละ ${DAILY_STAFF_CARD_DRAWS} ครั้ง (รีเซ็ตทุกวัน) · ตั๋วเริ่มต้น ${STARTING_STAFF_TICKETS} ใบ`],
+    log: [`📰 [โลก TMFC] สโมสรใหม่ ${userTeam.name} (${managerName}) ถูกจัดตั้งใน The Master FC Online`, `ยินดีต้อนรับสู่ตำแหน่งไดเรคเตอร์ฟุตบอลของ ${userTeam.name}! เริ่มในโลกจำลอง — Master League คือ ${legendLeagueLabel(legendLeagueId)} (ทีม/ซูเปอร์สตาร์ล้อโลกจริง)`, `งบเริ่มต้น ${formatMoney(STARTING_BUDGET)}`, `สร้างมูลค่าสโมสรรวมถึง ${formatMoney(ONLINE_UNLOCK_TEAM_VALUE)} เพื่อปลดล็อกออนไลน์`, `เริ่มต้นที่ Challenger League ไต่อันดับเพื่อเลื่อนชั้นสู่ Master League`, `👥 ฐานแฟนบอลเริ่มต้น 2,500 คน`, `🎰 หยอดตู้การ์ดสตาฟฟรีวันละ ${DAILY_FREE_MACHINE_PULLS} ครั้ง (รีเซ็ตทุกวัน)`],
   };
   const newsItem = buildNewClubWorldNews({
     season: career.season,
@@ -4423,8 +4437,8 @@ export default function App({
         const c = JSON.parse(JSON.stringify(prev));
         if (itemId === "staff_ticket") {
           ensureStaffCardFields(c);
-          c.staffDrawTickets += 1;
-          c.log = [`🎫 แลกตั๋วเปิดการ์ดสตาฟ 1 ใบ (ซื้อจากร้านค้า)`, ...c.log];
+          c.machinePullsLeft += 1;
+          c.log = [`🎰 ได้สิทธิ์หยอดตู้พิเศษ 1 ครั้ง (ซื้อจากร้านค้า)`, ...c.log];
         } else if (itemId === "camp_skip") {
           c.trainingCampCooldownDay = c.day;
           c.log = [`⏩ ใช้บัตรข้ามคูลดาวน์แคมป์ซ้อม — จัดแคมป์ได้ทันที`, ...c.log];
@@ -6003,57 +6017,78 @@ export default function App({
     });
   }
 
-  /* ---------- staff card gacha ---------- */
-  function pullStaffCards(tierKey = "bronze") {
-    const tier = STAFF_PACK_TIERS[tierKey] || STAFF_PACK_TIERS.bronze;
+  /* ---------- staff card gacha: ตู้หยอด (สุ่ม Bronze/Silver/Gold ฟรีวันละ N ครั้ง) + ซอง Platinum (รางวัลจบลีกท็อป 3) ---------- */
+  function applyPulledCardsToCareer(c, pulled, tier, mergeOut) {
+    c.staffCardBag = [...c.staffCardBag, ...pulled];
+    const { removeIds, newCards, attempts } = computeAutoMergeAttempts(c.staffCardBag, c.autoMergeTiers);
+    if (attempts.length) {
+      const removeSet = new Set(removeIds);
+      purgeCardsFromBag(c, removeSet);
+      c.staffCardBag.push(...newCards);
+      mergeOut.attempts = attempts;
+    }
+    c.lastStaffPull = pulled
+      .map((card) => c.staffCardBag.find((b) => b.cardId === card.cardId))
+      .filter(Boolean);
+    c.log = [`🎰 หยอดตู้ได้ซอง ${tier.label} — การ์ด ${pulled.length} ใบ`, ...c.log];
+    if (attempts.length) {
+      const ok = attempts.filter((a) => a.success).length;
+      c.log = [`✨ รวมการ์ดอัตโนมัติ ${attempts.length} ชุด — สำเร็จ ${ok} ชุด`, ...c.log];
+    }
+  }
+
+  function pullFromMachine() {
+    const tier = rollMachineTier();
     const pulled = Array.from({ length: CARDS_PER_STAFF_PULL }, () => genStaffCard(null, null, tier.weights));
     const mergeOut = { attempts: [] };
-    // เช็คสิทธิ์ฟรี/ตั๋วและหักออกจาก "prev" ภายใน updateCareer เท่านั้น (ไม่ใช้ค่า career จาก closure ข้างนอก)
-    // กันบั๊กที่เจอจริง: เปิดซองได้ (การ์ดเข้ากระเป๋า) แต่ตัวนับตั๋ว/สิทธิ์ฟรีไม่ลด เพราะ canFree/canTicket
-    // เดิมคำนวณจากค่า career ตอนคลิก ซึ่งอาจไม่ตรงกับค่าล่าสุดตอน updateCareer ทำงานจริง
-    const pullOut = { applied: false, usedFree: false, reason: null };
+    // เช็คสิทธิ์หยอดตู้และหักออกจาก "prev" ภายใน updateCareer เท่านั้น (ไม่ใช้ค่า career จาก closure ข้างนอก)
+    // กันบั๊กที่เจอจริง: เปิดซองได้ (การ์ดเข้ากระเป๋า) แต่ตัวนับสิทธิ์ไม่ลด เพราะคำนวณจากค่า career ตอนคลิกซึ่งอาจไม่ตรงกับค่าล่าสุด
+    const pullOut = { applied: false, reason: null };
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       ensureStaffCardFields(c);
-      const freeLeft = c.staffFreeDrawsLeft || 0;
-      const tickets = c.staffDrawTickets || 0;
-      // สิทธิ์ฟรีรายวันใช้ได้เฉพาะซอง Bronze เท่านั้น — Silver/Gold ต้องจ่ายตั๋วเสมอไม่ว่าจะเหลือสิทธิ์ฟรีอยู่หรือไม่
-      const canFree = tier.freeEligible && freeLeft > 0;
-      const canTicket = tickets >= tier.ticketCost;
-      if (!canFree && !canTicket) {
-        pullOut.reason = canFree === false && tier.ticketCost > 1
-          ? `ตั๋วไม่พอ — ซอง ${tier.label} ใช้ ${tier.ticketCost} ตั๋ว (มี ${tickets})`
-          : "ไม่มีสิทธิ์เปิดการ์ด — ใช้ฟรีหมดแล้วและไม่มีตั๋ว";
+      if ((c.machinePullsLeft || 0) <= 0) {
+        pullOut.reason = "หยอดตู้ครบโควต้าวันนี้แล้ว — รอพรุ่งนี้ หรือซื้อสิทธิ์เพิ่มที่ร้านค้า";
         return prev;
       }
-      c.staffCardBag = [...c.staffCardBag, ...pulled];
-      const { removeIds, newCards, attempts } = computeAutoMergeAttempts(c.staffCardBag, c.autoMergeTiers);
-      if (attempts.length) {
-        const removeSet = new Set(removeIds);
-        purgeCardsFromBag(c, removeSet);
-        c.staffCardBag.push(...newCards);
-        mergeOut.attempts = attempts;
-      }
-      c.lastStaffPull = pulled
-        .map((card) => c.staffCardBag.find((b) => b.cardId === card.cardId))
-        .filter(Boolean);
-      if (canFree) { c.staffFreeDrawsLeft -= 1; pullOut.usedFree = true; }
-      else c.staffDrawTickets -= tier.ticketCost;
+      applyPulledCardsToCareer(c, pulled, tier, mergeOut);
+      c.machinePullsLeft -= 1;
       pullOut.applied = true;
-      c.log = [`🃏 เปิดซอง ${tier.label} ${pulled.length} ใบ (${canFree ? "ฟรี" : `ใช้ ${tier.ticketCost} ตั๋ว`})`, ...c.log];
-      if (attempts.length) {
-        const ok = attempts.filter((a) => a.success).length;
-        c.log = [`✨ รวมการ์ดอัตโนมัติ ${attempts.length} ชุด — สำเร็จ ${ok} ชุด`, ...c.log];
+      return c;
+    });
+    if (!pullOut.applied) {
+      showToast(pullOut.reason || "หยอดตู้ไม่ได้");
+      return null;
+    }
+    showToast(`หยอดตู้ได้ซอง ${tier.label}! การ์ด ${pulled.length} ใบ`);
+    if (mergeOut.attempts.length) setMergeReport({ attempts: mergeOut.attempts, auto: true });
+    return tier;
+  }
+
+  function openPlatinumPack() {
+    const tier = STAFF_PACK_TIERS.platinum;
+    const pulled = Array.from({ length: CARDS_PER_STAFF_PULL }, () => genStaffCard(null, null, tier.weights));
+    const mergeOut = { attempts: [] };
+    const pullOut = { applied: false, reason: null };
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      ensureStaffCardFields(c);
+      if ((c.staffPlatinumPacks || 0) <= 0) {
+        pullOut.reason = "ไม่มีซอง Platinum — ได้จากการจบลีกอันดับ 1-3 เท่านั้น";
+        return prev;
       }
+      applyPulledCardsToCareer(c, pulled, tier, mergeOut);
+      c.staffPlatinumPacks -= 1;
+      pullOut.applied = true;
       return c;
     });
     if (!pullOut.applied) {
       showToast(pullOut.reason || "เปิดซองไม่ได้");
-      return false;
+      return null;
     }
-    showToast(`เปิดซอง ${tier.label} ได้การ์ด ${pulled.length} ใบ! (${pullOut.usedFree ? "ฟรี" : `ใช้ ${tier.ticketCost} ตั๋ว`})`);
+    showToast(`เปิดซอง Platinum! การ์ด ${pulled.length} ใบ (5-7★)`);
     if (mergeOut.attempts.length) setMergeReport({ attempts: mergeOut.attempts, auto: true });
-    return true;
+    return tier;
   }
 
   function mergeStaffCards(type, stars, pickedCardIds = null) {
@@ -6743,7 +6778,8 @@ export default function App({
           <StaffCardsView
             career={career}
             uiLang={uiLang}
-            onPull={pullStaffCards}
+            onPull={pullFromMachine}
+            onOpenPlatinum={openPlatinumPack}
             onMerge={mergeStaffCards}
             onHire={requestHireFromStaffCard}
             onAutoMerge={runAutoMergeNow}
@@ -13644,7 +13680,7 @@ function StaffGuideView({ career, uiLang = "th" }) {
   );
 }
 
-function StaffCardsView({ career, uiLang = "th", onPull, onMerge, onHire, onAutoMerge, onToggleAutoTier, onToggleLock }) {
+function StaffCardsView({ career, uiLang = "th", onPull, onOpenPlatinum, onMerge, onHire, onAutoMerge, onToggleAutoTier, onToggleLock }) {
   const [sub, setSub] = useState("draw");
   const [openingTier, setOpeningTier] = useState(null);
   // เลือกการ์ดเองสำหรับรวม — key "type_stars" -> Set ของ cardId ที่ติ๊กไว้ (เฉพาะกลุ่มที่มีเกิน MERGE_CARD_COUNT
@@ -13654,8 +13690,8 @@ function StaffCardsView({ career, uiLang = "th", onPull, onMerge, onHire, onAuto
   // สลับออกจากแท็บ "เปิดการ์ด" ระหว่างที่อนิเมชันเปิดซองค้างอยู่ → ถือว่าปิดไปแล้ว กันปัญหากลับมาแท็บ
   // เดิมแล้วอนิเมชันเล่นซ้ำ/ค้าง เพราะ openingTier ยังไม่ถูกเคลียร์ตอนสลับแท็บ
   useEffect(() => { if (sub !== "draw") setOpeningTier(null); }, [sub]);
-  const tickets = career.staffDrawTickets || 0;
-  const freeLeft = career.staffFreeDrawsLeft || 0;
+  const machinePullsLeft = career.machinePullsLeft ?? DAILY_FREE_MACHINE_PULLS;
+  const platinumPacks = career.staffPlatinumPacks || 0;
   const bag = career.staffCardBag || [];
   const groups = groupStaffCards(bag);
   const bagIds = new Set(bag.map((c) => c.cardId));
@@ -13676,10 +13712,10 @@ function StaffCardsView({ career, uiLang = "th", onPull, onMerge, onHire, onAuto
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Panel style={{ border: `1px solid ${C.amber}` }}>
-        <SectionLabel style={{ color: C.amber }} sub={`${CARDS_PER_STAFF_PULL} ใบ/ครั้ง · จบลีกอันดับ 1–5 ได้ตั๋วเพิ่ม`}>การ์ดสตาฟ</SectionLabel>
+        <SectionLabel style={{ color: C.amber }} sub={`${CARDS_PER_STAFF_PULL} ใบ/ซอง · จบลีกอันดับ 1-3 ได้ซอง Platinum`}>การ์ดสตาฟ</SectionLabel>
         <div style={{ display: "flex", gap: 12, fontSize: 11.5, fontFamily: MONO_FONT, color: C.textDim }}>
-          <span>ฟรีวันนี้ <b style={{ color: C.good }}>{freeLeft}</b>/{DAILY_FREE_STAFF_DRAWS}</span>
-          <span>ตั๋ว <b style={{ color: C.amber }}>{tickets}</b></span>
+          <span>หยอดตู้วันนี้ <b style={{ color: C.good }}>{machinePullsLeft}</b>/{DAILY_FREE_MACHINE_PULLS}</span>
+          <span>ซอง Platinum <b style={{ color: "#b9e6ff" }}>{platinumPacks}</b></span>
           <span>กระเป๋า <b style={{ color: C.chalk }}>{bag.length}</b></span>
         </div>
       </Panel>
@@ -13711,36 +13747,48 @@ function StaffCardsView({ career, uiLang = "th", onPull, onMerge, onHire, onAuto
           ) : (
             <>
               <div style={{ fontSize: 12, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
-                เปิดครั้งละ {CARDS_PER_STAFF_PULL} ใบ · เลือกระดับซอง · สิทธิ์ฟรีรายวันใช้ได้เฉพาะ Bronze
+                หยอดตู้ 1 ครั้ง = สุ่มซอง Bronze/Silver/Gold ({CARDS_PER_STAFF_PULL} ใบ) — Bronze ออกบ่อยสุด, Gold หายากสุด (สูงสุด 5★)
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {STAFF_PACK_TIER_LIST.map((tier) => {
-                  const canFreeThis = tier.freeEligible && freeLeft > 0;
-                  const canTicketThis = tickets >= tier.ticketCost;
-                  const canPullThis = canFreeThis || canTicketThis;
-                  const oddsHint = tier.weights[6] > 0 ? "มีโอกาสได้ 7★" : tier.weights[0] === 0 ? "การันตีอย่างน้อย 2★" : "คละดาว";
-                  return (
-                    <button key={tier.key} type="button" disabled={!canPullThis} onClick={() => { if (onPull(tier.key)) setOpeningTier(tier); }} style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "10px 14px", borderRadius: 10, cursor: canPullThis ? "pointer" : "not-allowed",
-                      background: canPullThis ? `linear-gradient(135deg, ${tier.color}33, ${tier.color}11)` : "#1a221c",
-                      border: `2px solid ${canPullThis ? tier.color : C.steel}`,
-                      opacity: canPullThis ? 1 : 0.55,
-                    }}>
-                      <div style={{ textAlign: "left" }}>
-                        <div style={{ fontSize: 13, fontWeight: 800, color: canPullThis ? tier.color : C.textDim }}>ซอง {tier.label}</div>
-                        <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, marginTop: 2 }}>{oddsHint}</div>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: canPullThis ? C.chalk : C.textDim, fontFamily: MONO_FONT }}>
-                          {canFreeThis ? "ฟรีวันนี้" : `${tier.ticketCost} ตั๋ว`}
-                        </div>
-                        {!canPullThis && <div style={{ fontSize: 9, color: C.crimson, marginTop: 2 }}>ตั๋วไม่พอ</div>}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+              <button
+                type="button"
+                disabled={machinePullsLeft <= 0}
+                onClick={() => { const tier = onPull(); if (tier) setOpeningTier(tier); }}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  width: "100%", padding: "14px 16px", borderRadius: 10, cursor: machinePullsLeft > 0 ? "pointer" : "not-allowed",
+                  background: machinePullsLeft > 0 ? "linear-gradient(135deg, rgba(224,164,88,.25), rgba(224,164,88,.08))" : "#1a221c",
+                  border: `2px solid ${machinePullsLeft > 0 ? C.amber : C.steel}`,
+                  opacity: machinePullsLeft > 0 ? 1 : 0.55,
+                }}
+              >
+                <div style={{ textAlign: "left" }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: machinePullsLeft > 0 ? C.amber : C.textDim }}>🎰 หยอดตู้การ์ดสตาฟ</div>
+                  <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, marginTop: 2 }}>Bronze 60% · Silver 30% · Gold 10%</div>
+                </div>
+                <div style={{ textAlign: "right", fontSize: 12, fontWeight: 700, color: machinePullsLeft > 0 ? C.chalk : C.textDim, fontFamily: MONO_FONT }}>
+                  {machinePullsLeft > 0 ? `เหลือ ${machinePullsLeft}/${DAILY_FREE_MACHINE_PULLS}` : "ครบโควต้าวันนี้"}
+                </div>
+              </button>
+              {platinumPacks > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { const tier = onOpenPlatinum(); if (tier) setOpeningTier(tier); }}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    width: "100%", marginTop: 8, padding: "14px 16px", borderRadius: 10, cursor: "pointer",
+                    background: "linear-gradient(135deg, rgba(185,230,255,.25), rgba(185,230,255,.08))",
+                    border: `2px solid #b9e6ff`,
+                  }}
+                >
+                  <div style={{ textAlign: "left" }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: "#b9e6ff" }}>✨ เปิดซอง Platinum</div>
+                    <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, marginTop: 2 }}>การันตี 5-7★ · รางวัลจบลีกท็อป 3</div>
+                  </div>
+                  <div style={{ textAlign: "right", fontSize: 12, fontWeight: 700, color: "#b9e6ff", fontFamily: MONO_FONT }}>
+                    มี {platinumPacks} ใบ
+                  </div>
+                </button>
+              )}
               {lastPull.length > 0 && (
                 <div style={{ marginTop: 14 }}>
                   <SectionLabel sub="เลื่อนดูการ์ดที่ได้">ผลการเปิด</SectionLabel>
