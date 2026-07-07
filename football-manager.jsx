@@ -8313,6 +8313,13 @@ function RoadmapDashboardPanel({
       {career.pendingConversation && (
         <Panel accent={C.purple} style={{ padding: 12 }}>
           <SectionLabel sub={career.pendingConversation.label}>💬 {career.pendingConversation.playerName} อยากคุย</SectionLabel>
+          {(() => {
+            const convoPlayer = career.players.find((p) => p.id === career.pendingConversation.playerId);
+            const personality = convoPlayer && PLAYER_PERSONALITIES[convoPlayer.personality];
+            return personality ? (
+              <div style={{ fontSize: 10, color: C.textDim, marginTop: 2 }}>🎭 {personality.th} — {personality.descTh}</div>
+            ) : null;
+          })()}
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button type="button" onClick={() => onConversationResolve(true)} style={fmBtnPrimary({ flex: 1 })}>ตกลง</button>
             <button type="button" onClick={() => onConversationResolve(false)} style={fmBtnGhost({ flex: 1 })}>ปฏิเสธ</button>

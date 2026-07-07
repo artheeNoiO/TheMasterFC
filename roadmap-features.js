@@ -61,6 +61,15 @@ export const PLAYER_CONVERSATIONS = [
   { id: "leave", label: "อยากย้ายทีม", moraleOnYes: -2, moraleOnNo: -10 },
 ];
 
+/** น้ำหนักตามบุคลิกนักเตะ — ใช้เลือกหัวข้อคุย + ปรับความแรงของผลมูด (คู่กับ PLAYER_PERSONALITIES ใน football-manager.jsx) */
+const CONVERSATION_PERSONALITY_BIAS = {
+  ambitious: { wage: 2, playtime: 2, leave: 1, intensityMult: 1.25 },
+  loyal: { wage: 0.6, playtime: 0.6, leave: 0.15, intensityMult: 0.7 },
+  leader: { wage: 0.7, playtime: 0.6, leave: 0.3, intensityMult: 0.8 },
+  temperamental: { wage: 1.2, playtime: 1.3, leave: 1.4, intensityMult: 1.4 },
+  professional: { wage: 0.9, playtime: 0.9, leave: 0.7, intensityMult: 0.9 },
+};
+
 /** FFP: โควต้าโอน ≈ 150% รายได้ฤดูกาล */
 export const FFP_TRANSFER_CAP_RATIO = 1.5;
 export const BOARD_SACK_THRESHOLD = 12;
@@ -345,8 +354,15 @@ export function maybeGeneratePlayerConversation(c) {
   const squad = (c.players || []).filter((p) => p.teamId === c.userTeamId && !p.isLegend);
   if (!squad.length) return null;
   const player = squad[Math.floor(Math.random() * squad.length)];
-  const type = PLAYER_CONVERSATIONS[Math.floor(Math.random() * PLAYER_CONVERSATIONS.length)];
-  c.pendingConversation = { playerId: player.id, playerName: player.name, ...type };
+  const bias = CONVERSATION_PERSONALITY_BIAS[player.personality] || {};
+  const weighted = PLAYER_CONVERSATIONS.flatMap((t) => Array(Math.round((bias[t.id] ?? 1) * 10)).fill(t));
+  const type = weighted[Math.floor(Math.random() * weighted.length)] || PLAYER_CONVERSATIONS[0];
+  const intensityMult = bias.intensityMult ?? 1;
+  c.pendingConversation = {
+    playerId: player.id, playerName: player.name, ...type,
+    moraleOnYes: Math.round(type.moraleOnYes * intensityMult),
+    moraleOnNo: Math.round(type.moraleOnNo * intensityMult),
+  };
   return c.pendingConversation;
 }
 
