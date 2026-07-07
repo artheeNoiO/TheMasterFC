@@ -77,6 +77,8 @@ export default function OnlineMvpApp({ bootError, onRetryBoot }) {
   const [statusMsg, setStatusMsg] = useState("");
   const [kickoffLoading, setKickoffLoading] = useState(false);
   const [liveSession, setLiveSession] = useState(null);
+  const [staffPullBusy, setStaffPullBusy] = useState(false);
+  const [lastStaffPull, setLastStaffPull] = useState(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -160,6 +162,21 @@ export default function OnlineMvpApp({ bootError, onRetryBoot }) {
       await loadAll();
     } catch (e) {
       setError(e.message);
+    }
+  }
+
+  async function pullStaffMachine() {
+    setStaffPullBusy(true);
+    setError("");
+    try {
+      const res = await onlineApi("/api/clubs/me/staff-machine/pull", { method: "POST" });
+      setStaffDraws(res.staffDraws);
+      setLastStaffPull(res);
+      setStatusMsg(`หยอดตู้ได้ซอง ${res.tier.label}! การ์ด ${res.cards.length} ใบ (${res.source === "free" ? "สิทธิ์ฟรี" : "ใช้เหรียญตู้"})`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setStaffPullBusy(false);
     }
   }
 
@@ -254,6 +271,36 @@ export default function OnlineMvpApp({ bootError, onRetryBoot }) {
       {statusMsg && <p style={{ color: C.good, fontSize: 12 }}>{statusMsg}</p>}
 
       <OnlineRoadmapPanel roadmap={roadmap} onAction={roadmapAction} busy={roadmapBusy} />
+
+      {staffDraws && (
+        <Panel title="🎰 ตู้หยอดซองการ์ดสตาฟ">
+          <p style={{ fontSize: 12, color: C.textDim, marginBottom: 8 }}>
+            หยอดฟรีวันนี้ {staffDraws.freeLeft}/{staffDraws.dailyLimit ?? DAILY_STAFF_CARD_DRAWS}
+            {staffDraws.tickets > 0 ? ` · เหรียญตู้ ${staffDraws.tickets}` : ""}
+          </p>
+          <p style={{ fontSize: 10.5, color: C.textDim, marginBottom: 10 }}>
+            เกินโควต้าฟรีใช้ "เหรียญตู้" แทน (1 เหรียญ/ครั้ง) — หาเพิ่มได้จาก Battle Pass และจบฤดูกาลอันดับดี
+          </p>
+          <button
+            type="button"
+            disabled={staffPullBusy || (staffDraws.freeLeft <= 0 && staffDraws.tickets <= 0)}
+            onClick={pullStaffMachine}
+            style={btn(staffDraws.freeLeft > 0 || staffDraws.tickets > 0 ? C.amber : C.steel)}
+          >
+            {staffPullBusy ? "..." : "หยอดตู้"}
+          </button>
+          {lastStaffPull && (
+            <div style={{ marginTop: 10, fontSize: 12 }}>
+              <b style={{ color: C.amber }}>ซอง {lastStaffPull.tier.label}</b>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18, color: C.textDim }}>
+                {lastStaffPull.cards.map((c) => (
+                  <li key={c.cardId}>{c.name} — {c.type === "MANAGER" ? "ผู้จัดการ" : `โค้ช ${c.specialty}`} {"★".repeat(c.stars)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Panel>
+      )}
 
       <Panel title="แมตช์ของคุณวันนี้">
         {!userFixture && <p style={{ color: C.textDim, fontSize: 13 }}>ไม่มีแมตช์วันนี้</p>}

@@ -3,6 +3,7 @@ import rateLimit from "express-rate-limit";
 import { requireAuth } from "../middleware/auth.js";
 import { createClubForUser, getClubForUser, updateClubTactics, patchUserRoadmap } from "../services/gameService.js";
 import { awardDailyLoginXp } from "../services/battlePassService.js";
+import { pullStaffMachine } from "../services/staffMachineService.js";
 
 const router = Router();
 
@@ -50,6 +51,15 @@ router.post("/", requireAuth, createClubLimiter, async (req, res) => {
       logoIndex: logoIndex ?? 0,
     });
     res.status(201).json({ club });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post("/me/staff-machine/pull", requireAuth, async (req, res) => {
+  try {
+    const result = await pullStaffMachine(req.user.id);
+    res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

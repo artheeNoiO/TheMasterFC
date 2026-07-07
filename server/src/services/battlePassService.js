@@ -62,8 +62,8 @@ export async function awardDailyLoginXp(userId) {
   });
 }
 
-/** รับรางวัล tier — reward.type==="coin" ยังทำแค่บันทึกว่ารับแล้ว เพราะ Master Coin ยังไม่มีคอลัมน์เก็บยอดจริง
- * (รอผูกกับระบบเคอเรนซี่ตอนสร้าง UI ฝั่ง client — ดู HANDOFF.md) */
+/** รับรางวัล tier — reward.type==="coin" คือ "เหรียญตู้การ์ดสตาฟ" หยอดตู้ในโหมดออนไลน์ได้เลย
+ * (เครดิตเข้า gameStateJson.staffDrawTickets ของสโมสรผู้เล่นโดยตรง) */
 export async function claimBattlePassTier(userId, tierNumber) {
   const progress = await getOrCreateProgress(userId);
   const row = BATTLE_PASS_TIERS.find((r) => r.tier === tierNumber);
@@ -77,6 +77,15 @@ export async function claimBattlePassTier(userId, tierNumber) {
     where: { id: progress.id },
     data: { claimedTiers: JSON.stringify(claimed) },
   });
+
+  if (row.reward.type === "coin") {
+    const club = await prisma.club.findFirst({ where: { userId } });
+    if (club) {
+      const gs = JSON.parse(club.gameStateJson || "{}");
+      gs.staffDrawTickets = (gs.staffDrawTickets || 0) + row.reward.amount;
+      await prisma.club.update({ where: { id: club.id }, data: { gameStateJson: JSON.stringify(gs) } });
+    }
+  }
   return row.reward;
 }
 

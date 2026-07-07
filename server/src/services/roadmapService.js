@@ -19,6 +19,7 @@ import {
   INJURY_SEVERITY,
 } from "../../../roadmap-features.js";
 import { initBoard, refreshBoardAfterUserMatch } from "../../../club-systems.js";
+import { SEASON_RANK_MACHINE_COINS } from "../../../game-version.js";
 
 const ROADMAP_LOG_MAX = 24;
 
@@ -201,7 +202,14 @@ export function applyOnlineSeasonEndRoadmap(club, shard, shardClubs, standings) 
     ctx.log = [`🚪 ${sack.reason}`, ...(ctx.log || [])];
   }
   ctx.youthIntakeCeremonySeason = shard.seasonNumber;
-  return persistRoadmapContext(gs, ctx);
+  const next = persistRoadmapContext(gs, ctx);
+  // เหรียญตู้การ์ดสตาฟจากอันดับจบฤดูกาล (นอกเหนือจากหยอดฟรีวันละ 3 ครั้ง) — ดู SEASON_RANK_MACHINE_COINS
+  const rankCoins = SEASON_RANK_MACHINE_COINS[pos] || 0;
+  if (rankCoins > 0) {
+    next.staffDrawTickets = (next.staffDrawTickets || 0) + rankCoins;
+    next.roadmap.log = [`🪙 จบฤดูกาลอันดับ ${pos} — ได้เหรียญตู้การ์ดสตาฟ ${rankCoins}`, ...(next.roadmap.log || [])];
+  }
+  return next;
 }
 
 export function patchOnlineInjurySeverity(player, prevInjuryDays) {

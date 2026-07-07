@@ -57,8 +57,12 @@ export const STARTING_BUDGET = BETA_TEST ? BETA_STARTING_BUDGET : 10_000_000;
 /** Master Coin / Socker Coin ตอนสร้างโปรไฟล์ใหม่ */
 export const STARTER_MASTER_COINS = BETA_TEST ? BETA_STARTER_MASTER_COINS : 10;
 
-/** เปิดซองการ์ดสตาฟฟรี — รีเซ็ตทุกวันตามเวลาจริง (ISO date) */
-export const DAILY_STAFF_CARD_DRAWS = 100;
+/** ตู้หยอดซองการ์ดสตาฟ (ออนไลน์) — หยอดฟรีวันละ N ครั้ง รีเซ็ตทุกวันตามเวลาจริง (ISO date)
+ * เกินโควตาฟรีต้องใช้ "เหรียญตู้" (staffDrawTickets) ซึ่งหาได้จาก Battle Pass + จบฤดูกาลอันดับดี (ดู SEASON_RANK_MACHINE_COINS) */
+export const DAILY_STAFF_CARD_DRAWS = 3;
+
+/** เหรียญตู้จากอันดับท้ายฤดูกาลออนไลน์ (1 = แชมป์ดิวิชั่น) — นอกเหนือจากนี้ (อันดับท้ายตาราง) ไม่ได้เหรียญ */
+export const SEASON_RANK_MACHINE_COINS = { 1: 25, 2: 18, 3: 12, 4: 8, 5: 4, 6: 4, 7: 4, 8: 4 };
 
 /** ออนไลน์: จบ 1 ฤดูกาล (30 นัด, double round-robin เจอกันเหย้า-เยือน) ภายใน 1 วันจริง — แต่แข่งเฉพาะช่วง 9:00-20:00 (เวลาไทย) เท่านั้น
  * หลัง 20:00 ถึง 9:00 วันถัดไป = ช่วงพักฟื้นนักเตะ/อีเวนต์/ตลาดซื้อขาย (ห้ามแข่ง)
@@ -100,18 +104,19 @@ export const BP_XP_DRAW = 15;
 export const BP_XP_LOSS = 5;
 export const BP_XP_DAILY_LOGIN = 10;
 
-/** ตาราง tier — xpRequired คือ XP สะสมขั้นต่ำที่ปลดล็อก tier นั้น (เรียงจากน้อยไปมาก) */
+/** ตาราง tier — xpRequired คือ XP สะสมขั้นต่ำที่ปลดล็อก tier นั้น (เรียงจากน้อยไปมาก)
+ * reward.type==="coin" คือเหรียญตู้การ์ดสตาฟ (1 เหรียญ = หยอดตู้ได้ 1 ครั้ง) — เคลียร์ทั้ง pass ได้ ~23 เหรียญ/เดือน */
 export const BATTLE_PASS_TIERS = [
-  { tier: 1, xpRequired: 0, reward: { type: "coin", amount: 50 } },
-  { tier: 2, xpRequired: 100, reward: { type: "coin", amount: 50 } },
+  { tier: 1, xpRequired: 0, reward: { type: "coin", amount: 2 } },
+  { tier: 2, xpRequired: 100, reward: { type: "coin", amount: 2 } },
   { tier: 3, xpRequired: 220, reward: { type: "cosmetic", id: "kit_trim_gold" } },
-  { tier: 4, xpRequired: 360, reward: { type: "coin", amount: 100 } },
+  { tier: 4, xpRequired: 360, reward: { type: "coin", amount: 3 } },
   { tier: 5, xpRequired: 520, reward: { type: "staffCard", rarity: "rare" } },
-  { tier: 6, xpRequired: 700, reward: { type: "coin", amount: 100 } },
+  { tier: 6, xpRequired: 700, reward: { type: "coin", amount: 3 } },
   { tier: 7, xpRequired: 900, reward: { type: "cosmetic", id: "crest_effect_flame" } },
-  { tier: 8, xpRequired: 1120, reward: { type: "coin", amount: 150 } },
+  { tier: 8, xpRequired: 1120, reward: { type: "coin", amount: 5 } },
   { tier: 9, xpRequired: 1360, reward: { type: "staffCard", rarity: "epic" } },
-  { tier: 10, xpRequired: 1620, reward: { type: "coin", amount: 300 } },
+  { tier: 10, xpRequired: 1620, reward: { type: "coin", amount: 8 } },
 ];
 
 /** เดือนปัจจุบันตามเวลาไทย ในรูป "YYYY-MM" — ใช้เป็น key ของ BattlePassProgress และตัวเทียบรีเซ็ตรายเดือน */
