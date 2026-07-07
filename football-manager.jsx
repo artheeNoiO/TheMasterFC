@@ -1764,7 +1764,7 @@ function effectivePlayerDailyWage(p) {
   const base = p.wage || computePlayerWage(p.rating || 50);
   const starts = (p.appearHistory || []).filter(Boolean).length;
   const mult = starts >= 4 ? 1 : starts >= 1 ? 0.78 : 0.55;
-  return Math.max(100, Math.round(base * mult / 100) * 100);
+  return Math.max(100, Math.round(base * mult / 10) * 10);
 }
 function squadDailyWageBill(squad, staffTeam, manager, extras = {}) {
   const players = (squad || []).reduce((s, p) => s + effectivePlayerDailyWage(p), 0);
@@ -2141,12 +2141,12 @@ function normalizeCareerSave(c) {
   ensureStaffCardFields(c); // เซฟเก่าก่อนมีระบบภาพเหมือนการ์ดสตาฟ — เติม portrait ย้อนหลังให้ครบทุกใบ
   Object.values(c.staff || {}).forEach((teamStaff) => {
     ["GK", "DF", "MF", "FW", "FITNESS"].forEach((spec) => {
-      if (teamStaff[spec]) ensureCoachProfile(teamStaff[spec], spec);
+      if (teamStaff[spec]) teamStaff[spec] = ensureCoachProfile(teamStaff[spec], spec);
     });
   });
-  (c.staffCardBag || []).forEach((card) => {
-    if (card.type === "COACH") ensureCoachProfile(card, card.specialty);
-  });
+  if (Array.isArray(c.staffCardBag)) {
+    c.staffCardBag = c.staffCardBag.map((card) => (card.type === "COACH" ? ensureCoachProfile(card, card.specialty) : card));
+  }
   if (c.stadiumLevel == null) c.stadiumLevel = 1;
   if (!c.board && uT) initBoard(c, uT);
   if (!c.trainingReports) c.trainingReports = [];
@@ -3083,8 +3083,11 @@ function teamAttackDefense(squad, xiIds, slotAssign) {
 function teamPerformanceMult({ formation, manager, avgStamina, avgMorale, chemistry, isHome, opponentFormation }) {
   const staminaMult = clamp(0.72 + 0.28 * (avgStamina / 100), 0.72, 1.0);
   const psych = manager ? manager.stats.manManagement : 45;
-  const moraleMult = clamp(1 + ((avgMorale - 70) / 300) * (psych / 70), 0.85, 1.16);
-  const tacticFitMult = manager ? (manager.preferredFormation === formation ? 1.08 : 0.96) : 1.0;
+  // สัญชาตญาณผจก. — "จอมยุทธวิธี"/"นักจิตวิทยาห้องแต่งตัว" มีผลเล็กน้อยจริงในผลแมท ไม่ใช่แค่ UI/มูดนอกสนาม
+  const mmTraitBump = manager?.trait === "manManagement" ? 0.02 : 0;
+  const tacticsTraitBump = manager?.trait === "tactics" ? 0.02 : 0;
+  const moraleMult = clamp(1 + ((avgMorale - 70) / 300) * (psych / 70) + mmTraitBump, 0.85, 1.18);
+  const tacticFitMult = (manager ? (manager.preferredFormation === formation ? 1.08 : 0.96) : 1.0) + tacticsTraitBump;
   const matchupMult = matchupMultiplier(formation, opponentFormation);
   const chemistryMult = clamp(0.94 + 0.11 * (chemistry / 100), 0.94, 1.05);
   const homeMult = isHome ? 1.1 : 0.93;

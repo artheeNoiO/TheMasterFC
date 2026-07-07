@@ -56,8 +56,12 @@ function teamAttackDefense(squad, xiIds) {
 function teamPerformanceMult({ formation, manager, avgStamina, avgMorale, chemistry, isHome, opponentFormation }) {
   const staminaMult = clamp(0.72 + 0.28 * (avgStamina / 100), 0.72, 1.0);
   const psych = manager ? manager.stats.manManagement : 45;
-  const moraleMult = clamp(1 + ((avgMorale - 70) / 300) * (psych / 70), 0.85, 1.16);
-  const tacticFitMult = manager ? (manager.preferredFormation === formation ? 1.08 : 0.96) : 1.0;
+  // Manager trait (mirrors the client's football-manager.jsx copy) — additive nudge only, no-op when absent
+  // (bot managers created by this package's own genManager() have no .trait field, so they're unaffected).
+  const mmTraitBump = manager?.trait === "manManagement" ? 0.02 : 0;
+  const tacticsTraitBump = manager?.trait === "tactics" ? 0.02 : 0;
+  const moraleMult = clamp(1 + ((avgMorale - 70) / 300) * (psych / 70) + mmTraitBump, 0.85, 1.18);
+  const tacticFitMult = (manager ? (manager.preferredFormation === formation ? 1.08 : 0.96) : 1.0) + tacticsTraitBump;
   const matchupMult = matchupMultiplier(formation, opponentFormation);
   const chemistryMult = clamp(0.94 + 0.11 * (chemistry / 100), 0.94, 1.05);
   const homeMult = isHome ? 1.1 : 0.93;
