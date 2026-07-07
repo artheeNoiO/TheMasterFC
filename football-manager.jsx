@@ -10727,6 +10727,42 @@ function KickoffWhistleBanner() {
   );
 }
 
+/** กล่องฟอร์เมชันจิ๋วแบบ FM — จุดผู้เล่นวางตามตำแหน่งจริงในสนามย่อ ใช้โชว์ทีมเราคู่กับคู่แข่งระหว่างแมทสด */
+function FormationMiniBoard({ team, formationKey, xi, squad, ratings }) {
+  const formation = FORMATIONS[resolveFormation(formationKey)];
+  const shirt = teamShirtColor(team);
+  const trim = team?.secondaryColor || "#f2f0e6";
+  return (
+    <Panel style={{ padding: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ fontSize: 10.5, fontWeight: 800, color: C.chalk }}>{team?.short || team?.name}</span>
+        <span style={{ fontSize: 9, color: C.textDim, fontFamily: MONO_FONT }}>{formation.label}</span>
+      </div>
+      <div style={{ position: "relative", width: "100%", aspectRatio: "0.72", borderRadius: 8, background: "linear-gradient(180deg, #163a24, #0e2718)", border: `1px solid ${C.steel}`, overflow: "hidden" }}>
+        {formation.slots.map((slot, i) => {
+          const pid = xi[i];
+          const p = squad.find((sp) => sp.id === pid);
+          const rating = ratings?.[pid];
+          return (
+            <div key={i} style={{ position: "absolute", left: `${slot.x}%`, top: `${slot.y}%`, transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center" }}>
+              <div style={{
+                width: 20, height: 20, borderRadius: "50%", background: shirt, border: `1.5px solid ${trim}`,
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8.5, fontWeight: 800, color: "#08150e",
+                fontFamily: MONO_FONT, boxShadow: "0 1px 3px rgba(0,0,0,.4)",
+              }}>
+                {rating != null ? Math.round(rating * 10) / 10 : ""}
+              </div>
+              <div style={{ fontSize: 7.5, color: C.chalk, marginTop: 1, maxWidth: 44, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {p ? (p.name.split(" ")[1] || p.name) : "?"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
 function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTacticSwitch, fullOnlineMode = false }) {
   const homeTeam = career.teams.find((t) => t.id === liveMatch.home);
   const awayTeam = career.teams.find((t) => t.id === liveMatch.away);
@@ -11584,6 +11620,16 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
               </div>
             </div>
           )}
+        </div>
+
+        {/* ฟอร์เมชันทีมเรา vs คู่แข่งแบบ FM — จุดผู้เล่นวางตามตำแหน่งจริง เห็นทั้งสองทีมพร้อมกัน */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <FormationMiniBoard team={isUserHome ? homeTeam : awayTeam} formationKey={isUserHome ? homeFormation : awayFormation} xi={isUserHome ? homeXI : awayXI} squad={isUserHome ? homeSquad : awaySquad} ratings={playerRatings} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <FormationMiniBoard team={isUserHome ? awayTeam : homeTeam} formationKey={isUserHome ? awayFormation : homeFormation} xi={isUserHome ? awayXI : homeXI} squad={isUserHome ? awaySquad : homeSquad} ratings={playerRatings} />
+          </div>
         </div>
 
         {/* จัดแถว ตัวจริง/สถิติ/ไทม์ไลน์ ใต้สนาม (แบบ FM) — จอกว้างวาง 3 คอลัมน์เคียงกัน มือถือซ้อนยาวเหมือนเดิม */}

@@ -651,6 +651,27 @@ function ShotPathLine({ shotPath }) {
   );
 }
 
+/** โซนสีทีมจาง ๆ + เลข % ครองบอลลางบนพื้นสนามแต่ละฝั่ง (เห็นแล้วรู้ทันทีไม่ต้องมองแถบสถิติด้านล่าง) */
+function PossessionGroundOverlay({ possHomePct, homeColor, awayColor }) {
+  const possAwayPct = 100 - possHomePct;
+  return (
+    <div style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden", zIndex: 3 }}>
+      <div style={{ position: "absolute", left: 0, top: "14%", bottom: "14%", width: "50%", background: `linear-gradient(90deg, ${homeColor}2e, transparent)` }} />
+      <div style={{ position: "absolute", right: 0, top: "14%", bottom: "14%", width: "50%", background: `linear-gradient(270deg, ${awayColor}2e, transparent)` }} />
+      <div style={{
+        position: "absolute", left: "18%", top: "52%", transform: "translate(-50%, -50%)",
+        fontFamily: "ui-monospace, monospace", fontWeight: 900, fontSize: "clamp(20px, 6vw, 46px)",
+        color: "rgba(255,255,255,.16)", letterSpacing: 1, userSelect: "none", whiteSpace: "nowrap",
+      }}>{possHomePct}%</div>
+      <div style={{
+        position: "absolute", right: "18%", top: "52%", transform: "translate(50%, -50%)",
+        fontFamily: "ui-monospace, monospace", fontWeight: 900, fontSize: "clamp(20px, 6vw, 46px)",
+        color: "rgba(255,255,255,.16)", letterSpacing: 1, userSelect: "none", whiteSpace: "nowrap",
+      }}>{possAwayPct}%</div>
+    </div>
+  );
+}
+
 export function TrackerMatchView({
   homeTeam, awayTeam, homeGoals, awayGoals, half, clock, halfSeconds = 180,
   ballSim, possHomePct = 50, sponsorLabel, animTick = 0, goalFlash, highlightSeq, players, shotPath = null,
@@ -697,6 +718,7 @@ export function TrackerMatchView({
           sponsorLabel={label}
           highlightSeq={highlightSeq}
         />
+        <PossessionGroundOverlay possHomePct={possHomePct} homeColor={homeTeam?.shirtColor || homeTeam?.color || "#3dba6a"} awayColor={awayTeam?.shirtColor || awayTeam?.color || "#3a6ec4"} />
         <PassPlayOverlay ballSim={ballSim} />
         <ShotPathLine shotPath={shotPath} />
         <TrackerPlayerDots players={players} />
