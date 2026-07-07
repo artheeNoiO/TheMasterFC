@@ -8946,6 +8946,21 @@ function SquadView({ squad, xi, squadSize, injuredCount, canKickoff, xiAfterFill
   );
 }
 function attrGroupAvg(p, group) { return ATTR_GROUPS[group].reduce((s, k) => s + p.attrs[k], 0) / ATTR_GROUPS[group].length; }
+/** รูปหน้านักเตะจิ๋วทรงกลม — โชว์ต่อแถวใน Squad list (ครอปเฉพาะหน้าจาก neck-crop portrait) */
+function MiniPortraitAvatar({ player, size = 30 }) {
+  if (!player?.portrait) return null;
+  return (
+    <img
+      src={player.portrait}
+      alt=""
+      draggable={false}
+      style={{
+        width: size, height: size, borderRadius: "50%", objectFit: "cover", objectPosition: "center 12%",
+        flexShrink: 0, border: `1.5px solid ${C.steel}`, boxShadow: "0 1px 3px rgba(0,0,0,.3)",
+      }}
+    />
+  );
+}
 /** ไอคอนเสื้อจิ๋วสีทีม — โชว์ต่อแถวนักเตะใน Squad list ให้เห็นสีชุดแข่งเร็วๆ */
 function MiniKitBadge({ team, size = 18 }) {
   const shirt = teamShirtColor(team);
@@ -8966,6 +8981,7 @@ function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, 
   return (
     <div style={{ borderBottom: `1px solid ${C.steel}`, padding: "6px 0" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <MiniPortraitAvatar player={p} />
         {team && <MiniKitBadge team={team} />}
         <span
           title={playerPosTH(p)}
