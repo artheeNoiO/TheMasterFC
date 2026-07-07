@@ -11637,8 +11637,18 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         <div className="fc-live-quad" style={{ marginBottom: 10 }}>
           <FormationMiniBoard team={isUserHome ? homeTeam : awayTeam} formationKey={isUserHome ? homeFormation : awayFormation} xi={isUserHome ? homeXI : awayXI} squad={isUserHome ? homeSquad : awaySquad} ratings={playerRatings} />
 
-          {/* สถิติแมตช์ — กระชับ ไม่ซ้ำแถบครองบอลบนสนาม */}
-          <Panel style={{ padding: "10px 12px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* สกอร์บาร์แบบ FM — ทีม/สกอร์/นาที เห็นชัดแยกจากที่ทับมุมสนาม */}
+            <Panel style={{ padding: "8px 12px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 10.5, color: C.textDim, fontFamily: MONO_FONT }}>{gameMinuteDisplay}'</span>
+              <span style={{ fontSize: 14, fontWeight: 800, fontFamily: DISPLAY_FONT }}>
+                {homeTeam.short} <span style={{ color: C.gold }}>{homeGoals} - {awayGoals}</span> {awayTeam.short}
+              </span>
+              <span style={{ width: 30 }} />
+            </Panel>
+
+            {/* สถิติแมตช์ — กระชับ ไม่ซ้ำแถบครองบอลบนสนาม */}
+            <Panel style={{ padding: "10px 12px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <span style={{ fontSize: 10, color: C.textDim }}>โมเมนตัม</span>
               <span style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT }}>{possHomePct}% — {possAwayPct}%</span>
@@ -11664,7 +11674,8 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
               <StatRow label="ฟาวล์" home={stats.foulsH} away={stats.foulsA} />
               <StatRow label="ใบเหลือง/แดง" home={stats.cardsH} away={stats.cardsA} />
             </div>
-          </Panel>
+            </Panel>
+          </div>
 
           <Panel>
             <SectionLabel>ไทม์ไลน์เหตุการณ์</SectionLabel>
