@@ -655,18 +655,18 @@ function ShotPathLine({ shotPath }) {
 function PossessionGroundOverlay({ possHomePct, homeColor, awayColor }) {
   const possAwayPct = 100 - possHomePct;
   return (
-    <div style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden", zIndex: 3 }}>
-      <div style={{ position: "absolute", left: 0, top: "14%", bottom: "14%", width: "50%", background: `linear-gradient(90deg, ${homeColor}2e, transparent)` }} />
-      <div style={{ position: "absolute", right: 0, top: "14%", bottom: "14%", width: "50%", background: `linear-gradient(270deg, ${awayColor}2e, transparent)` }} />
+    <div style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden" }}>
+      <div style={{ position: "absolute", left: 0, top: "30%", bottom: "30%", width: "50%", background: `linear-gradient(90deg, ${homeColor}22, transparent)` }} />
+      <div style={{ position: "absolute", right: 0, top: "30%", bottom: "30%", width: "50%", background: `linear-gradient(270deg, ${awayColor}22, transparent)` }} />
       <div style={{
-        position: "absolute", left: "18%", top: "52%", transform: "translate(-50%, -50%)",
-        fontFamily: "ui-monospace, monospace", fontWeight: 900, fontSize: "clamp(20px, 6vw, 46px)",
-        color: "rgba(255,255,255,.16)", letterSpacing: 1, userSelect: "none", whiteSpace: "nowrap",
+        position: "absolute", left: "25%", top: "50%", transform: "translate(-50%, -50%)",
+        fontFamily: "ui-monospace, monospace", fontWeight: 900, fontSize: "clamp(16px, 4vw, 32px)",
+        color: "rgba(255,255,255,.13)", letterSpacing: 1, userSelect: "none", whiteSpace: "nowrap",
       }}>{possHomePct}%</div>
       <div style={{
-        position: "absolute", right: "18%", top: "52%", transform: "translate(50%, -50%)",
-        fontFamily: "ui-monospace, monospace", fontWeight: 900, fontSize: "clamp(20px, 6vw, 46px)",
-        color: "rgba(255,255,255,.16)", letterSpacing: 1, userSelect: "none", whiteSpace: "nowrap",
+        position: "absolute", right: "25%", top: "50%", transform: "translate(50%, -50%)",
+        fontFamily: "ui-monospace, monospace", fontWeight: 900, fontSize: "clamp(16px, 4vw, 32px)",
+        color: "rgba(255,255,255,.13)", letterSpacing: 1, userSelect: "none", whiteSpace: "nowrap",
       }}>{possAwayPct}%</div>
     </div>
   );

@@ -640,6 +640,21 @@ a.fc-header-chip {
   }
 }
 
+/* Live match — แถวฟอร์เมชันเรา + สถิติ + ไทม์ไลน์ + ฟอร์เมชันคู่แข่ง เคียงกัน 4 ช่องแบบ FM */
+.fc-live-quad {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+@media (min-width: 900px) {
+  .fc-live-quad {
+    display: grid;
+    grid-template-columns: 0.85fr 1.15fr 1.15fr 0.85fr;
+    align-items: start;
+    gap: 10px;
+  }
+}
+
 @keyframes fc-auction-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(193, 68, 14, 0.45); }
   50% { box-shadow: 0 0 0 6px rgba(193, 68, 14, 0); }
