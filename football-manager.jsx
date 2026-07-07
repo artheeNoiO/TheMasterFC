@@ -13737,13 +13737,26 @@ function StaffCardsView({ career, uiLang = "th", onPull, onOpenPlatinum, onMerge
       </div>
 
       {sub === "draw" && (
-        <Panel>
+        <Panel style={{ position: "relative" }}>
           {openingTier ? (
-            <StaffPackOpenSequence
-              tierDef={openingTier}
-              cards={lastPull}
-              onDone={() => setOpeningTier(null)}
-            />
+            <>
+              <button
+                type="button"
+                onClick={() => setOpeningTier(null)}
+                style={{
+                  position: "absolute", top: 8, right: 8, zIndex: 5,
+                  background: C.panel2, border: `1px solid ${C.steel}`, borderRadius: "50%",
+                  width: 30, height: 30, color: C.chalk, fontSize: 15, cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}
+              >✕</button>
+              <StaffPackOpenSequence
+                key={openingTier.key + (lastPull[0]?.cardId || "")}
+                tierDef={openingTier}
+                cards={lastPull}
+                onDone={() => setOpeningTier(null)}
+              />
+            </>
           ) : (
             <>
               <div style={{ fontSize: 12, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
