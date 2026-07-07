@@ -825,8 +825,11 @@ function pickStaffPortrait(type, specialty, stars) {
   const file = choice(pool);
   return `/staff-portraits/${folder}/${encodeURIComponent(file)}`;
 }
-/** ตู้หยอดซองการ์ดสตาฟ — หยอดฟรีวันละ N ครั้ง สุ่มได้ซอง Bronze/Silver/Gold (Bronze ออกบ่อยสุด) */
-const DAILY_FREE_MACHINE_PULLS = 3;
+/** ตู้หยอดซองการ์ดสตาฟ — สะสม "เหรียญตู้" ได้วันละ N + จบฤดูกาลอีก M เอามาหยอด สุ่มได้ซอง Bronze/Silver/Gold (Bronze ออกบ่อยสุด) */
+const DAILY_FREE_MACHINE_PULLS = 3; // legacy, เก็บไว้ migrate เซฟเก่า
+const DAILY_MACHINE_COIN_GRANT = 10;
+const SEASON_END_MACHINE_COINS = 20;
+const MACHINE_PULL_COST = 1;
 const CARDS_PER_STAFF_PULL = 5;
 /** สตาฟเริ่มต้น — ทุกตำแหน่ง 3★ สเตตเท่ากัน (ไม่สุ่มการ์ด gacha) */
 const STARTER_STAFF_STARS = 3;
@@ -1042,7 +1045,7 @@ function genStaffCard(fixedType, fixedStars, weights) {
 function defaultStaffCardState(day = 1) {
   const today = new Date().toISOString().slice(0, 10);
   return {
-    machinePullsLeft: DAILY_FREE_MACHINE_PULLS,
+    machineCoins: DAILY_MACHINE_COIN_GRANT,
     staffFreeDrawResetDay: day,
     staffFreeDrawResetDate: today,
     staffPlatinumPacks: 0,
@@ -1064,7 +1067,9 @@ function ensureStaffCardIds(bag) {
 }
 
 function ensureStaffCardFields(c) {
-  if (c.machinePullsLeft == null) c.machinePullsLeft = DAILY_FREE_MACHINE_PULLS;
+  // เซฟเก่าก่อนเปลี่ยนจาก "สิทธิ์หยอดฟรี/วัน" มาเป็น "เหรียญตู้สะสมได้" — แปลงสิทธิ์เก่าที่เหลือให้เป็นเหรียญเทียบเท่า
+  if (c.machineCoins == null) c.machineCoins = (c.machinePullsLeft ?? DAILY_FREE_MACHINE_PULLS) * MACHINE_PULL_COST;
+  delete c.machinePullsLeft;
   if (c.staffPlatinumPacks == null) c.staffPlatinumPacks = 0;
   if (c.staffFreeDrawResetDay == null) c.staffFreeDrawResetDay = c.day || 1;
   if (c.staffFreeDrawResetDate == null) c.staffFreeDrawResetDate = new Date().toISOString().slice(0, 10);
@@ -1130,7 +1135,7 @@ function resetDailyStaffDraws(c) {
   // เรียกกลับไปกลับมาแบบนี้จะวนไม่รู้จบจน stack overflow (บั๊กที่เจอจริง: สร้างเกมใหม่ไม่ได้เลย)
   const today = new Date().toISOString().slice(0, 10);
   if (c.staffFreeDrawResetDate !== today) {
-    c.machinePullsLeft = DAILY_FREE_MACHINE_PULLS;
+    c.machineCoins = (c.machineCoins || 0) + DAILY_MACHINE_COIN_GRANT;
     c.staffFreeDrawResetDate = today;
     c.staffFreeDrawResetDay = c.day;
   }
@@ -1960,10 +1965,10 @@ function migrateSaveV3ToV4(c) {
   return c;
 }
 
-/** v5 — staff card gacha: ตู้หยอด (machinePullsLeft), ซอง Platinum, bag, daily free draws */
+/** v5 — staff card gacha: ตู้หยอด (machineCoins), ซอง Platinum, bag, daily free draws */
 function migrateSaveV4ToV5(c) {
   const init = defaultStaffCardState(c.day || 1);
-  if (c.machinePullsLeft == null) c.machinePullsLeft = init.machinePullsLeft;
+  if (c.machineCoins == null) c.machineCoins = init.machineCoins;
   if (c.staffPlatinumPacks == null) c.staffPlatinumPacks = init.staffPlatinumPacks;
   if (c.staffFreeDrawResetDay == null) c.staffFreeDrawResetDay = init.staffFreeDrawResetDay;
   if (!c.staffCardBag) c.staffCardBag = init.staffCardBag;
@@ -3443,6 +3448,9 @@ function rolloverSeason(c) {
     !!promotedTeams.find((t) => t.id === c.userTeamId),
     !!relegatedTeams.find((t) => t.id === c.userTeamId));
   awardSeasonPlatinumPacks(c, prevPos);
+  ensureStaffCardFields(c);
+  c.machineCoins = (c.machineCoins || 0) + SEASON_END_MACHINE_COINS;
+  c.log = [`🪙 จบฤดูกาล — ได้เหรียญตู้เพิ่ม ${SEASON_END_MACHINE_COINS}`, ...c.log];
 
   // --- trophy cabinet: league titles + promotion ---
   if (prevPos === 1) awardTrophy(c, prevDivision === 0 ? "master_champion" : "challenger_champion");
@@ -3616,7 +3624,7 @@ function createNewCareer(customClub, managerName = "ผู้จัดการ"
     ...defaultStaffCardState(1),
     worldNews: [],
     flashWorldNewsId: null,
-    log: [`📰 [โลก TMFC] สโมสรใหม่ ${userTeam.name} (${managerName}) ถูกจัดตั้งใน The Master FC Online`, `ยินดีต้อนรับสู่ตำแหน่งไดเรคเตอร์ฟุตบอลของ ${userTeam.name}! เริ่มในโลกจำลอง — Master League คือ ${legendLeagueLabel(legendLeagueId)} (ทีม/ซูเปอร์สตาร์ล้อโลกจริง)`, `งบเริ่มต้น ${formatMoney(STARTING_BUDGET)}`, `สร้างมูลค่าสโมสรรวมถึง ${formatMoney(ONLINE_UNLOCK_TEAM_VALUE)} เพื่อปลดล็อกออนไลน์`, `เริ่มต้นที่ Challenger League ไต่อันดับเพื่อเลื่อนชั้นสู่ Master League`, `👥 ฐานแฟนบอลเริ่มต้น 2,500 คน`, `🎰 หยอดตู้การ์ดสตาฟฟรีวันละ ${DAILY_FREE_MACHINE_PULLS} ครั้ง (รีเซ็ตทุกวัน)`],
+    log: [`📰 [โลก TMFC] สโมสรใหม่ ${userTeam.name} (${managerName}) ถูกจัดตั้งใน The Master FC Online`, `ยินดีต้อนรับสู่ตำแหน่งไดเรคเตอร์ฟุตบอลของ ${userTeam.name}! เริ่มในโลกจำลอง — Master League คือ ${legendLeagueLabel(legendLeagueId)} (ทีม/ซูเปอร์สตาร์ล้อโลกจริง)`, `งบเริ่มต้น ${formatMoney(STARTING_BUDGET)}`, `สร้างมูลค่าสโมสรรวมถึง ${formatMoney(ONLINE_UNLOCK_TEAM_VALUE)} เพื่อปลดล็อกออนไลน์`, `เริ่มต้นที่ Challenger League ไต่อันดับเพื่อเลื่อนชั้นสู่ Master League`, `👥 ฐานแฟนบอลเริ่มต้น 2,500 คน`, `🎰 ได้เหรียญตู้การ์ดสตาฟวันละ ${DAILY_MACHINE_COIN_GRANT} + จบฤดูกาลอีก ${SEASON_END_MACHINE_COINS} (สะสมข้ามวันได้)`],
   };
   const newsItem = buildNewClubWorldNews({
     season: career.season,
@@ -4437,8 +4445,8 @@ export default function App({
         const c = JSON.parse(JSON.stringify(prev));
         if (itemId === "staff_ticket") {
           ensureStaffCardFields(c);
-          c.machinePullsLeft += 1;
-          c.log = [`🎰 ได้สิทธิ์หยอดตู้พิเศษ 1 ครั้ง (ซื้อจากร้านค้า)`, ...c.log];
+          c.machineCoins += MACHINE_PULL_COST;
+          c.log = [`🎰 ได้เหรียญตู้พิเศษ ${MACHINE_PULL_COST} (ซื้อจากร้านค้า)`, ...c.log];
         } else if (itemId === "camp_skip") {
           c.trainingCampCooldownDay = c.day;
           c.log = [`⏩ ใช้บัตรข้ามคูลดาวน์แคมป์ซ้อม — จัดแคมป์ได้ทันที`, ...c.log];
@@ -6047,12 +6055,12 @@ export default function App({
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
       ensureStaffCardFields(c);
-      if ((c.machinePullsLeft || 0) <= 0) {
-        pullOut.reason = "หยอดตู้ครบโควต้าวันนี้แล้ว — รอพรุ่งนี้ หรือซื้อสิทธิ์เพิ่มที่ร้านค้า";
+      if ((c.machineCoins || 0) < MACHINE_PULL_COST) {
+        pullOut.reason = "เหรียญตู้ไม่พอ — รอรับเหรียญวันถัดไป หรือจบฤดูกาล";
         return prev;
       }
       applyPulledCardsToCareer(c, pulled, tier, mergeOut);
-      c.machinePullsLeft -= 1;
+      c.machineCoins -= MACHINE_PULL_COST;
       pullOut.applied = true;
       return c;
     });
@@ -13690,7 +13698,8 @@ function StaffCardsView({ career, uiLang = "th", onPull, onOpenPlatinum, onMerge
   // สลับออกจากแท็บ "เปิดการ์ด" ระหว่างที่อนิเมชันเปิดซองค้างอยู่ → ถือว่าปิดไปแล้ว กันปัญหากลับมาแท็บ
   // เดิมแล้วอนิเมชันเล่นซ้ำ/ค้าง เพราะ openingTier ยังไม่ถูกเคลียร์ตอนสลับแท็บ
   useEffect(() => { if (sub !== "draw") setOpeningTier(null); }, [sub]);
-  const machinePullsLeft = career.machinePullsLeft ?? DAILY_FREE_MACHINE_PULLS;
+  const machineCoins = career.machineCoins ?? 0;
+  const canPullMachine = machineCoins >= MACHINE_PULL_COST;
   const platinumPacks = career.staffPlatinumPacks || 0;
   const bag = career.staffCardBag || [];
   const groups = groupStaffCards(bag);
@@ -13714,9 +13723,12 @@ function StaffCardsView({ career, uiLang = "th", onPull, onOpenPlatinum, onMerge
       <Panel style={{ border: `1px solid ${C.amber}` }}>
         <SectionLabel style={{ color: C.amber }} sub={`${CARDS_PER_STAFF_PULL} ใบ/ซอง · จบลีกอันดับ 1-3 ได้ซอง Platinum`}>การ์ดสตาฟ</SectionLabel>
         <div style={{ display: "flex", gap: 12, fontSize: 11.5, fontFamily: MONO_FONT, color: C.textDim }}>
-          <span>หยอดตู้วันนี้ <b style={{ color: C.good }}>{machinePullsLeft}</b>/{DAILY_FREE_MACHINE_PULLS}</span>
+          <span>เหรียญตู้ <b style={{ color: C.gold }}>🪙 {machineCoins}</b></span>
           <span>ซอง Platinum <b style={{ color: "#b9e6ff" }}>{platinumPacks}</b></span>
           <span>กระเป๋า <b style={{ color: C.chalk }}>{bag.length}</b></span>
+        </div>
+        <div style={{ fontSize: 10, color: C.textDim, marginTop: 4 }}>
+          ได้เหรียญตู้วันละ {DAILY_MACHINE_COIN_GRANT} + จบฤดูกาลอีก {SEASON_END_MACHINE_COINS} (สะสมข้ามวันได้)
         </div>
       </Panel>
 
@@ -13760,26 +13772,26 @@ function StaffCardsView({ career, uiLang = "th", onPull, onOpenPlatinum, onMerge
           ) : (
             <>
               <div style={{ fontSize: 12, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
-                หยอดตู้ 1 ครั้ง = สุ่มซอง Bronze/Silver/Gold ({CARDS_PER_STAFF_PULL} ใบ) — Bronze ออกบ่อยสุด, Gold หายากสุด (สูงสุด 5★)
+                หยอดตู้ 1 ครั้ง (🪙{MACHINE_PULL_COST}) = สุ่มซอง Bronze/Silver/Gold ({CARDS_PER_STAFF_PULL} ใบ) — Bronze ออกบ่อยสุด, Gold หายากสุด (สูงสุด 5★)
               </div>
               <button
                 type="button"
-                disabled={machinePullsLeft <= 0}
+                disabled={!canPullMachine}
                 onClick={() => { const tier = onPull(); if (tier) setOpeningTier(tier); }}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
-                  width: "100%", padding: "14px 16px", borderRadius: 10, cursor: machinePullsLeft > 0 ? "pointer" : "not-allowed",
-                  background: machinePullsLeft > 0 ? "linear-gradient(135deg, rgba(224,164,88,.25), rgba(224,164,88,.08))" : "#1a221c",
-                  border: `2px solid ${machinePullsLeft > 0 ? C.amber : C.steel}`,
-                  opacity: machinePullsLeft > 0 ? 1 : 0.55,
+                  width: "100%", padding: "14px 16px", borderRadius: 10, cursor: canPullMachine ? "pointer" : "not-allowed",
+                  background: canPullMachine ? "linear-gradient(135deg, rgba(224,164,88,.25), rgba(224,164,88,.08))" : "#1a221c",
+                  border: `2px solid ${canPullMachine ? C.amber : C.steel}`,
+                  opacity: canPullMachine ? 1 : 0.55,
                 }}
               >
                 <div style={{ textAlign: "left" }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: machinePullsLeft > 0 ? C.amber : C.textDim }}>🎰 หยอดตู้การ์ดสตาฟ</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: canPullMachine ? C.amber : C.textDim }}>🎰 หยอดตู้การ์ดสตาฟ</div>
                   <div style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT, marginTop: 2 }}>Bronze 60% · Silver 30% · Gold 10%</div>
                 </div>
-                <div style={{ textAlign: "right", fontSize: 12, fontWeight: 700, color: machinePullsLeft > 0 ? C.chalk : C.textDim, fontFamily: MONO_FONT }}>
-                  {machinePullsLeft > 0 ? `เหลือ ${machinePullsLeft}/${DAILY_FREE_MACHINE_PULLS}` : "ครบโควต้าวันนี้"}
+                <div style={{ textAlign: "right", fontSize: 12, fontWeight: 700, color: canPullMachine ? C.chalk : C.textDim, fontFamily: MONO_FONT }}>
+                  {canPullMachine ? `🪙 ${machineCoins}` : "เหรียญไม่พอ"}
                 </div>
               </button>
               {platinumPacks > 0 && (
