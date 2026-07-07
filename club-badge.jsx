@@ -30,6 +30,17 @@ const BADGE_CLIP = {
   hex: "polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)",
 };
 
+/** ลายพื้นตรา — ผ่าครึ่ง/แบ่งสี่ ให้ความรู้สึกเหมือนตราสโมสรจริงแทนพื้นไล่สีเรียบๆ (โทนเดียวกันเสมอ กันสีตีกัน) */
+const BADGE_PATTERNS = ["solid", "halfV", "halfD", "quarters"];
+function badgeBackground(pattern, primary) {
+  const dark = shadeColor(primary, -42);
+  const light = shadeColor(primary, 16);
+  if (pattern === "halfV") return `linear-gradient(90deg, ${light} 50%, ${dark} 50%)`;
+  if (pattern === "halfD") return `linear-gradient(135deg, ${light} 50%, ${dark} 50%)`;
+  if (pattern === "quarters") return `conic-gradient(${light} 0deg 90deg, ${dark} 90deg 180deg, ${light} 180deg 270deg, ${dark} 270deg 360deg)`;
+  return `linear-gradient(155deg, ${light}, ${dark})`;
+}
+
 export function shadeColor(hex, percent) {
   try {
     const f = parseInt(hex.slice(1), 16), t = percent < 0 ? 0 : 255, p = Math.abs(percent) / 100;
@@ -56,15 +67,20 @@ export function teamForBadge(team) {
   if (!shape) {
     shape = BADGE_SHAPES[Math.abs(seedHash(seed + "_shape")) % BADGE_SHAPES.length];
   }
+  let pattern = team.badgePattern;
+  if (!pattern) {
+    pattern = BADGE_PATTERNS[Math.abs(seedHash(seed + "_pattern")) % BADGE_PATTERNS.length];
+  }
   return {
     color,
     secondaryColor: team.secondaryColor || "#e8ece9",
     logoIndex: ((Number(logoIndex) % LOGO_ICONS.length) + LOGO_ICONS.length) % LOGO_ICONS.length,
     shape,
+    pattern,
   };
 }
 
-/** ตราโลโก้ทีม — gradient + ไอคอนที่เลือกตอนสร้างสโมสร + รูปทรงกรอบหลากหลาย (สี่เหลี่ยม/วงกลม/โล่/หกเหลี่ยม) */
+/** ตราโลโก้ทีม — ลายพื้นผ่าครึ่ง/สี่ + จานตรากลาง + เงามันแบบเข็มกลัดอีนาเมล + ไอคอน + รูปทรงกรอบหลากหลาย */
 export function ClubBadge({ team, size = 40, fill = false, secondaryFallback = "#e8ece9", iconScale = 0.52 }) {
   const crest = teamForBadge(team);
   const logo = LOGO_ICONS[crest.logoIndex];
@@ -74,25 +90,45 @@ export function ClubBadge({ team, size = 40, fill = false, secondaryFallback = "
   // เมื่อฝังอยู่ในกรอบอื่น (เช่น HexTeamBadge) ใช้สี่เหลี่ยมมนเสมอ กันรูปทรงซ้อนกันดูรก
   const shape = fill ? "square" : crest.shape;
   const clipPath = BADGE_CLIP[shape];
+  const borderRadius = shape === "circle" ? "50%" : shape === "square" ? (fill ? "28%" : px * 0.28) : 0;
 
   return (
     <div style={{
       width: fill ? "100%" : px,
       height: fill ? "100%" : px,
       aspectRatio: "1",
-      borderRadius: shape === "circle" ? "50%" : shape === "square" ? (fill ? "28%" : px * 0.28) : 0,
+      borderRadius,
       clipPath,
       flexShrink: 0,
-      background: `linear-gradient(155deg, ${primary}, ${shadeColor(primary, -22)})`,
+      position: "relative",
+      overflow: "hidden",
+      background: badgeBackground(crest.pattern, primary),
       display: "flex", alignItems: "center", justifyContent: "center",
-      boxShadow: "0 3px 8px rgba(0,0,0,.35)",
-      border: clipPath ? "none" : `2px solid ${secondary}55`,
+      boxShadow: clipPath
+        ? "0 3px 8px rgba(0,0,0,.4)"
+        : "0 3px 8px rgba(0,0,0,.4), inset 0 1.5px 0 rgba(255,255,255,.35), inset 0 -2px 3px rgba(0,0,0,.28)",
+      border: clipPath ? `1px solid rgba(0,0,0,.35)` : `2px solid ${secondary}66`,
     }}>
-      <svg viewBox="0 0 24 24" width={fill ? `${iconScale * 100}%` : px * iconScale} height={fill ? `${iconScale * 100}%` : px * iconScale}>
-        {logo.circle ? <circle cx="12" cy="12" r="9" fill={secondary} /> :
-          logo.ring ? <circle cx="12" cy="12" r="7.5" fill="none" stroke={secondary} strokeWidth="3" /> :
-          <path d={logo.path} fill={secondary} />}
-      </svg>
+      {/* เงามันมุมบน — ให้ความรู้สึกเข็มกลัดอีนาเมลแทนพื้นสีแบน */}
+      <div style={{
+        position: "absolute", inset: 0, pointerEvents: "none",
+        background: "radial-gradient(120% 90% at 28% 18%, rgba(255,255,255,.32), rgba(255,255,255,0) 55%)",
+      }} />
+      {/* จานตรากลาง — วงกลมคอนทราสต์รองไอคอน ให้มีมิติแบบตราจริงแทนไอคอนลอยเดี่ยวๆ */}
+      <div style={{
+        position: "relative",
+        width: fill ? "72%" : px * 0.72, height: fill ? "72%" : px * 0.72,
+        borderRadius: "50%",
+        background: `radial-gradient(circle at 35% 30%, ${shadeColor(primary, 30)}22, rgba(0,0,0,.22) 78%)`,
+        border: `1px solid rgba(255,255,255,.22)`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <svg viewBox="0 0 24 24" width={fill ? `${iconScale * 100}%` : px * iconScale} height={fill ? `${iconScale * 100}%` : px * iconScale} style={{ filter: "drop-shadow(0 1px 1px rgba(0,0,0,.35))" }}>
+          {logo.circle ? <circle cx="12" cy="12" r="9" fill={secondary} /> :
+            logo.ring ? <circle cx="12" cy="12" r="7.5" fill="none" stroke={secondary} strokeWidth="3" /> :
+            <path d={logo.path} fill={secondary} />}
+        </svg>
+      </div>
     </div>
   );
 }
