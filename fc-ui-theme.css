@@ -613,6 +613,18 @@ a.fc-header-chip {
   }
 }
 
+/* กล่องหลักของหน้าจอ Live match (สนาม+โมเมนตัม+ปุ่มควบคุม) — เดิมล็อก 920px ตายตัว ทำให้จอกว้างว่างซ้ายขวาเยอะ */
+.fc-live-wrap {
+  max-width: 640px;
+  margin: 0 auto;
+}
+@media (min-width: 900px) {
+  .fc-live-wrap { max-width: 1100px; }
+}
+@media (min-width: 1440px) {
+  .fc-live-wrap { max-width: 1500px; }
+}
+
 /* Live match — จอกว้างวางพาเนล ตัวจริง/สถิติ/ไทม์ไลน์ เรียงแถวใต้สนาม (แบบ FM) แทนซ้อนยาวคอลัมน์เดียว */
 .fc-live-split {
   display: flex;

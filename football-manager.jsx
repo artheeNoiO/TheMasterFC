@@ -4227,7 +4227,7 @@ export default function App({
   useEffect(() => {
     const iv = setInterval(() => {
       updateCareer((prev) => {
-        if (!(prev.constructionQueue || []).length) return prev;
+        if (!prev || !(prev.constructionQueue || []).length) return prev;
         const c = JSON.parse(JSON.stringify(prev));
         processConstructionQueue(c);
         return c;
@@ -4495,7 +4495,10 @@ export default function App({
   }, []);
   const updateCareer = useCallback((updater) => {
     setCareer((prev) => {
+      // ยังไม่มีอาชีพ (อยู่หน้าสร้างทีม/เลือกโหมดก่อน career ถูกสร้าง) — ไม่มีอะไรให้อัปเดต ป้องกันทุกจุดเรียกที่อาจมาถึงก่อนเวลา (เช่น interval พื้นหลัง)
+      if (!prev) return prev;
       const next = typeof updater === "function" ? updater(prev) : updater;
+      if (!next) return prev;
       const checked = checkOnlineUnlock(JSON.parse(JSON.stringify(next)));
       persist(checked);
       return checked;
@@ -11278,7 +11281,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           subsUsed={subsUsed}
         />
       )}
-      <div style={{ width: "100%", maxWidth: "min(920px, 100%)", opacity: halftimeOpen ? 0.35 : 1, pointerEvents: halftimeOpen ? "none" : "auto" }}>
+      <div className="fc-live-wrap" style={{ width: "100%", opacity: halftimeOpen ? 0.35 : 1, pointerEvents: halftimeOpen ? "none" : "auto" }}>
         {!halftimeOpen && half === 1 && (
           <div style={{ fontSize: 10, color: C.textDim, marginBottom: 6, textAlign: "center" }}>แผนล็อกระหว่างเกม · ปรับได้อีกครั้งตอนพักครึ่ง</div>
         )}

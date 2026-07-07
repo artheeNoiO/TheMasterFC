@@ -301,8 +301,8 @@ function TrackerPlayerFigure({ x, y, shirtColor, shortsColor, gkColor, num, isGK
       )}
       {stamina != null && (
         <div style={{
-          position: "absolute", left: "18%", right: "18%", top: "-22%", height: "9%",
-          minHeight: 2, background: "rgba(0,0,0,0.5)", borderRadius: 2, overflow: "hidden",
+          position: "absolute", left: "14%", right: "14%", bottom: "-16%", height: "8%",
+          minHeight: 2, background: "rgba(0,0,0,0.55)", borderRadius: 2, overflow: "hidden",
         }}>
           <div style={{ width: `${stamina}%`, height: "100%", background: staminaColor(stamina) }} />
         </div>
