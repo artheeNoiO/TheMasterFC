@@ -630,13 +630,21 @@ function refreshFullRosterMasterLeagues(c) {
   return c;
 }
 
+/** ทีมบอทมีสีเดียว (color) — กางเกงเลือกขาว/เข้มให้ตัดกับสีเสื้อ (ธรรมเนียมชุดแข่งจริง) กันทุกทีมกางเกงสีเดียวกันหมด */
+function botSecondaryColor(primary) {
+  const hex = (primary || "#888888").replace("#", "");
+  const r = parseInt(hex.substr(0, 2), 16) / 255, g = parseInt(hex.substr(2, 2), 16) / 255, b = parseInt(hex.substr(4, 2), 16) / 255;
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return luminance > 0.55 ? "#1a1a1a" : C.chalk;
+}
+
 function createLegendMasterTeams(leagueId, startDay) {
   return (LEGEND_TEAMS[leagueId] || []).map((t, idx) => ({
     id: `leg_${leagueId}_${t.key}`,
     name: t.name,
     short: t.short,
     color: t.color,
-    secondaryColor: C.chalk,
+    secondaryColor: botSecondaryColor(t.color),
     logoIndex: idx % LOGO_ICONS.length,
     tier: t.tier,
     division: 0,
@@ -2090,6 +2098,10 @@ function normalizeCareerSave(c) {
       if (seen.has(t.id)) return false;
       seen.add(t.id);
       return true;
+    });
+    // เซฟเก่าก่อนแก้บั๊กกางเกงบอททุกทีมสีเดียวกัน (C.chalk ตายตัว) — คำนวณสีกางเกงใหม่ให้ตัดกับสีเสื้อจริง
+    c.teams.forEach((t) => {
+      if (!t.isUser && !t.shortsColor && t.secondaryColor === C.chalk) t.secondaryColor = botSecondaryColor(t.color);
     });
   }
   if (!c.legendOwnership) c.legendOwnership = initLegendOwnership(c.legendLeagueId, c.teams, c.players);
@@ -3549,7 +3561,7 @@ function createNewCareer(customClub, managerName = "ผู้จัดการ"
   const legendLeagueId = "england";
   const masterBots = createLegendMasterTeams(legendLeagueId, 1);
   const challengerBots = CHALLENGER_TEAM_DEFS.map((t, idx) => ({
-    id: "c" + idx, name: t.name, short: t.short, color: t.color, secondaryColor: C.chalk, logoIndex: idx % LOGO_ICONS.length, tier: t.tier,
+    id: "c" + idx, name: t.name, short: t.short, color: t.color, secondaryColor: botSecondaryColor(t.color), logoIndex: idx % LOGO_ICONS.length, tier: t.tier,
     division: 1, isUser: false, formation: "4-4-2", budget: rand(1500000, 4000000),
     manager: genManager(), autoMode: true, chemistry: 50,
   }));
@@ -6720,6 +6732,7 @@ export default function App({
             uiLang={uiLang}
             teams={career.teams}
             leagueId={career.legendLeagueId || "thailand"}
+            team={uTeam}
           />
         )}
         {tab === "market" && (
@@ -8897,7 +8910,7 @@ function NationalityBadge({ nationality, lang, compact }) {
   );
 }
 
-function SquadView({ squad, xi, squadSize, injuredCount, canKickoff, xiAfterFill, onSell, allowSell, currentDay, budget, onRenewContract, onGoMedical, onGoCoach, uiLang = "th", teams, leagueId = "thailand" }) {
+function SquadView({ squad, xi, squadSize, injuredCount, canKickoff, xiAfterFill, onSell, allowSell, currentDay, budget, onRenewContract, onGoMedical, onGoCoach, uiLang = "th", teams, leagueId = "thailand", team }) {
   const groups = ["GK", "DF", "MF", "FW"];
   const sorted = [...squad].sort((a, b) => b.rating - a.rating);
   const fitCount = squad.filter((p) => p.injuryDays <= 0).length;
@@ -8924,7 +8937,7 @@ function SquadView({ squad, xi, squadSize, injuredCount, canKickoff, xiAfterFill
           <SectionLabel>{POS_TH[g]} ({sorted.filter((p) => p.position === g).length})</SectionLabel>
           <div className="fc-squad-grid">
             {sorted.filter((p) => p.position === g).map((p) => (
-              <PlayerRow key={p.id} p={p} isXI={xi.includes(p.id)} squadSize={squadSize} onSell={onSell} allowSell={allowSell} currentDay={currentDay} budget={budget} onRenewContract={onRenewContract} uiLang={uiLang} teams={teams} leagueId={leagueId} />
+              <PlayerRow key={p.id} p={p} isXI={xi.includes(p.id)} squadSize={squadSize} onSell={onSell} allowSell={allowSell} currentDay={currentDay} budget={budget} onRenewContract={onRenewContract} uiLang={uiLang} teams={teams} leagueId={leagueId} team={team} />
             ))}
           </div>
         </Panel>
@@ -8933,7 +8946,17 @@ function SquadView({ squad, xi, squadSize, injuredCount, canKickoff, xiAfterFill
   );
 }
 function attrGroupAvg(p, group) { return ATTR_GROUPS[group].reduce((s, k) => s + p.attrs[k], 0) / ATTR_GROUPS[group].length; }
-function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, onRenewContract, uiLang = "th", teams, leagueId = "thailand" }) {
+/** ไอคอนเสื้อจิ๋วสีทีม — โชว์ต่อแถวนักเตะใน Squad list ให้เห็นสีชุดแข่งเร็วๆ */
+function MiniKitBadge({ team, size = 18 }) {
+  const shirt = teamShirtColor(team);
+  const trim = team?.secondaryColor || "#f2f0e6";
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ flexShrink: 0 }} aria-hidden>
+      <path d="M30 10 L10 25 L20 40 L30 32 L30 88 L70 88 L70 32 L80 40 L90 25 L70 10 L60 18 Q50 25 40 18 Z" fill={shirt} stroke={trim} strokeWidth="6" />
+    </svg>
+  );
+}
+function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, onRenewContract, uiLang = "th", teams, leagueId = "thailand", team }) {
   const [open, setOpen] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
   const daysLeft = p.contractEndsDay != null && currentDay != null ? p.contractEndsDay - currentDay : null;
@@ -8943,6 +8966,7 @@ function PlayerRow({ p, isXI, squadSize, onSell, allowSell, currentDay, budget, 
   return (
     <div style={{ borderBottom: `1px solid ${C.steel}`, padding: "6px 0" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {team && <MiniKitBadge team={team} />}
         <span
           title={playerPosTH(p)}
           style={{
