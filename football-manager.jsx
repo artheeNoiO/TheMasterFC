@@ -4542,6 +4542,19 @@ export default function App({
     showToast("เข้าสู่โลกออนไลน์แล้ว!");
   }
 
+  /** กลับไปเล่นโลกจำลองคนเดียว — แค่สลับ flag กลับ ข้อมูลทีม/ลีก/ฟิกซ์เจอร์โลกจำลองไม่ได้ถูกแตะระหว่างอยู่ออนไลน์เลย จึงเล่นต่อได้ปกติทันที
+   * (สโมสรบนเซิร์ฟเวอร์ออนไลน์ไม่ถูกลบ — กลับเข้าออนไลน์ใหม่ได้เสมอที่ปุ่ม "เข้าสู่โลกออนไลน์") */
+  function exitOnlineMode() {
+    updateCareer((prev) => {
+      const c = JSON.parse(JSON.stringify(prev));
+      if (c.playMode !== "online") return c;
+      c.playMode = "sandbox";
+      c.log = [`🕹️ กลับไปเล่นโลกจำลองคนเดียว — สโมสรออนไลน์ยังอยู่ กลับเข้าใหม่ได้ทุกเมื่อ`, ...c.log];
+      return c;
+    });
+    showToast("กลับไปโลกจำลองแล้ว!");
+  }
+
   function acquireLegend(legendId) {
     updateCareer((prev) => {
       const c = JSON.parse(JSON.stringify(prev));
@@ -6750,6 +6763,7 @@ export default function App({
             career={career}
             onReset={resetCareer}
             onEnterOnline={enterOnlineMode}
+            onExitOnline={exitOnlineMode}
             uiLang={uiLang}
             onSetUiLang={setUiLang}
             accountUser={accountUser}
@@ -7105,7 +7119,7 @@ function LeaguePickModal({ currentLeagueId, onPick, onClose }) {
 }
 
 /* ============================== SANDBOX / ONLINE UNLOCK ============================== */
-function SandboxModePanel({ career, onEnterOnline, compact }) {
+function SandboxModePanel({ career, onEnterOnline, onExitOnline, compact }) {
   const fin = computeTeamFinances(career);
   const pct = clamp((fin.teamValue / ONLINE_UNLOCK_TEAM_VALUE) * 100, 0, 100);
   const unlocked = career.onlineUnlocked;
@@ -7117,7 +7131,13 @@ function SandboxModePanel({ career, onEnterOnline, compact }) {
     return (
       <Panel style={{ marginBottom: 8 }} accent={C.good}>
         <SectionLabel>โหมดออนไลน์</SectionLabel>
-        <div style={{ fontSize: 11, color: C.textDim }}>มูลค่าสโมสร <span style={{ color: C.amber, fontFamily: MONO_FONT }}>{formatMoney(fin.teamValue)}</span></div>
+        <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10 }}>มูลค่าสโมสร <span style={{ color: C.amber, fontFamily: MONO_FONT }}>{formatMoney(fin.teamValue)}</span></div>
+        {onExitOnline && (
+          <>
+            <button type="button" onClick={onExitOnline} style={{ ...fmBtnGhost(), width: "100%" }}>🕹️ กลับไปโลกจำลอง (Sandbox)</button>
+            <div style={{ fontSize: 9.5, color: C.textDim, marginTop: 6, lineHeight: 1.5 }}>สโมสรออนไลน์ยังอยู่ — กดเข้าออนไลน์ใหม่ได้เสมอทีหลัง</div>
+          </>
+        )}
       </Panel>
     );
   }
@@ -12746,7 +12766,7 @@ function SoundSettingsPanel() {
   );
 }
 
-function SettingsView({ career, onReset, onEnterOnline, uiLang = "th", onSetUiLang, accountUser, onOpenAuth, onOpenOnlinePortal, onLogout }) {
+function SettingsView({ career, onReset, onEnterOnline, onExitOnline, uiLang = "th", onSetUiLang, accountUser, onOpenAuth, onOpenOnlinePortal, onLogout }) {
   const [confirming, setConfirming] = useState(false);
   const fin = computeTeamFinances(career);
   return (
@@ -12794,7 +12814,7 @@ function SettingsView({ career, onReset, onEnterOnline, uiLang = "th", onSetUiLa
           </>
         )}
       </Panel>
-      <SandboxModePanel career={career} onEnterOnline={onEnterOnline} />
+      <SandboxModePanel career={career} onEnterOnline={onEnterOnline} onExitOnline={onExitOnline} />
       <Panel accent={C.good}>
         <SectionLabel>{t(uiLang, "settings.language")}</SectionLabel>
         <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10, lineHeight: 1.55 }}>{t(uiLang, "settings.languageHint")}</div>
@@ -14185,7 +14205,7 @@ function formatCountdown(ms) {
 
 /** แบนเนอร์เตือนก่อนแมท — โชว์บน Dashboard เมื่อทีมตัวเองยังไม่คิกอฟ (รอคิวรอบถัดไป) นับถอยหลังให้ */
 function OnlineNextKickoffBanner() {
-  const [info, setInfo] = useState(null); // { etaMs, fetchedAt, scheduled }
+  const [info, setInfo] = useState(null); // { etaMs, fetchedAt, hasScheduledMatch }
   const [now, setNow] = useState(Date.now());
 
   async function poll() {
@@ -14194,8 +14214,8 @@ function OnlineNextKickoffBanner() {
       if (!club) { setInfo(null); return; }
       const d = await fetchShardMatchesToday();
       const mine = d.matches?.find((m) => m.home?.id === club.id || m.away?.id === club.id);
-      if (mine && mine.status === "scheduled" && d.nextKickoffEtaMs != null) {
-        setInfo({ etaMs: d.nextKickoffEtaMs, fetchedAt: Date.now() });
+      if (mine && mine.status === "scheduled") {
+        setInfo({ etaMs: d.nextKickoffEtaMs, fetchedAt: Date.now(), hasScheduledMatch: true });
       } else {
         setInfo(null);
       }
@@ -14207,14 +14227,17 @@ function OnlineNextKickoffBanner() {
   useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
 
   if (!info) return null;
-  const remaining = info.etaMs - (now - info.fetchedAt);
-  if (remaining <= 0) return null;
+  // ไม่มี eta จากเซิร์ฟเวอร์ (เช่น หลังรีสตาร์ท) หรือถึงเวลาแล้วแต่ยังรอรอบคิกอฟ — โชว์ "กำลังจะเริ่ม" แทนที่จะซ่อนไปเฉยๆ
+  const remaining = info.etaMs != null ? info.etaMs - (now - info.fetchedAt) : null;
+  const startingSoon = remaining == null || remaining <= 0;
 
   return (
     <Panel style={{ border: `1px solid ${C.amber}`, background: "rgba(224,164,88,.08)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontSize: 12, color: C.amber, fontWeight: 700 }}>⏳ ทีมของคุณจะเตะในอีก...</div>
-        <div style={{ fontSize: 16, fontWeight: 800, fontFamily: MONO_FONT, color: C.amber }}>{formatCountdown(remaining)}</div>
+        <div style={{ fontSize: 16, fontWeight: 800, fontFamily: MONO_FONT, color: C.amber }}>
+          {startingSoon ? "กำลังจะเริ่ม" : formatCountdown(remaining)}
+        </div>
       </div>
     </Panel>
   );
