@@ -11196,17 +11196,27 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   // ยิงจริง — ตัดสินผล (เข้า/เซฟ/หลุด) แล้วเล่นสดผ่าน ambient เรียกได้ทั้งจากลูกเต๋าสุ่มรายทิค และจากเหตุการณ์
   // "กองหน้าเพิ่งรับบอลในตำแหน่งอันตราย" โดยตรง (ผูกช็อตเข้ากับการเล่นจริงแทนที่จะเป็นแค่การสุ่มลอยๆ)
   function fireShot(attackingHomeShot, zone) {
-    const scoreProb = attackingHomeShot ? xgRef.current.xgHome / 40 : xgRef.current.xgAway / 40;
-    const shotResult = resolveShotResult(scoreProb, zone);
-    const onTarget = shotResult === "goal" || shotResult === "save";
-    const isGoal = shotResult === "goal";
-    const gMin = gameMinRef.current;
     const teamShort = attackingHomeShot ? homeTeam.short : awayTeam.short;
     const shotSide = attackingHomeShot ? "home" : "away";
     const xi = attackingHomeShot ? homeXI : awayXI;
     const sq = attackingHomeShot ? homeSquad : awaySquad;
     const shootingIsUser = attackingHomeShot === isUserHome;
-    const scorer = pickScorer(sq, xi, shootingIsUser ? null : prep.markPlayerId);
+    // คนยิงต้องเป็นคนที่ ambient บอกว่าถือบอลอยู่จริง (ไม่ใช่สุ่มตำแหน่งแยกต่างหากแบบเดิมที่ทำให้ชื่อผู้ยิง
+    // ไม่ตรงกับตัวที่ animate อยู่ในภาพเลย) แล้วใช้ finishing/composure ของคนนั้นจริงๆถ่วงผลยิง แทนใช้แค่ xG รวมทีม
+    const amb = ambientRef.current;
+    const realCarrierIdx = amb ? (attackingHomeShot ? amb.carrierHome : amb.carrierAway) : null;
+    const shooterId = realCarrierIdx != null ? xi[realCarrierIdx] : null;
+    const scorer = (shooterId && sq.find((p) => p.id === shooterId))
+      || pickScorer(sq, xi, shootingIsUser ? null : prep.markPlayerId);
+    // ทักษะยิงจริงของคนที่กำลังยิง (1-20 เหมือนสเกล attribute อื่นในเกม, 10 = ค่ากลาง) แทนที่จะดูแค่ xG รวมทีม
+    const finishing = scorer?.attrs?.finishing ?? 10;
+    const composure = scorer?.attrs?.composure ?? 10;
+    const skillFactor = clamp(((finishing * 0.7 + composure * 0.3) / 10), 0.55, 1.85);
+    const scoreProb = (attackingHomeShot ? xgRef.current.xgHome / 40 : xgRef.current.xgAway / 40) * skillFactor;
+    const shotResult = resolveShotResult(scoreProb, zone);
+    const onTarget = shotResult === "goal" || shotResult === "save";
+    const isGoal = shotResult === "goal";
+    const gMin = gameMinRef.current;
     setStats((s) => attackingHomeShot
       ? { ...s, shotsH: s.shotsH + 1, sotH: s.sotH + (onTarget ? 1 : 0) }
       : { ...s, shotsA: s.shotsA + 1, sotA: s.sotA + (onTarget ? 1 : 0) });
@@ -11429,7 +11439,22 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       // เพราะสถานการณ์ "มีคนประกบอยู่ใกล้ๆ" เกิดได้บ่อยมากตอนปีก/กองหน้าเลี้ยงเข้าใส่กองหลัง (ตามที่ตั้งใจให้เลี้ยงเยอะขึ้น)
       // ถ้าใช้ probability เดิมจะกลายเป็นฟาวล์ถี่มากทุกครั้งที่มีการประกบต่อเนื่องหลาย tick
       const inTackleRange = pressSit && pressSit.presserIdx >= 0 && pressSit.dist < 3.2;
-      if (inTackleRange && tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.045 * effectiveSpeed)) {
+      // ใช้ tackling/decisions ของคนเข้าสกัดจริง เทียบกับ dribbling ของคนถือบอลจริง แทนความน่าจะเป็นคงที่ —
+      // นักสกัดฝีมือดีฟาวล์น้อยกว่า นักเลี้ยงบอลฝีมือดีดึงฟาวล์ออกมาได้มากกว่า เหมือนหลักการเดียวกับที่ยิงประตูใช้ finishing จริง
+      let foulFactor = 1;
+      if (inTackleRange) {
+        const attackXi = pressSit.attackSide === "home" ? homeXI : awayXI;
+        const attackSq = pressSit.attackSide === "home" ? homeSquad : awaySquad;
+        const defXi = pressSit.defSide === "home" ? homeXI : awayXI;
+        const defSq = pressSit.defSide === "home" ? homeSquad : awaySquad;
+        const carrierPlayer = attackSq.find((p) => p.id === attackXi[pressSit.carrierIdx]);
+        const presserPlayer = defSq.find((p) => p.id === defXi[pressSit.presserIdx]);
+        const tackling = presserPlayer?.attrs?.tackling ?? 10;
+        const tackleDecisions = presserPlayer?.attrs?.decisions ?? 10;
+        const dribbling = carrierPlayer?.attrs?.dribbling ?? 10;
+        foulFactor = clamp((dribbling - (tackling * 0.6 + tackleDecisions * 0.4)) / 10 + 1, 0.4, 2);
+      }
+      if (inTackleRange && tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.045 * effectiveSpeed * foulFactor)) {
         const awayFouled = pressSit.attackSide === "home";
         if (awayFouled) setStats((s) => ({ ...s, foulsA: s.foulsA + 1 }));
         else setStats((s) => ({ ...s, foulsH: s.foulsH + 1 }));
