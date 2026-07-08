@@ -867,10 +867,18 @@ export async function patchUserRoadmap(userId, action, payload) {
 export async function runDayTickAll() {
   const shards = await prisma.leagueShard.findMany({ select: { id: true } });
   const results = [];
+  // แยก try/catch ต่อชาร์ด — ชาร์ดใดพัง (error) ต้องไม่บล็อกชาร์ดอื่นที่เหลือในลูปเดียวกัน
+  // (บั๊กที่เจอจริง: ชาร์ดหนึ่ง throw แล้วชาร์ดถัดๆ ไปในลิสต์ไม่ได้ tick เลยทั้งรอบ ค้างที่ "รอคิกอฟ" ตลอดไป)
   for (const { id } of shards) {
-    results.push(await runDayTickForShard(id));
-    const reclaim = await reclaimInactiveLegends(id);
-    if (reclaim.reclaimed) results[results.length - 1].legendsReclaimed = reclaim.reclaimed;
+    try {
+      const tick = await runDayTickForShard(id);
+      const reclaim = await reclaimInactiveLegends(id);
+      if (reclaim.reclaimed) tick.legendsReclaimed = reclaim.reclaimed;
+      results.push(tick);
+    } catch (e) {
+      console.error(`day-tick error (shard ${id})`, e);
+      results.push({ shardId: id, action: "error", error: e.message });
+    }
   }
   return results;
 }
