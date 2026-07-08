@@ -14858,27 +14858,37 @@ function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
 function OnlineLiveHomeCard() {
   const [myClub, setMyClub] = useState(null);
   const [data, setData] = useState(null);
+  const [dataFetchedAt, setDataFetchedAt] = useState(null);
   const [open, setOpen] = useState(false);
+  const [now, setNow] = useState(Date.now());
 
   async function poll() {
     try {
       const club = await fetchMyShardClub();
       setMyClub(club);
-      if (club) setData(await fetchShardMatchesToday());
+      if (club) {
+        setData(await fetchShardMatchesToday());
+        setDataFetchedAt(Date.now());
+      }
     } catch {
       /* เงียบไว้ — ไม่ให้การ์ดหน้าหลักพังเพราะโพลล้มเหลว */
     }
   }
   useEffect(() => { poll(); const id = setInterval(poll, 15000); return () => clearInterval(id); }, []);
+  useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
 
   const myMatch = data?.matches?.find((m) => m.home?.id === myClub?.id || m.away?.id === myClub?.id);
   const isLive = myMatch?.status === "live";
+  const isScheduled = myMatch?.status === "scheduled";
+  const remaining = isScheduled && data?.nextKickoffEtaMs != null && dataFetchedAt != null
+    ? data.nextKickoffEtaMs - (now - dataFetchedAt)
+    : null;
   const statusLabel = !myClub
     ? "ยังไม่ได้เชื่อมต่อสโมสรออนไลน์"
     : isLive
       ? `🔴 สด — ${myMatch.homeGoals}-${myMatch.awayGoals}`
-      : myMatch?.status === "scheduled"
-        ? "⏳ รอคิกอฟรอบถัดไป"
+      : isScheduled
+        ? `⏳ รอคิกอฟรอบถัดไป${remaining != null ? (remaining > 0 ? ` — อีก ${formatCountdown(remaining)}` : " — กำลังจะเริ่ม") : ""}`
         : "วันนี้ยังไม่มีแมทของทีมคุณ";
 
   return (
