@@ -66,6 +66,10 @@ function shotOutcomePoint(outcome, goalPx, fwd) {
   if (outcome === "save") {
     return { px: goalPx - fwd * 2, py: clamp(cy + side * (4 + Math.random() * 4.5), cy - GOAL_HALF_W + 1, cy + GOAL_HALF_W - 1) };
   }
+  if (outcome === "cleared") {
+    // สกัดออกไปได้พอดีที่เส้นประตู — ลึกน้อยกว่า save (กองหลังดักได้ก่อนถึงตัว GK ด้วยซ้ำ)
+    return { px: goalPx - fwd * 0.5, py: clamp(cy + side * (3 + Math.random() * 6), cy - GOAL_HALF_W + 1, cy + GOAL_HALF_W - 1) };
+  }
   if (outcome === "post") {
     return { px: goalPx, py: cy + side * GOAL_HALF_W };
   }
@@ -200,7 +204,19 @@ export function createAmbientPitchState(homeSlots, awaySlots) {
     gkHold: 0,
     forceGkLaunch: null,
     pendingEvents: [],
+    foulReaction: null,
+    offsideFlag: null,
   };
+}
+
+/** เรียกตอนมีฟาวล์เกิดขึ้นจริง (football-manager.jsx เป็นคนตัดสินว่าฟาวล์เกิดขึ้น) — ผู้เล่นที่โดนฟาวล์
+ * เล่นท่า stumble (ล้มแล้วลุกไว) หรือ injury-down (นอนนิ่งค้างนาน กรณีฟาวล์รุนแรง) — ไม่กระทบ
+ * possession/state อื่นเลย เป็นแค่เอฟเฟกต์ภาพช่วงเวลาสั้นๆ */
+export function triggerFoulReaction(state, side, idx, { severe = false } = {}) {
+  if (!state) return state;
+  const durationMs = severe ? 3600 : 1500;
+  state.foulReaction = { side, idx, kind: severe ? "injury-down" : "stumble", expiresAt: Date.now() + durationMs };
+  return state;
 }
 
 /* ============================ จังหวะยิง (สโลว์โมชั่น) ============================ */
@@ -227,10 +243,27 @@ export function beginAmbientShot(state, { shotSide, outcome, counted = true, aim
   const fwd = shotSide === "home" ? 1 : -1;
   const goalPx = shotSide === "home" ? 100 : 0;
   const outPt = shotOutcomePoint(outcome, goalPx, fwd);
+  // สกัดไลน์ประตู — หากองหลัง (ไม่ใช่ GK) ของฝั่งรับที่ยืนใกล้แนวประตูที่สุด มาเป็นคนสไลด์สกัดแทน GK
+  let clearerIdx = -1;
+  if (outcome === "cleared") {
+    const defSide = shotSide === "home" ? "away" : "home";
+    const defSlots = defSide === "home" ? s.homeSlots : s.awaySlots;
+    const dfCandidates = defSlots
+      .map((sl, idx) => ({ sl, idx }))
+      .filter(({ sl }) => sl.pos === "DF");
+    clearerIdx = dfCandidates.length
+      ? dfCandidates[Math.floor(Math.random() * dfCandidates.length)].idx
+      : gkIndexOf(defSlots);
+  }
   s.shotSeq = {
     phase: "aim", t: 0, outcome, shotSide, outPt, fwd, goalPx, counted,
-    aimTime, shooterIdx: carrierIdx(s),
+    aimTime, shooterIdx: carrierIdx(s), clearerIdx,
+    // วอลเลย์เฉพาะยิงเปิดเกมส์ปกติ (counted=true) — ยิงจากลูกตั้งเตะ/โหม่งมุมมีที่มาเฉพาะทางอยู่แล้ว ไม่ควรทับ
+    isVolley: counted && Math.random() < 0.3,
+    // ราโบน่า — ท่าโชว์หายากมาก เกิดได้เฉพาะยิงเปิดเกมส์ปกติที่ไม่ใช่วอลเลย์ (คนละท่ากัน ทับกันไม่ได้)
+    isRabona: counted && Math.random() < 0.05,
   };
+  s.shotSeq.isRabona = s.shotSeq.isRabona && !s.shotSeq.isVolley;
   // ไล่ระดับความช้าแทนการสแนปทันที (เดิม s.timeScale = 0.35 ตรงๆ ทำให้จังหวะยิงดู "วาป" ตัดเข้าสโลว์โม
   // แบบไม่มีช่วงเปลี่ยนผ่านเลย) — ค่อยๆ หน่วงลงใน advanceAmbientPitch แทน ดูเป็นธรรมชาติกว่า
   s.timeScaleTarget = 0.35;
@@ -405,6 +438,8 @@ export function startCornerScene(state, attackSide) {
     headerPt: { px: goalPx - fwd * (6 + Math.random() * 3), py: 44 + Math.random() * 12 },
     takerIdx, shortIdx, raiders, boxTargets, markTargets,
     headerIdx: raiders[0] ?? takerIdx,
+    // สุ่มครั้งเดียวตอนเริ่มซีน (ไม่สุ่มทุกเฟรม กันท่ากระพริบ) — โหม่งพุ่งดิ่งเกิดเป็นบางจังหวะ ไม่ใช่ทุกครั้ง
+    divingHeader: Math.random() < 0.3,
   };
   return s;
 }
@@ -445,7 +480,8 @@ function advanceCorner(s, dt) {
         setCarrier(s, sp.headerIdx);
         sp.phase = "header";
         const roll = Math.random();
-        const outcome = roll < 0.18 ? "goal" : roll < 0.55 ? "save" : roll < 0.88 ? "wide" : "post";
+        // เพิ่ม "cleared" (กองหลังสไลด์สกัดออกไปได้ที่เส้นประตู) — โมเมนต์ดราม่าที่เกิดบ่อยจริงจากลูกมุม
+        const outcome = roll < 0.18 ? "goal" : roll < 0.42 ? "save" : roll < 0.62 ? "cleared" : roll < 0.88 ? "wide" : "post";
         const keepSp = sp;
         s.setPiece = null; // beginAmbientShot กันซีนซ้อน — ปล่อยผ่านแล้วคืน setPiece ให้คนยังออกันอยู่
         beginAmbientShot(s, { shotSide: sp.attackSide, outcome, counted: false, aimTime: 0.2 });
@@ -576,6 +612,8 @@ export function startPenaltyScene(state, attackSide) {
   s.setPiece = {
     type: "penalty", phase: "setup", t: 0,
     attackSide, defSide, fwd, goalPx, spot, takerIdx,
+    // พานเอนก้า — จิ้มชิพใส่ผู้รักษาประตูแทนยิงตรงแบบเดิม เกิดเป็นบางจังหวะ ไม่ใช่ทุกลูก
+    isPanenka: Math.random() < 0.12,
   };
   return s;
 }
@@ -739,6 +777,17 @@ function advanceOpenPlay(s, dt, pressure) {
       const plan = aimPassAtReceiver(s.pendingPass, recv, possSide);
       beginPass(b, plan, { px: b.px, py: b.py });
       s.pendingPass = null;
+
+      // ธงล้ำหน้า — แค่เอฟเฟกต์ภาพ (ไม่กระทบผลจริง/บอลยังบินตามปกติทุกอย่าง) โชว์เป็นบางจังหวะ
+      // ตอนบอลทะลุช่องแล้วผู้รับยืนล้ำแนวกองหลังฝ่ายรับไปมาก — ไม่ใช่ระบบตัดสินล้ำหน้าจริง
+      if (b.phase === "through" && recv) {
+        const opp = oppTeam(s, possSide);
+        const defLinePx = defLineOf(opp.positions, opp.slots);
+        const fwd = possSide === "home" ? 1 : -1;
+        if (Number.isFinite(defLinePx) && (recv.px - defLinePx) * fwd > 3 && Math.random() < 0.25) {
+          s.offsideFlag = { expiresAt: Date.now() + 1800, px: defLinePx, py: recv.py < 50 ? -3 : 103 };
+        }
+      }
     }
   } else if (["pass", "through", "safe"].includes(b.phase)) {
     const done = tickPassFlight(b, possSide, dt);
@@ -855,6 +904,7 @@ function updateTeamAmbient(teamArr, slots, side, ball, possSide, animTick, carri
   const sp = ctx?.setPiece;
   const sq = ctx?.shotSeq;
   const restart = ctx?.restart;
+  const foulReaction = ctx?.foulReaction;
 
   return slots.map((slot, i) => {
     const anchor = slotToPitchAmbient(slot, side);
@@ -997,6 +1047,50 @@ function updateTeamAmbient(teamArr, slots, side, ball, possSide, animTick, carri
     else if (isCarrier || isReceiver || isPasser) facing = hasBall ? fwd : -fwd;
     teamArr[i].facing = facing;
 
+    // actionKind — ท่าที่ควรเล่นตอนนี้ อิงจากสถานะที่มีอยู่แล้วทั้งหมด (ไม่ต้องจำลองซ้ำ)
+    // ลำดับความสำคัญ: ฉลอง > เซฟ/ยิง/ลูกตั้งเตะ > ครองบอล/จ่าย/รับ/ประกบ > ว่าง (null = ท่ายืน/วิ่งเฉยๆ)
+    let actionKind = null;
+    if (celeb && side === celeb.side && i === celeb.scorerIdx) {
+      actionKind = "celebrate";
+    } else if (foulReaction && foulReaction.side === side && foulReaction.idx === i) {
+      // เพิ่งโดนฟาวล์ — ล้มสั้นๆ หรือนอนนิ่งค้าง (กรณีรุนแรง) ก่อนกลับมาเล่นต่อ
+      actionKind = foulReaction.kind || "stumble";
+    } else if (sq && sq.outcome === "cleared" && side !== sq.shotSide && i === sq.clearerIdx) {
+      // สกัดไลน์ประตู — กองหลัง (ไม่ใช่ GK) เป็นคนสไลด์ดักบอลออกไปแทน
+      actionKind = "slide";
+    } else if (sq && isGK && side !== sq.shotSide && sq.outcome !== "cleared") {
+      // เลือกท่าเซฟตามทิศ/ระยะจริงของลูกยิง (ไม่ใช่พุ่งทางเดียวตายตัว หรือได้ตัวว่างเปล่าตอนไม่เข้า)
+      // outPt.py คือตำแหน่งขวางประตูที่บอลจบ (50=กลาง) — ใกล้กลาง=กระโดดตรง, ไกล=พุ่งข้าง, "post"=เอื้อมสุดตัว
+      const distFromCenter = Math.abs((sq.outPt?.py ?? 50) - 50);
+      if (sq.outcome === "post") actionKind = "gk-dive-tipover";
+      else if (distFromCenter < 4) actionKind = "gk-jump-save";
+      else actionKind = sq.outPt.py > 50 ? "gk-save-right" : "gk-save-left";
+    } else if (sq && side === sq.shotSide && i === sq.shooterIdx && (sq.phase === "aim" || sq.phase === "fly")) {
+      actionKind = sq.isRabona ? "rabona" : (sq.isVolley ? "volley" : "shot");
+    } else if (sp?.type === "corner" && side === sp.attackSide && i === sp.takerIdx && sp.phase !== "header") {
+      actionKind = "corner";
+    } else if (sp?.type === "corner" && side === sp.attackSide && i === sp.headerIdx && sp.phase === "header") {
+      actionKind = sp.divingHeader ? "header-diving" : "header";
+    } else if (sp?.type === "freekick" && side === sp.attackSide && i === sp.takerIdx && sp.phase === "shot") {
+      actionKind = "freekick";
+    } else if (sp?.type === "penalty" && side === sp.attackSide && i === sp.takerIdx && sp.phase === "shot") {
+      actionKind = sp.isPanenka ? "chip" : "penalty";
+    } else if (isCarrier) {
+      // รอบเดฟ — เข้าใกล้ประตูฝ่ายตรงข้ามมากๆ (ระยะ GK ยืน) ใช้ท่าเลี้ยงหลบแทนเลี้ยงธรรมดา
+      // สลับท่าโชว์เลี้ยงหลบ (nutmeg/stepover/ครัฟฟ์เทิร์น/ซีดานเทิร์น/เอลาสติโก้) ตาม tick แบบช้าๆ (ไม่ใช่ Math.random ทุกเฟรม — กันท่ากระพริบสลับทุกเฟรม)
+      const atkGoalPx = side === "home" ? 100 : 0;
+      const nearGoal = Math.abs(ball.px - atkGoalPx) < 12 && ball.phase === "dribble";
+      const flourishKinds = ["nutmeg", "stepover", "cruyff-turn", "zidane-turn", "elastico"];
+      actionKind = nearGoal ? flourishKinds[(i + Math.floor(animTick / 90)) % flourishKinds.length] : "dribble";
+    } else if (isPasser) {
+      actionKind = ball.phase === "through" || ball.passType === "long" ? "through" : "pass";
+    } else if (isReceiver) {
+      actionKind = "receive";
+    } else if (isPresser) {
+      const distToBall = Math.hypot(next.px - ball.px, next.py - ball.py);
+      actionKind = distToBall < 4 ? "tackle" : "jockey";
+    }
+
     return {
       px: next.px,
       py: next.py - bounceOff, // กระโดดดีใจ — เด้งเฉพาะภาพ ไม่แตะฟิสิกส์
@@ -1005,6 +1099,8 @@ function updateTeamAmbient(teamArr, slots, side, ball, possSide, animTick, carri
       isCarrier,
       isPasser,
       isReceiver,
+      isPresser,
+      actionKind,
       running,
       pos: slot.pos,
       shirtNum: i + 1,
@@ -1062,6 +1158,9 @@ export function computeAmbientLivePlayers(homeSlots, awaySlots, ambientState, an
     setPiece: ambientState.setPiece,
     celebration: ambientState.celebration,
     restart: ambientState.restart,
+    foulReaction: ambientState.foulReaction && ambientState.foulReaction.expiresAt > Date.now()
+      ? ambientState.foulReaction
+      : null,
   };
 
   const homeRaw = updateTeamAmbient(
@@ -1074,11 +1173,25 @@ export function computeAmbientLivePlayers(homeSlots, awaySlots, ambientState, an
   );
   separateOverlaps(homeRaw, ambientState.home, awayRaw, ambientState.away);
 
+  // ติดตาม "เริ่มท่านี้ตั้งแต่ tick ไหน" ต่อคน — กันท่าใหม่โผล่มาแบบครึ่งไซเคิล (pop) เพราะ actionPose
+  // คำนวณจาก animTick % cycleLength ล้วนๆ ถ้าป้อน animTick ดิบตรงๆ ท่าจะเริ่มกลางไซเคิลทันทีที่เปลี่ยน
+  ambientState.actionTrack = ambientState.actionTrack || {
+    home: Array.from({ length: homeSlots.length }, () => ({ kind: null, startTick: 0 })),
+    away: Array.from({ length: awaySlots.length }, () => ({ kind: null, startTick: 0 })),
+  };
+
   const mapSide = (rows, side) => rows.map((r, i) => {
     // GK ได้สิทธิ์เข้าใกล้เส้นหลังกว่าคนอื่น — ยืนกรอบเล็กหน้าประตูจริง
     const px = clamp(r.px, r.isGK ? 2 : PLAY_MIN, r.isGK ? 98 : PLAY_MAX);
     const py = clamp(r.py, 6, 94);
     const pos = project(px, py);
+
+    const track = ambientState.actionTrack[side][i] || (ambientState.actionTrack[side][i] = { kind: null, startTick: animTick });
+    if (track.kind !== r.actionKind) {
+      track.kind = r.actionKind;
+      track.startTick = animTick;
+    }
+
     return {
       x: pos.x,
       y: pos.y,
@@ -1089,6 +1202,9 @@ export function computeAmbientLivePlayers(homeSlots, awaySlots, ambientState, an
       isGK: r.isGK,
       isPasser: r.isPasser,
       isReceiver: r.isReceiver,
+      isPresser: r.isPresser,
+      actionKind: r.actionKind,
+      poseTick: animTick - track.startTick,
       diving: r.isGK && ((side === "home" && ball.px < 24) || (side === "away" && ball.px > 76)),
       idx: i,
       shirtNum: r.shirtNum,

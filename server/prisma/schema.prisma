@@ -30,6 +30,8 @@ model LeagueShard {
   dayNumber        Int      @default(1)
   isFull           Boolean  @default(false)
   legendLeagueId   String?
+  /** true เฉพาะห้องเดียวของดิวิชั่น 0 (Master Legend League) — กันบั๊กเผลอสร้างซ้ำ (ดู DIVISION_SHARD_CAP) */
+  isLegendShard    Boolean  @default(false)
   clubs            Club[]
   matches          Match[]
   transferListings TransferListing[]
@@ -58,6 +60,10 @@ model Club {
   autoMode       Boolean     @default(true)
   lineupJson     String?
   gameStateJson  String?
+  /** ติดตามว่าสล็อตนี้ (แถวนี้) ใน Master Legend League คือทีมตำนานตัวไหน — คงอยู่แม้มีคนมาครองสล็อตแล้วออกไป
+   * เพื่อคืนตัวตนทีมเดิมได้เวลาสล็อตว่างลง (ดู relocateClubToDivision ใน gameService.js) */
+  legendTeamKey  String?
+  legendLeagueId String?
   players        Player[]
   standing       Standing?
   homeMatches    Match[]     @relation("HomeClub")
@@ -271,4 +277,19 @@ model BattlePassProgress {
 model GameGlobalState {
   id                    String @id @default("singleton")
   lastMonthlyResetMonth String?
+}
+
+/** คิวรอเลื่อนชั้นข้ามห้อง — ใช้เฉพาะรอยต่อที่ฝั่งรับเป็นดิวิชั่นตายตัว (Pro→Master, Master→Legend)
+ * เมื่อฤดูกาลจบที่ต้นทาง ทีมท็อป 4 จะถูกคิวไว้ที่นี่ก่อน (ยังไม่ย้ายจริง) รอ runGlobalPromotionSweep
+ * จับคู่กับที่ว่างจริงที่เกิดจากฝั่งรับตกชั้นออกมา แล้วจัดอันดับข้ามห้อง (pts, gf-ga) เอาเฉพาะเท่าที่มีที่ว่าง */
+model PromotionCandidate {
+  id           String   @id @default(cuid())
+  clubId       String   @unique
+  fromShardId  String
+  fromDivision Int
+  toDivision   Int
+  pts          Int
+  gf           Int
+  ga           Int
+  createdAt    DateTime @default(now())
 }

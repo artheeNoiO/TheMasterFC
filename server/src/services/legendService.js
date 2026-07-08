@@ -31,7 +31,7 @@ export async function acquireLegend(userId, legendId) {
   if (!club) throw new Error("ไม่พบสโมสร");
   const def = getLegendById(legendId);
   if (!def || def.leagueId !== club.shard.legendLeagueId) throw new Error("ไม่พบซูเปอร์สตาร์ในลีกนี้");
-  if (!canBidForLegend(club.division ?? 1)) throw new Error("ต้องอยู่ Master League");
+  if (!canBidForLegend(club.shard.division)) throw new Error("ต้องอยู่ Master League");
 
   const squadValue = club.players.reduce((s, p) => s + p.value, 0);
   const teamValue = squadValue + club.budget;

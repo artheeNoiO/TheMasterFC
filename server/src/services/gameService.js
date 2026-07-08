@@ -8,6 +8,8 @@ import {
   isSeasonComplete,
   createBotOnlyShard,
   createSingleBotClub,
+  createLegendShard,
+  createLegendBotClub,
   genManager,
   genSquad,
 } from "@siam/game-engine";
@@ -18,7 +20,9 @@ import { executeAcceptedTransfers } from "./negotiationService.js";
 import {
   DAILY_STAFF_CARD_DRAWS, MS_PER_GAME_DAY, isMatchWindowOpen, isMarketWindowOpen,
   ENTRY_DIVISION, PROMOTE_COUNT, RELEGATE_COUNT,
+  DIVISION_SHARD_CAP, LEGEND_DIVISION, MASTER_DIVISION, PRO_DIVISION, LEGEND_LEAGUE_ID,
 } from "../../../game-version.js";
+import { LEGEND_TEAMS } from "../../../legend-universe.js";
 import {
   initRoadmapForNewClub,
   getRoadmapPayload,
@@ -206,11 +210,22 @@ function playerCreateData(p) {
     careerApps: p.careerApps,
     role: p.role,
     contractEndsDay: p.contractEndsDay,
+    isLegend: Boolean(p.isLegend),
+    legendId: p.legendId ?? null,
+    homeClubId: p.homeTeamId ?? p.homeClubId ?? null,
+    legendLeagueId: p.legendLeagueId ?? null,
   };
 }
 
-/** เปิดชาร์ดบอทล้วนใหม่ (16 ทีม) ไว้เป็น "แชนแนล" รอผู้เล่นจริงมาแทนที่บอททีละคน */
+/** เปิดชาร์ดบอทล้วนใหม่ (16 ทีม) ไว้เป็น "แชนแนล" รอผู้เล่นจริงมาแทนที่บอททีละคน
+ * ดิวิชั่นตายตัว (Master/Legend, ดู DIVISION_SHARD_CAP) ห้ามเปิดห้องเกินเพดาน — ปกติไม่ควรถูกเรียกด้วยดิวิชั่น
+ * เหล่านี้เลย (ensureLeagueSkeleton ดูแลตอน bootstrap, relocateClubToDivision เช็คเพดานเองก่อนเรียก) กันไว้อีกชั้น */
 async function createBotOnlyShardInDb(division = ENTRY_DIVISION) {
+  const cap = DIVISION_SHARD_CAP[division];
+  if (cap != null) {
+    const count = await prisma.leagueShard.count({ where: { division } });
+    if (count >= cap) throw new Error(`ดิวิชั่น ${division} เต็มเพดานห้องแล้ว (${cap} ห้อง)`);
+  }
   const world = createBotOnlyShard(division);
   await prisma.leagueShard.create({
     data: {
@@ -254,13 +269,82 @@ async function createBotOnlyShardInDb(division = ENTRY_DIVISION) {
   return world.shard.id;
 }
 
+/** เปิดห้องเดียวของ Master Legend League (16 ทีมซูเปอร์สตาร์จริงจาก roster-database) — เรียกครั้งเดียว
+ * ตอน bootstrap (ensureLeagueSkeleton) ไม่ใช่ทุกครั้งที่มีคนโปรโมทเข้ามา (ห้องนี้มีแค่ห้องเดียวตลอดกาล) */
+async function createLegendShardInDb() {
+  const world = createLegendShard(LEGEND_LEAGUE_ID, LEGEND_TEAMS[LEGEND_LEAGUE_ID] || [], LEGEND_DIVISION);
+  await prisma.leagueShard.create({
+    data: {
+      id: world.shard.id,
+      name: world.shard.name,
+      division: world.shard.division,
+      seasonNumber: world.shard.seasonNumber,
+      dayNumber: world.shard.dayNumber,
+      isFull: true,
+      legendLeagueId: world.shard.legendLeagueId,
+      isLegendShard: true,
+      clubs: {
+        create: world.clubs.map((c) => ({
+          id: c.id,
+          userId: null,
+          name: c.name,
+          shortCode: c.shortCode,
+          logoIndex: c.logoIndex,
+          primaryColor: c.primaryColor,
+          secondaryColor: c.secondaryColor,
+          budget: c.budget,
+          tier: c.tier,
+          formation: c.formation,
+          chemistry: c.chemistry,
+          isBot: true,
+          managerJson: JSON.stringify(c.manager),
+          gameStateJson: JSON.stringify(syncDailyStaffDraws({})),
+          legendTeamKey: c.legendTeamKey,
+          legendLeagueId: c.legendLeagueId,
+          players: { create: c.players.map(playerCreateData) },
+          standing: { create: { played: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 } },
+        })),
+      },
+      matches: {
+        create: world.fixtures.flatMap((round) =>
+          round.matches.map((m) => ({
+            dayNumber: round.day,
+            homeClubId: m.homeClubId,
+            awayClubId: m.awayClubId,
+          })),
+        ),
+      },
+    },
+  });
+  return world.shard.id;
+}
+
+/** Bootstrap ครั้งแรก (idempotent — ปลอดภัยเรียกซ้ำได้ทุกครั้งที่เซิร์ฟเวอร์ boot/restart):
+ * สร้างห้อง Master Legend League (1 ห้องตายตัว) และ Master League (4 ห้องตายตัว) ถ้ายังไม่มี
+ * เพื่อให้ Pro→Master / Master→Legend มีที่ปลายทางให้เลื่อนชั้นเข้าตั้งแต่วันแรก ไม่ต้องรอ lazy-create
+ * ตอนมีคนเลื่อนชั้นจริงเป็นคนแรก (กันเคส "เลื่อนชั้นได้แต่ไม่มีห้องปลายทางรองรับ") */
+export async function ensureLeagueSkeleton() {
+  const legendCount = await prisma.leagueShard.count({ where: { division: LEGEND_DIVISION } });
+  if (legendCount === 0) {
+    await createLegendShardInDb();
+    console.log("ensureLeagueSkeleton: created Master Legend League shard");
+  }
+  const masterCap = DIVISION_SHARD_CAP[MASTER_DIVISION] ?? 0;
+  const masterCount = await prisma.leagueShard.count({ where: { division: MASTER_DIVISION } });
+  const toCreate = Math.max(0, masterCap - masterCount);
+  for (let i = 0; i < toCreate; i++) {
+    await createBotOnlyShardInDb(MASTER_DIVISION);
+  }
+  if (toCreate > 0) console.log(`ensureLeagueSkeleton: created ${toCreate} Master League shard(s)`);
+}
+
 /** ผู้เล่นจริงเข้ามาแทนที่ทีมบอทตัวหนึ่งในชาร์ดที่มีอยู่ — ทุกคนแชร์ลีค 16 ทีมเดียวกันจริง
  * (เดิม: ทุกคนได้ชาร์ดบอทส่วนตัวของตัวเอง ไม่มีใครแชร์ลีคกับใครเลย — เป็นช่องว่างที่ขัดกับดีไซน์เดิม) */
 export async function createClubForUser(userId, config) {
-  // เปิดรับสมาชิกใหม่เฉพาะช่วงพักฟื้น/ตลาด 20:00-09:00 — ให้ทุกคนเริ่มจากตารางคะแนน 0-0-0-0 ที่เพิ่งรีเซ็ต
+  // เปิดรับสมาชิกใหม่เฉพาะช่วงพักฟื้น/ตลาด 20:00-08:00 — ให้ทุกคนเริ่มจากตารางคะแนน 0-0-0-0 ที่เพิ่งรีเซ็ต
   // ไม่ใช่รับช่วงสถิติค้างของบอทที่แข่งไปแล้วบางส่วนระหว่างวัน (ดู HANDOFF/บันทึกการคุยออกแบบ)
   if (!isMarketWindowOpen()) {
-    throw new Error("ลีคออนไลน์เปิดรับสมาชิกใหม่เฉพาะช่วง 20:00-09:00 น. (ตอนนี้กำลังแข่งขันอยู่) กลับมาใหม่หลัง 20:00 น. หรือเล่นโหมด Sandbox ระหว่างรอ");
+    throw new Error("ลีคออนไลน์เปิดรับสมาชิกใหม่เฉพาะช่วง 20:00-08:00 น. (ตอนนี้กำลังแข่งขันอยู่) กลับมาใหม่หลัง 20:00 น. หรือเล่นโหมด Sandbox ระหว่างรอ");
   }
 
   const existing = await prisma.club.findFirst({ where: { userId } });
@@ -553,7 +637,7 @@ function resolveLockedXI(club, players) {
 
 /** ก่อนแมตช์สด — จำลองบอทที่เหลือในวันนี้ แล้วคืนข้อมูลแมตช์ของผู้เล่น */
 export async function prepareUserLiveMatch(userId) {
-  if (!isMatchWindowOpen()) throw new Error("นอกช่วงเวลาแข่งขัน (9:00-20:00 น.) — ตอนนี้เป็นช่วงพักฟื้น/ตลาด");
+  if (!isMatchWindowOpen()) throw new Error("นอกช่วงเวลาแข่งขัน (8:00-20:00 น.) — ตอนนี้เป็นช่วงพักฟื้น/ตลาด");
   const club = await getClubForUser(userId);
   if (!club) throw new Error("ไม่พบสโมสร");
   await simBotOnlyMatchesOnDay(club.shardId, club.shard.dayNumber);
@@ -677,7 +761,7 @@ export async function finishUserLiveMatch(userId, matchId) {
  * (finalizeFinishedMatches) → ครบทุกแมทแล้วค่อยขึ้นวันถัดไป (tryCompleteShardDay)
  */
 export async function runDayTickForShard(shardId, { force = false } = {}) {
-  // แข่งได้เฉพาะ 9:00-20:00 เวลาไทยเท่านั้น — หลัง 20:00 คือช่วงพักฟื้น/อีเวนต์/ตลาด ห้าม day-tick เดินต่อ
+  // แข่งได้เฉพาะ 8:00-20:00 เวลาไทยเท่านั้น — หลัง 20:00 คือช่วงพักฟื้น/อีเวนต์/ตลาด ห้าม day-tick เดินต่อ
   if (!force && !isMatchWindowOpen()) {
     return { shardId, action: "outside_match_window" };
   }
@@ -742,18 +826,33 @@ function applyStandingResult(standing, gf, ga) {
 
 /** ย้าย "ตัวตน" ของสโมสรที่เลื่อน/ตกชั้น ไปสวมสล็อตบอทว่างในชาร์ดปลายทาง — id ของแถวไม่ข้ามชาร์ดเลย
  * (สลับข้อมูลระหว่างแถวแทน) กัน fixtures/ประวัติแมทช์ของทั้งสองชาร์ดเพี้ยน แถวเดิมกลายเป็นบอทใหม่
- * ถมช่องว่างในชาร์ดเก่าแทนทันที ไม่ต้องรอ bot คนอื่นมาเติม */
-async function relocateClubToDivision(club, targetDivision) {
-  let botSlot = await prisma.club.findFirst({ where: { isBot: true, shard: { division: targetDivision } } });
+ * ถมช่องว่างในชาร์ดเก่าแทนทันที ไม่ต้องรอ bot คนอื่นมาเติม
+ * ดิวิชั่นปลายทางตายตัว (Master/Legend) และไม่มีที่ว่าง → คืน null แทนที่จะสร้างห้องใหม่ (caller ต้องคิวไว้แทน)
+ * fromDivision (ถ้าระบุ) ใช้เช็คว่าแถวเดิมเป็นสล็อต Master Legend League — ถ้าใช่ คืนตัวตนทีมตำนานเดิมให้สล็อต
+ * แทนที่จะสร้างบอทสุ่มทั่วไป (กันชื่อทีมตำนานหายถาวรหลังมีคนออกจากสล็อตนั้นครั้งแรก)
+ * excludeClubIds: กันบั๊กที่เจอจริงตอนเทส — ถ้าทีมที่โปรโมทเข้ามาเองเป็นบอท (ไม่ใช่คนจริง) แถวปลายทาง
+ * จะยังเป็น isBot=true ต่อ ทำให้ผู้สมัครคนถัดไปในลูป/สวีปเดียวกัน "เจอ" สล็อตเดิมว่าว่างอีกแล้วทับซ้อนกันเอง
+ * (สล็อตที่เพิ่งใช้ไปยังไม่ทันหลุดจาก query จนกว่าจะ query รอบใหม่) ต้องกันสล็อตที่เพิ่งใช้ในรอบเดียวกันไว้ */
+async function relocateClubToDivision(club, targetDivision, fromDivision, excludeClubIds = []) {
+  let botSlot = await prisma.club.findFirst({
+    where: { isBot: true, id: { notIn: excludeClubIds }, shard: { division: targetDivision } },
+  });
   let targetShardId;
   if (botSlot) {
     targetShardId = botSlot.shardId;
   } else {
+    const cap = DIVISION_SHARD_CAP[targetDivision];
+    if (cap != null) return null; // ดิวิชั่นตายตัวเต็มพอดี ไม่มีที่ว่าง — ให้ caller คิวไว้ใน PromotionCandidate แทน
     targetShardId = await createBotOnlyShardInDb(targetDivision);
     botSlot = await prisma.club.findFirst({ where: { shardId: targetShardId, isBot: true } });
   }
   if (!botSlot) return null; // เผื่อ edge case หาที่ว่างไม่ได้จริงๆ — ข้ามรอบนี้ไปก่อน ไม่บล็อก rollover ทั้งชาร์ด
 
+  // หมายเหตุ (ข้อจำกัดที่รู้อยู่): ตอนแรกลองให้แถวที่ว่างจาก Master Legend League คืนตัวตนทีมตำนานเดิม
+  // (createLegendBotClub) แต่ id นักเตะที่ buildRosterPlayer สร้างเป็น deterministic จาก roster def
+  // (เช่น "leg_bruno_fernandes") ชนกับแถวเดิมที่เพิ่งย้าย clubId ออกไปพร้อมทีมที่ตกชั้น (unique constraint
+  // ทั้ง id และ legendId) — ต้องออกแบบระบบความเป็นเจ้าของนักเตะตำนานใหม่ก่อน (ผูกกับ acquireLegend/
+  // reclaimInactiveLegends ที่มีอยู่แล้ว) ถึงจะทำได้ปลอดภัย เก็บไว้เป็นงานเฟสถัดไป ตอนนี้ใช้บอทสุ่มทั่วไปแทน
   const freshBot = createSingleBotClub(club.shardId, []);
 
   await prisma.$transaction([
@@ -770,6 +869,8 @@ async function relocateClubToDivision(club, targetDivision) {
         shirtColor: null, shortsColor: null,
         budget: freshBot.budget, tier: freshBot.tier, formation: freshBot.formation, chemistry: freshBot.chemistry,
         managerJson: JSON.stringify(freshBot.manager), autoMode: true, lineupJson: null,
+        legendTeamKey: freshBot.legendTeamKey ?? null,
+        legendLeagueId: freshBot.legendLeagueId ?? null,
         players: { create: freshBot.players.map(playerCreateData) },
       },
     }),
@@ -782,15 +883,43 @@ async function relocateClubToDivision(club, targetDivision) {
         budget: club.budget, tier: club.tier, formation: club.formation, chemistry: club.chemistry,
         isBot: club.isBot, managerJson: club.managerJson, gameStateJson: club.gameStateJson,
         autoMode: club.autoMode, lineupJson: club.lineupJson,
+        // legendTeamKey/legendLeagueId ของ botSlot (สล็อต Legend League ปลายทาง ถ้ามี) ไม่แตะ — คงตัวตนทีมเดิมไว้
+        // เผื่อคนที่เพิ่งเข้ามาครองสล็อตนี้ตกชั้นออกไปในอนาคต จะได้คืนตัวตนทีมตำนานให้สล็อตนี้ถูกตัว
       },
     }),
     prisma.standing.update({ where: { clubId: botSlot.id }, data: { played: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 } }),
+    // แถวเดิม (club.id) กลายเป็นบอทใหม่แล้ว แต่ยังถือ Standing แถวเก่าของทีมที่เพิ่งเลื่อน/ตกชั้นออกไปอยู่
+    // (บั๊กเดิม: ไม่เคยรีเซ็ต ทำให้บอทใหม่โผล่มาพร้อมสถิติเก่าของทีมที่ออกไปแล้ว) ต้องรีเซ็ตด้วยเหมือนกัน
+    prisma.standing.update({ where: { clubId: club.id }, data: { played: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 } }),
   ]);
 
-  return { fromShardId: club.shardId, toShardId: targetShardId };
+  return { fromShardId: club.shardId, toShardId: targetShardId, toClubId: botSlot.id };
 }
 
-/** เลื่อนชั้น/ตกชั้นตอนจบฤดูกาล — เรียกก่อน rebuild ตาราง/ตกลงเสมอ (ต้องใช้ตารางคะแนน "เก่า" ก่อนรีเซ็ต) */
+/** คิวรอเลื่อนชั้นข้ามห้อง — ใช้เมื่อ relocateClubToDivision คืน null (ฝั่งรับตายตัวและเต็มพอดี)
+ * upsert กันคิวซ้ำถ้าทีมเดิมติดคิวหลายฤดูกาลติดต่อกันก่อนจะมีที่ว่างจริง */
+async function queuePromotionCandidate(standing, fromDivision, toDivision) {
+  await prisma.promotionCandidate.upsert({
+    where: { clubId: standing.club.id },
+    create: {
+      clubId: standing.club.id, fromShardId: standing.club.shardId,
+      fromDivision, toDivision, pts: standing.pts, gf: standing.gf, ga: standing.ga,
+    },
+    update: { fromDivision, toDivision, pts: standing.pts, gf: standing.gf, ga: standing.ga, createdAt: new Date() },
+  });
+}
+
+/** usedSlotIds กันบั๊ก "สล็อตที่เพิ่งใช้ในลูปเดียวกันโดนทับซ้ำ" (ดูคอมเมนต์ relocateClubToDivision) —
+ * ทีมที่โปรโมทเข้ามาชุดเดียวกัน (เช่น 4 ทีมที่ขึ้นดิวิชั่นพร้อมกัน) ต้องไม่แย่งสล็อตเดียวกันเอง */
+async function relocateOrQueue(standing, fromDivision, toDivision, usedSlotIds) {
+  const result = await relocateClubToDivision(standing.club, toDivision, fromDivision, [...usedSlotIds]);
+  if (result) usedSlotIds.add(result.toClubId);
+  else await queuePromotionCandidate(standing, fromDivision, toDivision);
+}
+
+/** เลื่อนชั้น/ตกชั้นตอนจบฤดูกาล — เรียกก่อน rebuild ตาราง/ตกลงเสมอ (ต้องใช้ตารางคะแนน "เก่า" ก่อนรีเซ็ต)
+ * ฝั่งที่ปลายทางเป็นดิวิชั่นตายตัว (เข้า Master League หรือ Master Legend League) อาจไม่มีที่ว่างพอดี
+ * ตอนนี้ — relocateOrQueue จะคิวไว้ใน PromotionCandidate แทน รอ runGlobalPromotionSweep จับคู่ทีหลัง */
 export async function applyPromotionRelegation(shardId) {
   const shard = await prisma.leagueShard.findUnique({ where: { id: shardId } });
   if (!shard) return;
@@ -802,15 +931,54 @@ export async function applyPromotionRelegation(shardId) {
   if (standings.length < PROMOTE_COUNT + RELEGATE_COUNT) return; // ชาร์ดยังไม่เต็ม 16 — ยังไม่เลื่อน/ตกชั้น
 
   if (shard.division > 0) {
+    const usedUp = new Set();
     for (const s of standings.slice(0, PROMOTE_COUNT)) {
-      await relocateClubToDivision(s.club, shard.division - 1);
+      await relocateOrQueue(s, shard.division, shard.division - 1, usedUp);
     }
   }
   if (shard.division < ENTRY_DIVISION) {
+    const usedDown = new Set();
     for (const s of standings.slice(-RELEGATE_COUNT)) {
-      await relocateClubToDivision(s.club, shard.division + 1);
+      await relocateOrQueue(s, shard.division, shard.division + 1, usedDown);
     }
   }
+}
+
+const PROMOTION_CANDIDATE_TTL_MS = 3 * 24 * 60 * 60 * 1000; // ค้างคิวเกิน 3 วันจริง = ทิ้งคิว (ทีมยังอยู่ที่เดิมต่อ ไม่บล็อกตลอดกาล)
+
+/** กวาดคิวเลื่อนชั้นข้ามห้อง (Pro→Master, Master→Legend, Legend→Master ตกชั้น) ทุกรอบ runDayTickAll —
+ * จับคู่ผู้สมัครที่ค้างอยู่กับที่ว่างจริงที่เพิ่งเปิดในดิวิชั่นปลายทาง จัดอันดับข้ามห้อง (pts, gf-ga)
+ * เอาเฉพาะเท่าที่มีที่ว่างจริง (ไม่ใช่ทุกคนที่เข้าเกณฑ์ได้ขึ้นหมด) ที่เหลือค้างคิวรอรอบหน้า */
+export async function runGlobalPromotionSweep() {
+  const promoted = [];
+  const pairs = [[PRO_DIVISION, MASTER_DIVISION], [MASTER_DIVISION, LEGEND_DIVISION], [LEGEND_DIVISION, MASTER_DIVISION]];
+  for (const [fromDivision, toDivision] of pairs) {
+    const candidates = await prisma.promotionCandidate.findMany({
+      where: { fromDivision, toDivision },
+      orderBy: [{ pts: "desc" }, { gf: "desc" }],
+    });
+    if (!candidates.length) continue;
+
+    const stale = candidates.filter((c) => Date.now() - c.createdAt.getTime() > PROMOTION_CANDIDATE_TTL_MS);
+    if (stale.length) {
+      await prisma.promotionCandidate.deleteMany({ where: { id: { in: stale.map((c) => c.id) } } });
+    }
+    const fresh = candidates.filter((c) => Date.now() - c.createdAt.getTime() <= PROMOTION_CANDIDATE_TTL_MS);
+
+    const usedSlotIds = new Set(); // กันผู้สมัครหลายคนในคิวเดียวกันแย่งสล็อตที่เพิ่งว่างสล็อตเดียวกันซ้ำ
+    for (const cand of fresh) {
+      const club = await prisma.club.findUnique({ where: { id: cand.clubId } });
+      if (!club) { await prisma.promotionCandidate.delete({ where: { id: cand.id } }); continue; }
+      const result = await relocateClubToDivision(club, toDivision, fromDivision, [...usedSlotIds]);
+      if (result) {
+        usedSlotIds.add(result.toClubId);
+        await prisma.promotionCandidate.delete({ where: { id: cand.id } });
+        promoted.push({ clubId: cand.clubId, fromDivision, toDivision });
+      }
+      // ไม่มีที่ว่าง (result null) — ปล่อยคิวไว้ต่อ ลองรอบหน้า
+    }
+  }
+  return promoted;
 }
 
 async function startNewSeason(shardId) {
@@ -879,6 +1047,12 @@ export async function runDayTickAll() {
       console.error(`day-tick error (shard ${id})`, e);
       results.push({ shardId: id, action: "error", error: e.message });
     }
+  }
+  try {
+    const promoted = await runGlobalPromotionSweep();
+    if (promoted.length) results.push({ action: "global_promotion_sweep", promoted });
+  } catch (e) {
+    console.error("global promotion sweep error", e);
   }
   return results;
 }

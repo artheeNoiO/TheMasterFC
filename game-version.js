@@ -64,14 +64,16 @@ export const DAILY_STAFF_CARD_DRAWS = 3;
 /** เหรียญตู้จากอันดับท้ายฤดูกาลออนไลน์ (1 = แชมป์ดิวิชั่น) — นอกเหนือจากนี้ (อันดับท้ายตาราง) ไม่ได้เหรียญ */
 export const SEASON_RANK_MACHINE_COINS = { 1: 25, 2: 18, 3: 12, 4: 8, 5: 4, 6: 4, 7: 4, 8: 4 };
 
-/** ออนไลน์: จบ 1 ฤดูกาล (30 นัด, double round-robin เจอกันเหย้า-เยือน) ภายใน 1 วันจริง — แต่แข่งเฉพาะช่วง 9:00-20:00 (เวลาไทย) เท่านั้น
- * หลัง 20:00 ถึง 9:00 วันถัดไป = ช่วงพักฟื้นนักเตะ/อีเวนต์/ตลาดซื้อขาย (ห้ามแข่ง)
- * เดิม 15 นัด (เจอกันครั้งเดียว) ห่างรอบละ ~44 นาที รู้สึกรอนาน — เพิ่มเป็น 30 ให้ห่างรอบละ ~22 นาทีแทน ยังจบใน 11 ชม.เท่าเดิม */
+/** ออนไลน์: จบ 1 ฤดูกาล (30 นัด, double round-robin เจอกันเหย้า-เยือน) ภายใน 1 วันจริง — แต่แข่งเฉพาะช่วง 8:00-20:00 (เวลาไทย) เท่านั้น
+ * หลัง 20:00 ถึง 8:00 วันถัดไป = ช่วงพักฟื้นนักเตะ/อีเวนต์/ตลาดซื้อขาย (ห้ามแข่ง)
+ * ห่างรอบละ (MS_PER_GAME_DAY) ตอนนี้ตั้งตายตัวที่ 15 นาที/นัด แทนที่จะคำนวณยืดตามช่วงเวลาที่เปิด/จำนวนนัด —
+ * 15 นาทีนี้คือช่วง "รันตารางปฏิทินในเกมส์" ระหว่าง 2 นัด (วันฝึก/วันหยุดที่ผ่านไปในโลกเกมส์) ไม่ใช่แค่รอเฉยๆ
+ * 30 นัด x 15 นาที = 7.5 ชม. จบภายในช่วง 8:00-20:00 (12 ชม.) สบายๆ เหลือช่วงพักท้ายวันก่อนตลาดเปิด */
 export const MATCH_DAYS_PER_SEASON = 30;
-export const ACTIVE_WINDOW_START_HOUR = 9;
+export const ACTIVE_WINDOW_START_HOUR = 8;
 export const ACTIVE_WINDOW_END_HOUR = 20;
-export const ACTIVE_WINDOW_HOURS = ACTIVE_WINDOW_END_HOUR - ACTIVE_WINDOW_START_HOUR; // 11
-export const MS_PER_GAME_DAY = Math.floor((ACTIVE_WINDOW_HOURS * 3600 * 1000) / MATCH_DAYS_PER_SEASON);
+export const ACTIVE_WINDOW_HOURS = ACTIVE_WINDOW_END_HOUR - ACTIVE_WINDOW_START_HOUR; // 12
+export const MS_PER_GAME_DAY = 15 * 60 * 1000; // 15 นาทีจริง/นัด (ตายตัว ไม่ผูกกับ ACTIVE_WINDOW_HOURS อีกต่อไป)
 export const MINUTES_PER_GAME_DAY = Math.round(MS_PER_GAME_DAY / 60000);
 export const GAME_TIMEZONE = "Asia/Bangkok";
 
@@ -83,19 +85,29 @@ export const MAX_SUBS_PER_MATCH = 5;
 /** เตือนผู้เล่นล่วงหน้ากี่นาทีจริง ก่อนรอบถัดไปมีสิทธิ์คิกอฟ (ดู throttle ของ day-tick) */
 export const PRE_MATCH_REMINDER_MINUTES = 10;
 
-/** ระบบดิวิชั่นออนไลน์ — ดิวิชั่น 0 = สูงสุด (Master League) ไล่ลงไปจนถึงต่ำสุด (entry) ตามธรรมเนียม
- * เดียวกับที่ sandbox ใช้อยู่แล้ว (division 0 = Master, 1 = Challenger) — โครงสร้างรองรับ 6 ชั้นเต็ม
- * แต่ตอนนี้ผู้เล่นยังน้อย (Test Beta) เลยเปิดใช้จริงแค่ 2 ชั้นล่างสุดก่อน (ดู ACTIVE_DIVISIONS) ค่อยเปิด
- * ชั้นบนเพิ่มเมื่อผู้เล่นจริงเยอะขึ้น — ผู้เล่นใหม่เริ่มที่ ENTRY_DIVISION เท่านั้น ไต่ขึ้นด้วยผลงานเอา */
-export const DIVISION_COUNT = 6;
-export const ENTRY_DIVISION = DIVISION_COUNT - 1; // 5 = ต่ำสุด/เริ่มต้น
-export const ACTIVE_DIVISIONS = [5, 4]; // เปิดจริงตอนนี้ — เพิ่มทีละชั้นเมื่อผู้เล่นเยอะขึ้น
+/** ระบบดิวิชั่นออนไลน์ — ปิรามิด 5 ชั้น: Beginner → Amateur → Pro → Master → Master Legend
+ * ดิวิชั่น 0 = สูงสุด (Master Legend League) ไล่ลงไปจนถึงต่ำสุด (4 = Beginner, ที่ผู้เล่นใหม่เริ่มเสมอ)
+ * Beginner/Amateur/Pro ขยายห้อง(shard)อัตโนมัติไม่จำกัด (เดิมทีทุกดิวิชั่นเป็นแบบนี้)
+ * Master League ล็อกตายตัว 4 ห้อง (64 ทีม), Master Legend League ล็อกตายตัว 1 ห้อง (16 ทีมซูเปอร์สตาร์)
+ * — ดู DIVISION_SHARD_CAP (null = ขยายได้ไม่จำกัด, ตัวเลข = เพดานจำนวนห้องตายตัว)
+ * เลื่อน/ตกชั้น 4 ขึ้น/4 ลง ทุกชั้น — Pro→Master และ Master→Legend ใช้ global ranking cap
+ * (ฝั่งรับที่ตายตัว จำกัดจำนวนเข้าได้แค่เท่าที่มีที่ว่างจริงจากฝั่งตกชั้น ไม่ใช่ทุกคนที่เข้าเกณฑ์ได้ขึ้นหมด) */
+export const DIVISION_COUNT = 5;
+export const ENTRY_DIVISION = DIVISION_COUNT - 1; // 4 = Beginner League (ต่ำสุด/เริ่มต้น)
+export const ACTIVE_DIVISIONS = [4, 3, 2, 1, 0]; // เปิดใช้ครบทุกชั้นตั้งแต่ต้น (ปิรามิดใหม่)
 export const DIVISION_NAMES = {
-  0: "Master League", 1: "Elite League", 2: "Championship League",
-  3: "Division 3", 4: "Division 2", 5: "Challenger League",
+  0: "Master Legend League", 1: "Master League", 2: "Pro League",
+  3: "Amateur League", 4: "Beginner League",
 };
-export const PROMOTE_COUNT = 2; // อันดับ 1-2 เลื่อนชั้น
-export const RELEGATE_COUNT = 2; // 2 อันดับสุดท้ายตกชั้น
+/** null = ขยายห้องอัตโนมัติไม่จำกัด, ตัวเลข = จำนวนห้อง(shard)ตายตัวสูงสุด */
+export const DIVISION_SHARD_CAP = { 0: 1, 1: 4, 2: null, 3: null, 4: null };
+export const LEGEND_DIVISION = 0;
+export const MASTER_DIVISION = 1;
+export const PRO_DIVISION = 2;
+/** ลีกซูเปอร์สตาร์ (จาก LEGEND_TEAMS/LEGEND_PLAYERS) ที่ใช้ตั้งห้อง Master Legend League จริงบนเซิร์ฟเวอร์ */
+export const LEGEND_LEAGUE_ID = "england";
+export const PROMOTE_COUNT = 4; // อันดับ 1-4 เลื่อนชั้น
+export const RELEGATE_COUNT = 4; // 4 อันดับสุดท้ายตกชั้น
 
 /** Battle Pass — รอบเดือนปฏิทิน (ตามเวลาไทย) ไม่ผูกกับรอบดิวิชั่น/ฤดูกาล
  * XP ได้จาก: ผลแมทลีค (ชนะ/เสมอ/แพ้), login รายวัน — เควสรายวัน/รายสัปดาห์ยังไม่ทำ (รอออกแบบเนื้อหาเควส) */

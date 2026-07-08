@@ -73,7 +73,7 @@ import { pullOnlineStaffMachine } from "./client/src/lib/staff-machine.js";
 import {
   createAmbientPitchState, advanceAmbientPitch, ambientAsBallSim,
   computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene, startPenaltyScene,
-  slotToPitchAmbient,
+  slotToPitchAmbient, triggerFoulReaction,
 } from "./live-pitch-ambient.js";
 import "./fc-ui-theme.css";
 import FeedbackBoard from "@feedback";
@@ -7141,7 +7141,7 @@ function ModeSelectScreen({ onChoose }) {
             <div style={{ fontSize: 20, marginBottom: 6, color: C.amber }}>🌐 ออนไลน์</div>
             <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.55 }}>
               ลีคเดียวกับผู้เล่นจริง 16 คน (บอทเติมที่ว่างช่วงแรก) · เสนอซื้อขายนักเตะตรงกับทีมอื่น ·
-              แข่งขันตามเวลาจริง 9:00-20:00 น. · ห้ามเร่งเวลา/ข้ามแมตช์
+              แข่งขันตามเวลาจริง 8:00-20:00 น. · ห้ามเร่งเวลา/ข้ามแมตช์
             </div>
           </button>
         </div>
@@ -10866,7 +10866,10 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
   // ระบบรีเพลย์แยกถูกถอดออกแล้ว — ทุกช็อตเล่นสดต่อเนื่องใน ambient sim (สโลว์โมชั่นในตัว)
   const [goalFlash, setGoalFlash] = useState(null);
   const [refereeCard, setRefereeCard] = useState(null); // { team, kind: "yellow"|"red", player, minute }
+  const refCardStartTickRef = useRef(null); // จับ tick ตอนใบเพิ่งโชว์ กันท่าชูใบเริ่มกลางไซเคิล
+  const offsideFlagStartTickRef = useRef(null); // จับ tick ตอนธงล้ำหน้าเพิ่งโบก กันท่าชูธงเริ่มกลางไซเคิล
   const [ended, setEnded] = useState(false);
+  const [postMatchPhase, setPostMatchPhase] = useState(null); // "handshake" — กัปตันจับมือกันหลังหมดเวลา ก่อนเด้งรายงานผล
   const [matchReport, setMatchReport] = useState(null); // { homeGoals, awayGoals, scorers, starMan } — โชว์เป็นหน้าต่างเด้งหลังจบเกม ต้องกดปิดเอง
   const pendingFinishRef = useRef(null);
   const [pressure, setPressure] = useState(0);
@@ -10961,10 +10964,17 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       const t = Math.min(1, (now - start) / 3600);
       setWalkoutT(t);
       if (t < 1) raf = requestAnimationFrame(tick);
-      else setPreMatchPhase("whistle");
+      else setPreMatchPhase("handshake");
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
+  }, [preMatchPhase]);
+
+  // กัปตันสองทีมจับมือ+โยนเหรียญกับผู้ตัดสินกลางสนามก่อนเขี่ยจริง ~2.2 วิ (กดข้ามได้)
+  useEffect(() => {
+    if (preMatchPhase !== "handshake") return undefined;
+    const t = setTimeout(() => setPreMatchPhase("whistle"), 2200);
+    return () => clearTimeout(t);
   }, [preMatchPhase]);
 
   // ผู้ตัดสินเป่านกหวีดเขี่ยกลาง — ข้ามไม่ได้ ปล่อยเกมเดินหลังเป่าเสร็จ
@@ -11175,7 +11185,12 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         if (p) starMan = { name: p.name, rating: rt, side };
       }
     });
-    setMatchReport({ homeGoals: finalHomeGoals, awayGoals: finalAwayGoals, scorers: goalLog, starMan, stats, possHomePct });
+    // กัปตันจับมือกันกลางสนามหลังหมดเวลาก่อน แล้วค่อยเด้งรายงานผล
+    setPostMatchPhase("handshake");
+    setTimeout(() => {
+      setPostMatchPhase(null);
+      setMatchReport({ homeGoals: finalHomeGoals, awayGoals: finalAwayGoals, scorers: goalLog, starMan, stats, possHomePct });
+    }, 2200);
   }
 
   function closeMatchReport() {
@@ -11351,6 +11366,15 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         else setStats((s) => ({ ...s, foulsH: s.foulsH + 1 }));
         playWhistle();
 
+        // นักเตะที่โดนฟาวล์ล้มสั้นๆ (หรือนอนบาดเจ็บนานถ้าฟาวล์รุนแรง ~8%) — ฝั่งตรงข้ามกับทีมที่ทำฟาวล์
+        // (สุ่มตำแหน่งเว้น GK ที่ index 0)
+        if (ambientRef.current) {
+          const victimSide = awayFouled ? "home" : "away";
+          const victimSlots = victimSide === "home" ? hSlots : aSlots;
+          const victimIdx = victimSlots.length > 1 ? 1 + Math.floor(Math.random() * (victimSlots.length - 1)) : 0;
+          triggerFoulReaction(ambientRef.current, victimSide, victimIdx, { severe: Math.random() < 0.08 });
+        }
+
         // ผู้ตัดสิน — บางฟาวล์ได้ใบเหลือง/แดง (สะสม 2 เหลือง = แดง) เก็บทั้งเกม ยังไม่ตัดผู้เล่นออกจากสนามจริง (ผลกระทบเชิงภาพ/สถิติเท่านั้น)
         if (Math.random() < 0.16) {
           const foulTeam = awayFouled ? awayTeam : homeTeam;
@@ -11522,13 +11546,33 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
     ].sort((a, b) => a.z - b.z);
     if (ambientRef.current.referee) {
       const refPos = pitchToWide(ambientRef.current.referee.px, ambientRef.current.referee.py);
+      if (refereeCard && refCardStartTickRef.current == null) refCardStartTickRef.current = animTick;
+      else if (!refereeCard) refCardStartTickRef.current = null;
       livePlayers.push({
         key: "ref", x: refPos.x, y: refPos.y, z: Math.round(refPos.y * 10) + 1,
         shirtColor: "#232330", shortsColor: "#0c0c10", gkColor: "#232330",
         shirtNum: "", isGK: false, isCarrier: false, isPasser: false, isReceiver: false, facing: 1,
-        // ชูใบ — โชว์ใบเหลือง/แดงลอยเหนือหัวผู้ตัดสินผ่านช่องป้ายชื่อที่มีอยู่แล้ว
+        // ชูใบเหลือง/แดง — ท่าจริง (ยกแขนขวาขึ้นเหนือหัว) แทนที่จะโชว์แค่อีโมจิลอยเหนือหัวเฉยๆ
+        actionKind: refereeCard ? "ref-card" : null,
+        poseTick: refereeCard ? animTick - (refCardStartTickRef.current ?? animTick) : 0,
         name: refereeCard ? (refereeCard.kind === "red" ? "🟥" : "🟨") : "",
       });
+    }
+    // ผู้ช่วยผู้ตัดสิน (ผู้กำกับเส้น) — โผล่มายืนชูธงตรงตำแหน่งเส้นล้ำหน้าตอนมีการโบกธง เท่านั้น (ไม่ใช่ยืนตลอดเกม)
+    const offsideFlag = ambientRef.current.offsideFlag;
+    if (offsideFlag && offsideFlag.expiresAt > Date.now()) {
+      const flagPos = pitchToWide(offsideFlag.px, offsideFlag.py);
+      if (offsideFlagStartTickRef.current == null) offsideFlagStartTickRef.current = animTick;
+      livePlayers.push({
+        key: "lino", x: flagPos.x, y: flagPos.y, z: Math.round(flagPos.y * 10) + 1,
+        shirtColor: "#232330", shortsColor: "#0c0c10", gkColor: "#232330",
+        shirtNum: "", isGK: false, isCarrier: false, isPasser: false, isReceiver: false, facing: 1,
+        actionKind: "flag-raise",
+        poseTick: animTick - offsideFlagStartTickRef.current,
+        name: "🚩",
+      });
+    } else if (offsideFlagStartTickRef.current != null) {
+      offsideFlagStartTickRef.current = null;
     }
   } else {
     livePlayers = [];
@@ -11554,6 +11598,33 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       ...buildWalkers(hSlots, "home", homeTeam, homeNames),
       ...buildWalkers(aSlots, "away", awayTeam, awayNames),
     ].sort((a, b) => a.z - b.z);
+  }
+
+  // กัปตันสองทีม+ผู้ตัดสินจับมือ/โยนเหรียญกลางสนามก่อนเขี่ย (หรือจับมือกันหลังจบเกม) — ใช้ตัวแรกที่ไม่ใช่ GK ของแต่ละฝั่งแทนกัปตัน
+  if (preMatchPhase === "handshake" || postMatchPhase === "handshake") {
+    const homeCapPos = pitchToWide(47, 50);
+    const awayCapPos = pitchToWide(53, 50);
+    const refCenterPos = pitchToWide(50, 47);
+    livePlayers = [
+      {
+        key: "cap-home", x: homeCapPos.x, y: homeCapPos.y, z: Math.round(homeCapPos.y * 10),
+        shirtColor: teamShirtColor(homeTeam), shortsColor: teamShortsColor(homeTeam), gkColor: teamShirtColor(homeTeam),
+        shirtNum: "C", isGK: false, isCarrier: false, isPasser: false, isReceiver: false, facing: 1,
+        actionKind: "handshake", poseTick: animTick, name: homeTeam.short,
+      },
+      {
+        key: "cap-away", x: awayCapPos.x, y: awayCapPos.y, z: Math.round(awayCapPos.y * 10),
+        shirtColor: teamShirtColor(awayTeam), shortsColor: teamShortsColor(awayTeam), gkColor: teamShirtColor(awayTeam),
+        shirtNum: "C", isGK: false, isCarrier: false, isPasser: false, isReceiver: false, facing: -1,
+        actionKind: "handshake", poseTick: animTick, name: awayTeam.short,
+      },
+      {
+        key: "ref-toss", x: refCenterPos.x, y: refCenterPos.y, z: Math.round(refCenterPos.y * 10) + 1,
+        shirtColor: "#232330", shortsColor: "#0c0c10", gkColor: "#232330",
+        shirtNum: "", isGK: false, isCarrier: false, isPasser: false, isReceiver: false, facing: 1,
+        actionKind: null, poseTick: 0, name: "",
+      },
+    ];
   }
 
   // ฉากเปลี่ยนตัว — เอาจุดเดิมของ slot ที่ถูกเปลี่ยนออก แล้ววาดตัวออก/ตัวเข้า/ผจก./ผู้ช่วยผู้ตัดสิน/ป้ายเลขแทน
@@ -11603,7 +11674,18 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           <button type="button" onClick={skipPreMatch} style={{ ...btnStyle(C.steel, C.chalk), padding: "9px 22px" }}>ข้าม ▶</button>
         </div>
       )}
+      {preMatchPhase === "handshake" && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", gap: 10, paddingBottom: 24 }}>
+          <div style={{ fontSize: 13, color: C.chalk, background: "rgba(0,0,0,.55)", padding: "6px 14px", borderRadius: 8 }}>🤝 กัปตันจับมือ + เสี่ยงเหรียญ</div>
+          <button type="button" onClick={skipPreMatch} style={{ ...btnStyle(C.steel, C.chalk), padding: "9px 22px" }}>ข้าม ▶</button>
+        </div>
+      )}
       {preMatchPhase === "whistle" && <KickoffWhistleBanner />}
+      {postMatchPhase === "handshake" && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", alignItems: "flex-end", justifyContent: "center", paddingBottom: 24 }}>
+          <div style={{ fontSize: 13, color: C.chalk, background: "rgba(0,0,0,.55)", padding: "6px 14px", borderRadius: 8 }}>🤝 หมดเวลา — กัปตันจับมือกัน</div>
+        </div>
+      )}
       {halftimeOpen && (
         <HalftimeOverlay
           scoreLabel={`${homeTeam.short} ${homeGoals} - ${awayGoals} ${awayTeam.short}`}
@@ -14889,7 +14971,7 @@ function OnlineLiveHomeCard({ career }) {
           setResyncError("");
         } catch (e) {
           console.error("online auto-resync ล้มเหลว", e);
-          // ลีคออนไลน์รับสมาชิกใหม่เฉพาะช่วง 20:00-09:00 — ไม่ใช่บั๊ก แค่ต้องรอรอบถัดไป
+          // ลีคออนไลน์รับสมาชิกใหม่เฉพาะช่วง 20:00-08:00 — ไม่ใช่บั๊ก แค่ต้องรอรอบถัดไป
           setResyncError(e?.message || "");
         } finally {
           resyncingRef.current = false;
@@ -15015,7 +15097,7 @@ function OnlineMatchCenterView({ uiLang = "th", career }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Panel style={{ border: `1px solid ${C.crimson}` }}>
-        <SectionLabel style={{ color: C.crimson }} sub="เตะอัตโนมัติตามเวลาจริง 9:00-20:00 น. — ไม่มีปุ่มกดคิกอฟ ไม่มีเร่งเวลา">🔴 แข่งขันสด</SectionLabel>
+        <SectionLabel style={{ color: C.crimson }} sub="เตะอัตโนมัติตามเวลาจริง 8:00-20:00 น. — ไม่มีปุ่มกดคิกอฟ ไม่มีเร่งเวลา">🔴 แข่งขันสด</SectionLabel>
         {myClub?.shard && (
           <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginTop: 2 }}>
             🏆 {DIVISION_NAMES[myClub.shard.division] ?? `ดิวิชั่น ${myClub.shard.division}`}

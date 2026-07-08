@@ -12,12 +12,14 @@ import negotiationRoutes from "./routes/negotiations.js";
 import feedbackRoutes from "./routes/feedback.js";
 import battlePassRoutes from "./routes/battlepass.js";
 import { runStakeTick } from "./services/stakeService.js";
-import { runDayTickAll } from "./services/gameService.js";
+import { runDayTickAll, ensureLeagueSkeleton } from "./services/gameService.js";
 import { runMonthlyResetIfDue } from "./services/battlePassService.js";
 import {
   MINUTES_PER_GAME_DAY,
   MATCH_DAYS_PER_SEASON,
   DAILY_STAFF_CARD_DRAWS,
+  ACTIVE_WINDOW_START_HOUR,
+  ACTIVE_WINDOW_END_HOUR,
 } from "../../game-version.js";
 
 // Fail loudly at startup rather than silently minting tokens with a weak
@@ -60,10 +62,18 @@ app.use("/api/battlepass", battlePassRoutes);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// สร้างห้อง Master Legend League (1 ห้องตายตัว) + Master League (4 ห้องตายตัว) ถ้ายังไม่มี — idempotent,
+// ปลอดภัยเรียกซ้ำได้ทุกครั้งที่ deploy/restart (ดู ensureLeagueSkeleton ใน gameService.js)
+try {
+  await ensureLeagueSkeleton();
+} catch (e) {
+  console.error("ensureLeagueSkeleton failed at boot", e);
+}
+
 app.listen(port, () => {
   console.log(`The Master Football Club API → http://localhost:${port}`);
   console.log(`Auth mode: ${process.env.SUPABASE_URL ? "Supabase + Game ID" : "Game ID + dev"}`);
-  console.log(`Season pace: ${MATCH_DAYS_PER_SEASON} game days / 9:00-20:00 น. ไทย (~${MINUTES_PER_GAME_DAY} min/day) · หลัง 20:00 = พักฟื้น/ตลาด`);
+  console.log(`Season pace: ${MATCH_DAYS_PER_SEASON} game days / ${ACTIVE_WINDOW_START_HOUR}:00-${ACTIVE_WINDOW_END_HOUR}:00 น. ไทย (~${MINUTES_PER_GAME_DAY} min/day) · หลัง ${ACTIVE_WINDOW_END_HOUR}:00 = พักฟื้น/ตลาด`);
   console.log(`Daily staff card draws: ${DAILY_STAFF_CARD_DRAWS}/calendar day`);
 });
 

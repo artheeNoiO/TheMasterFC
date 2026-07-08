@@ -34,9 +34,10 @@ export const LEGEND_INACTIVE_DAYS = 30;
 /** Min total club value (squad + budget) to bid for legends */
 export const LEGEND_ACQUIRE_MIN_TEAM_VALUE = 35_000_000;
 
-/** Must be in Master League (division 0); any table position qualifies */
+/** Must be in Master League — division 1 after the 5-tier pyramid renumbering
+ * (0 is now Master Legend League itself; a legend club can't acquire another legend into itself) */
 export function canBidForLegend(division) {
-  return division === 0;
+  return division === 1;
 }
 
 /** @type {Record<string, Array<{key:string,name:string,short:string,color:string,tier:number,formation?:string}>>} */

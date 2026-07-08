@@ -50,6 +50,6 @@ export const ALL_ATTRS = [...ATTR_GROUPS.technical, ...ATTR_GROUPS.mental, ...AT
 
 export const LEAGUE_NAME = "Challenger League";
 export const TEAMS_PER_SHARD = 16;
-/** 30 = double round-robin (เจอกันทั้งเหย้า-เยือน, 16 ทีม) — เดิม 15 (เจอกันครั้งเดียว) ทำให้ห่างรอบละ ~44 นาที
- * รู้สึกรอนาน ตอนนี้ห่างรอบละ ~22 นาที (ยังจบ 1 ฤดูกาลภายในช่วงแข่งขัน 9:00-20:00 เท่าเดิม) */
+/** 30 = double round-robin (เจอกันทั้งเหย้า-เยือน, 16 ทีม) — ตรงกับฟุตบอลจริงลีก 16 ทีม (16-1)x2=30 พอดี
+ * ห่างรอบละ 15 นาทีจริง (MS_PER_GAME_DAY ใน game-version.js) จบ 1 ฤดูกาลใน 7.5 ชม. ภายในช่วงแข่งขัน 8:00-20:00 */
 export const MATCH_DAYS_PER_SEASON = 30;

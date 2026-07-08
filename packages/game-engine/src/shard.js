@@ -1,6 +1,8 @@
 import { BOT_TEAM_DEFS, LEAGUE_NAME, TEAMS_PER_SHARD } from "./constants.js";
 import { genManager, genPlayer, genSquad, rand, uid } from "./players.js";
 import { buildSeasonFixtures, emptyStanding } from "./league.js";
+import { buildLegendSquadForTeam } from "./legend-squad.js";
+import { DIVISION_NAMES } from "../../../game-version.js";
 
 export function createBotClub(def, shardId, index) {
   const id = uid("bot");
@@ -49,7 +51,7 @@ export function createUserClub(config, shardId) {
   return club;
 }
 
-export function createShardWithUserClub(userClubConfig) {
+export function createShardWithUserClub(userClubConfig, division = 1) {
   const shardId = uid("shard");
   const botsNeeded = TEAMS_PER_SHARD - 1;
   const bots = BOT_TEAM_DEFS.slice(0, botsNeeded).map((def, i) => createBotClub(def, shardId, i));
@@ -61,8 +63,8 @@ export function createShardWithUserClub(userClubConfig) {
   return {
     shard: {
       id: shardId,
-      name: LEAGUE_NAME,
-      division: 1,
+      name: DIVISION_NAMES[division] ?? LEAGUE_NAME,
+      division,
       seasonNumber: 1,
       dayNumber: 1,
     },
@@ -82,12 +84,62 @@ export function createBotOnlyShard(division = 1) {
   return {
     shard: {
       id: shardId,
-      name: LEAGUE_NAME,
+      name: DIVISION_NAMES[division] ?? LEAGUE_NAME,
       division,
       seasonNumber: 1,
       dayNumber: 1,
     },
     clubs: bots,
+    fixtures,
+  };
+}
+
+/** ห้องเดียวของ Master Legend League — 16 ทีมซูเปอร์สตาร์จริงจาก roster-database (ไม่ใช่บอทสุ่ม)
+ * ใช้ buildLegendSquadForTeam ตัวเดียวกับที่ sandbox career ใช้อยู่แล้ว (roster เต็มถ้ามี ไม่งั้น fallback
+ * genSquad + วางซูเปอร์สตาร์ทับ) เพื่อให้ rating/ทีมตรงกับฐานข้อมูล roster-database เป๊ะ ไม่ประดิษฐ์สูตรใหม่ */
+export function createLegendBotClub(teamDef, shardId, index, legendLeagueId, startDay) {
+  const id = uid("bot");
+  const players = buildLegendSquadForTeam(id, legendLeagueId, teamDef.key, teamDef.tier, startDay);
+  return {
+    id,
+    shardId,
+    name: teamDef.name,
+    shortCode: teamDef.short,
+    logoIndex: index % 10,
+    primaryColor: teamDef.color,
+    secondaryColor: "#f2f0e6",
+    budget: rand(5000000, 15000000),
+    tier: teamDef.tier,
+    formation: teamDef.formation || "4-4-2",
+    chemistry: 50,
+    isBot: true,
+    autoMode: true,
+    manager: genManager(),
+    players,
+    standing: emptyStanding(id),
+    // ติดตามว่าสล็อตนี้ในห้อง Master Legend League คือทีมตำนานตัวไหน — ใช้คืนตัวตนทีมเดิมกลับมา
+    // เวลามีคนเข้ามาครองสล็อตนี้แล้วภายหลังตกชั้นออกไป (ไม่งั้นชื่อทีมตำนานจะหายไปถาวรหลังมีคนออกครั้งแรก)
+    legendTeamKey: teamDef.key,
+    legendLeagueId,
+  };
+}
+
+export function createLegendShard(legendLeagueId, teamDefs, division = 0, startDay = 1) {
+  const shardId = uid("shard");
+  const clubs = teamDefs.map((t, i) => createLegendBotClub(t, shardId, i, legendLeagueId, startDay));
+  const clubIds = clubs.map((c) => c.id);
+  const fixtures = buildSeasonFixtures(clubIds);
+  return {
+    shard: {
+      id: shardId,
+      name: DIVISION_NAMES[division] ?? "Master Legend League",
+      division,
+      seasonNumber: 1,
+      dayNumber: 1,
+      legendLeagueId,
+      isLegendShard: true,
+    },
+    clubs,
     fixtures,
   };
 }
