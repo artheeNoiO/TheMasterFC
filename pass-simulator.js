@@ -53,7 +53,10 @@ export function slotPassRole(slot) {
   if (slot.pos === "GK") return "GK";
   const lateral = Math.abs((slot.x ?? 50) - 50);
   const isWide = WING_DPOS.has(slot.dpos) || lateral > 24;
-  if (slot.pos === "DF") return isWide ? "WING" : "DF";
+  // แบ็คตัวกว้าง (fullback) ยังนับเป็นกองหลังปกติ ไม่ใช่ WING — เดิมโดนจัดเป็น WING เพราะยืนกว้าง
+  // ทำให้คะแนนจ่ายบอลหากันเองในแนวรับ (DF->WING) โดนหักหนักเหมือนจ่ายไปหาปีกตัวรุก เลยเกิดบั๊ก
+  // เซ็นเตอร์แบ็ค 2 คนส่งกันเองทั้งเกม ไม่เคยแตะฟูลแบ็คอีก 2 คนเลย
+  if (slot.pos === "DF") return "DF";
   if (slot.pos === "MF") return isWide ? "WING" : "MF";
   if (slot.pos === "FW") return "FW";
   return "MF";
@@ -144,10 +147,13 @@ function buildUpPassScore(fromRole, toRole, passSim, zone, carrier, target, late
     } else if (toRole === "MF") {
       score += 10;
     } else if (toRole === "FW") {
+      // เดิมบังคับต้องผ่านปีกมาก่อน (recycled/hadWide) ไม่งั้นโดนหักหนักมาก (-28) เกือบตัดออกจากตัวเลือกไปเลย
+      // ทำให้แทบไม่เห็นบอลทะลุช่องจากกลางตรงๆ — เปิดให้จ่ายทะลุตรงได้เลยตอนมีช่องไปข้างหน้าจริง
+      // (คะแนนน้อยกว่ากรณีผ่านปีกมาก่อนนิดหน่อย แต่ยังเป็นตัวเลือกที่แข่งกับตัวอื่นได้)
       const canFinal = passSim.recycled || (passSim.hadWide && passSim.chain >= 2);
-      if (canFinal && zone !== "build") score += 24;
-      else if (canFinal && zone === "build") score += 4;
-      else score -= 28;
+      if (zone === "build") score += canFinal ? 4 : -10;
+      else if (fwd > 6) score += canFinal ? 26 : 15;
+      else score += canFinal ? 10 : -4;
       if (fwd > 4 && zone === "attack") score += 8;
     } else if (toRole === "DF") {
       score += zone === "build" ? 8 : 2;
@@ -223,8 +229,8 @@ function classifyPass(dist, lateral, fwd, fromRole, toRole, pressure, zone, pass
   if (fromRole === "MF" && toRole === "WING") return lateral > 16 ? "medium" : "short";
   if (wide && fromRole === "WING" && toRole === "FW" && zone === "attack") return "cross";
   if (wide && lateral > 18 && dist > 16 && fromRole === "MF") return "switch";
-  if (inBox && fwd > 6 && dist < 20 && passSim?.recycled) return "through";
-  if (fromRole === "MF" && toRole === "FW" && fwd > 6 && dist < 22) return "through";
+  if (inBox && fwd > 6 && dist < 20) return "through";
+  if (fromRole === "MF" && toRole === "FW" && fwd > 4 && dist < 28) return "through";
   if (dist > 26 && fromRole === "DF") return "long";
   if (dist > 12) return "medium";
   return "short";
@@ -539,13 +545,15 @@ export function tickPassFlight(ball, side, dt) {
   return ball.t >= 1;
 }
 
-/** เวลาเลี้ยงก่อนจ่าย — ตามตำแหน่ง + โซน */
+/** เวลาเลี้ยงก่อนจ่าย — ตามตำแหน่ง + โซน
+ * กองหลัง/กองกลาง เน้นถ่ายเทบอลเร็ว ไม่ถือนาน — ปีก (bonus แยกต่างหากใน advanceOpenPlay) และกองหน้าใกล้ประตู
+ * เป็นสองตำแหน่งเดียวที่ควรเห็นเลี้ยงกินตัวบ่อยๆ */
 export function dribbleHoldTime(carrierPos, zone, pressure) {
-  const base = { GK: 1.5, DF: 1.1, MF: 0.75, FW: 0.6 }[carrierPos] ?? 0.8;
+  const base = { GK: 1.5, DF: 0.55, MF: 0.5, FW: 0.65 }[carrierPos] ?? 0.6;
   const zoneAdd = zone === "build" ? 0.15 : zone === "attack" ? -0.08 : 0;
   const pressCut = pressure > 0.5 ? -0.2 : pressure > 0.25 ? -0.1 : 0;
   // ~35-100 เฟรม (@60fps) ระหว่างรับบอลถึงตัดสินใจใหม่ กันแผนเปลี่ยนกลางทางจนดูกระตุก
-  return clamp(base + zoneAdd + pressCut + (Math.random() * 0.18 - 0.06), 0.6, 2.2);
+  return clamp(base + zoneAdd + pressCut + (Math.random() * 0.18 - 0.06), 0.35, 2.2);
 }
 
 /** ตำแหน่งรับบอล — วิ่ง lead ตามประเภท pass */

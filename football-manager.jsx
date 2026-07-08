@@ -73,7 +73,7 @@ import { pullOnlineStaffMachine } from "./client/src/lib/staff-machine.js";
 import {
   createAmbientPitchState, advanceAmbientPitch, ambientAsBallSim,
   computeAmbientLivePlayers, beginAmbientShot, startCornerScene, startFreekickScene, startPenaltyScene,
-  slotToPitchAmbient, triggerFoulReaction,
+  slotToPitchAmbient, triggerFoulReaction, currentPressSituation, triggerTacklerSlide,
 } from "./live-pitch-ambient.js";
 import "./fc-ui-theme.css";
 import FeedbackBoard from "@feedback";
@@ -11368,21 +11368,20 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
           }
         }
       }
-      if (tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.14 * effectiveSpeed)) {
-        // ผู้ที่โดนฟาวล์ (ได้ฟรีคิก/จุดโทษ) ต้องเป็นฝั่งที่ ambient คิดว่าถือบอลอยู่จริง (ฟาวล์เกิดกับคนถือบอล ไม่ใช่สุ่มฝั่งลอยๆ)
-        const foulRealSide = ambientRef.current?.possSide;
-        const awayFouled = foulRealSide ? foulRealSide === "home" : Math.random() < homePressure;
+      // ฟาวล์ต้องเกิดตอนมีจังหวะเข้าสกัดผู้ครองบอลจริงๆเท่านั้น (ฝ่ายรับมีคนอยู่ในระยะเข้าปะทะ) ไม่ใช่สุ่มลอยๆ
+      // ทุก 6 tick แบบเดิม — เดิมไม่เช็คเลยว่ามีใครกำลังเข้าสกัดอยู่หรือเปล่า เลยเคยได้ฟรีคิกทั้งที่กำลังเลี้ยงเปิดโล่งๆ
+      const pressSit = ambientRef.current ? currentPressSituation(ambientRef.current) : null;
+      const inTackleRange = pressSit && pressSit.presserIdx >= 0 && pressSit.dist < 4.2;
+      if (inTackleRange && tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.3 * effectiveSpeed)) {
+        const awayFouled = pressSit.attackSide === "home";
         if (awayFouled) setStats((s) => ({ ...s, foulsA: s.foulsA + 1 }));
         else setStats((s) => ({ ...s, foulsH: s.foulsH + 1 }));
         playWhistle();
 
-        // นักเตะที่โดนฟาวล์ล้มสั้นๆ (หรือนอนบาดเจ็บนานถ้าฟาวล์รุนแรง ~8%) — ฝั่งตรงข้ามกับทีมที่ทำฟาวล์
-        // (สุ่มตำแหน่งเว้น GK ที่ index 0)
+        // ผู้ครองบอลจริง (ฝ่ายบุก) โดนสกัดจนล้ม — คนเข้าสกัด (ฝ่ายรับ) เล่นท่าสไลด์ (ไม่ใช่สุ่มตำแหน่งลอยๆแบบเดิม)
         if (ambientRef.current) {
-          const victimSide = awayFouled ? "home" : "away";
-          const victimSlots = victimSide === "home" ? hSlots : aSlots;
-          const victimIdx = victimSlots.length > 1 ? 1 + Math.floor(Math.random() * (victimSlots.length - 1)) : 0;
-          triggerFoulReaction(ambientRef.current, victimSide, victimIdx, { severe: Math.random() < 0.08 });
+          triggerFoulReaction(ambientRef.current, pressSit.attackSide, pressSit.carrierIdx, { severe: Math.random() < 0.08 });
+          triggerTacklerSlide(ambientRef.current, pressSit.defSide, pressSit.presserIdx);
         }
 
         // ผู้ตัดสิน — บางฟาวล์ได้ใบเหลือง/แดง (สะสม 2 เหลือง = แดง) เก็บทั้งเกม ยังไม่ตัดผู้เล่นออกจากสนามจริง (ผลกระทบเชิงภาพ/สถิติเท่านั้น)
@@ -11430,8 +11429,13 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       const inBox = zoneRealSide === "home" ? bs.px > 74
         : zoneRealSide === "away" ? bs.px < 26
         : (bs.px > 74 || bs.px < 26);
+      // ลึกเข้าไปในแดนตัวเอง (ไม่ถึงกลางสนามด้วยซ้ำ) ห้ามยิงเด็ดขาด — เดิมมีโอกาสยิงพื้นฐาน 3.5% ทุกโซนแม้แต่แดนตัวเอง
+      // สะสมนานๆเข้าเลยเกิด "ยิงจากฝั่งตัวเองข้ามสนามไปประตูฝ่ายตรงข้าม" ซึ่งชีวิตจริงไม่มีทางเกิด
+      const inOwnThird = zoneRealSide === "home" ? bs.px < 38
+        : zoneRealSide === "away" ? bs.px > 62
+        : false;
       const highlightBias = getLiveHighlightBias(homeGoals, awayGoals, gameMin);
-      const shotBase = (inBox ? 0.16 : inAttThird ? 0.1 : 0.035) * highlightBias;
+      const shotBase = inOwnThird ? 0 : (inBox ? 0.16 : inAttThird ? 0.1 : 0.035) * highlightBias;
       const shotChance = Math.min(0.85, (shotBase + Math.abs(pr) * 0.05) * effectiveSpeed);
       if (tickRef.current % 3 === 0 && Math.random() < shotChance) {
         // คนยิงต้องเป็นฝั่งที่ ambient คิดว่าถือบอลอยู่จริง (ไม่งั้น shooterIdx จะไปตรงกับผู้เล่นคนละฝั่ง/คนละคนกับที่ยิงจริงในภาพ — เคยเกิดบั๊ก "กองหลังยิงประตูฝ่ายตรงข้าม")

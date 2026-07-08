@@ -219,6 +219,35 @@ export function triggerFoulReaction(state, side, idx, { severe = false } = {}) {
   return state;
 }
 
+/** ผู้เล่นฝ่ายรับที่ใกล้ผู้ครองบอลที่สุดตอนนี้ — ใช้เช็คว่ากำลังมีจังหวะเข้าสกัดจริงไหม
+ * ก่อนจะสุ่มว่าฟาวล์เกิดขึ้น (กันฟรีคิกโผล่มาลอยๆ ตอนไม่มีใครเข้าปะทะผู้ครองบอลอยู่เลย) */
+export function currentPressSituation(state) {
+  const s = state;
+  if (!s?.ball) return null;
+  const attackSide = s.possSide;
+  const defSide = attackSide === "home" ? "away" : "home";
+  const defSlots = defSide === "home" ? s.homeSlots : s.awaySlots;
+  const defTeam = defSide === "home" ? s.home : s.away;
+  if (!defSlots?.length || !defTeam?.length) return null;
+  let idx = -1;
+  let best = Infinity;
+  defSlots.forEach((slot, i) => {
+    if (slot.pos === "GK") return;
+    const p = defTeam[i];
+    if (!p) return;
+    const d = Math.hypot(p.px - s.ball.px, p.py - s.ball.py);
+    if (d < best) { best = d; idx = i; }
+  });
+  return { attackSide, defSide, presserIdx: idx, carrierIdx: carrierIdx(s), dist: best };
+}
+
+/** เข้าสกัดพลาดจนเป็นฟาวล์ — คนสกัด (ฝ่ายรับ) เล่นท่าสไลด์ ส่วนคนโดนสกัด (ผู้ครองบอล) ใช้ triggerFoulReaction แยกต่างหาก */
+export function triggerTacklerSlide(state, side, idx) {
+  if (!state) return state;
+  state.tacklerSlide = { side, idx, expiresAt: Date.now() + 900 };
+  return state;
+}
+
 /* ============================ จังหวะยิง (สโลว์โมชั่น) ============================ */
 
 /**
@@ -262,6 +291,8 @@ export function beginAmbientShot(state, { shotSide, outcome, counted = true, aim
     isVolley: counted && Math.random() < 0.3,
     // ราโบน่า — ท่าโชว์หายากมาก เกิดได้เฉพาะยิงเปิดเกมส์ปกติที่ไม่ใช่วอลเลย์ (คนละท่ากัน ทับกันไม่ได้)
     isRabona: counted && Math.random() < 0.05,
+    // เซฟแบบปัดออก (ชกบอลออก) แทนพุ่งรับตรงๆ — ใช้ท่า gk-punch (มีมาตั้งแต่แรกแต่ไม่เคยถูกเรียกใช้จริง)
+    isPunchSave: outcome === "save" && Math.random() < 0.35,
   };
   s.shotSeq.isRabona = s.shotSeq.isRabona && !s.shotSeq.isVolley;
   // ไล่ระดับความช้าแทนการสแนปทันที (เดิม s.timeScale = 0.35 ตรงๆ ทำให้จังหวะยิงดู "วาป" ตัดเข้าสโลว์โม
@@ -709,6 +740,11 @@ function advanceOpenPlay(s, dt, pressure) {
     let hold = dribbleHoldTime(carrierSlot?.pos || "MF", zone, Math.max(0, pr));
     // ปีกถือบอลนานขึ้น — จะได้เห็นการพาบอลเลี้ยงริมเส้น (updateTeamAmbient สั่งวิ่งให้)
     if (slotPassRole(carrierSlot) === "WING") hold += 0.9;
+    // กองหน้าใกล้ประตูฝ่ายตรงข้าม — ปล่อยให้เลี้ยงเข้าไปยิงเองแทนที่จะรีบจ่ายออกทันที (ตำแหน่งเดียวกับปีกที่ควรเห็นเลี้ยงกินตัว)
+    if (carrierSlot?.pos === "FW") {
+      const atkGoalPx = possSide === "home" ? 100 : 0;
+      if (Math.abs(b.px - atkGoalPx) < 16) hold += 0.6;
+    }
     const windupLead = (PASS_PROFILES.medium?.windup ?? 0.32) + 0.08;
 
     if (!s.pendingPass && s.dribbleHold >= hold - windupLead) {
@@ -905,6 +941,7 @@ function updateTeamAmbient(teamArr, slots, side, ball, possSide, animTick, carri
   const sq = ctx?.shotSeq;
   const restart = ctx?.restart;
   const foulReaction = ctx?.foulReaction;
+  const tacklerSlide = ctx?.tacklerSlide;
 
   return slots.map((slot, i) => {
     const anchor = slotToPitchAmbient(slot, side);
@@ -1055,15 +1092,21 @@ function updateTeamAmbient(teamArr, slots, side, ball, possSide, animTick, carri
     } else if (foulReaction && foulReaction.side === side && foulReaction.idx === i) {
       // เพิ่งโดนฟาวล์ — ล้มสั้นๆ หรือนอนนิ่งค้าง (กรณีรุนแรง) ก่อนกลับมาเล่นต่อ
       actionKind = foulReaction.kind || "stumble";
+    } else if (tacklerSlide && tacklerSlide.side === side && tacklerSlide.idx === i) {
+      // คนเข้าสกัด (ฝ่ายรับ) สไลด์เข้าปะทะจนเป็นฟาวล์ — ใช้ท่าสไลด์เดียวกับที่สกัดไลน์ประตู
+      actionKind = "slide";
     } else if (sq && sq.outcome === "cleared" && side !== sq.shotSide && i === sq.clearerIdx) {
       // สกัดไลน์ประตู — กองหลัง (ไม่ใช่ GK) เป็นคนสไลด์ดักบอลออกไปแทน
       actionKind = "slide";
-    } else if (sq && isGK && side !== sq.shotSide && sq.outcome !== "cleared") {
+    } else if (sq && isGK && side !== sq.shotSide && sq.outcome !== "cleared" && sq.phase === "fly") {
       // เลือกท่าเซฟตามทิศ/ระยะจริงของลูกยิง (ไม่ใช่พุ่งทางเดียวตายตัว หรือได้ตัวว่างเปล่าตอนไม่เข้า)
       // outPt.py คือตำแหน่งขวางประตูที่บอลจบ (50=กลาง) — ใกล้กลาง=กระโดดตรง, ไกล=พุ่งข้าง, "post"=เอื้อมสุดตัว
+      // ต้องรอ phase "fly" (บอลออกจากเท้าแล้วจริงๆ) เท่านั้น — เดิมเริ่มท่าพุ่งตั้งแต่ "aim" (ตอนยังเงื้ออยู่)
+      // เลย GK พุ่งเซฟไปก่อนบอลจะออกจากเท้าคนยิงด้วยซ้ำ ดูเหมือนทายใจล่วงหน้า
       const distFromCenter = Math.abs((sq.outPt?.py ?? 50) - 50);
       if (sq.outcome === "post") actionKind = "gk-dive-tipover";
       else if (distFromCenter < 4) actionKind = "gk-jump-save";
+      else if (sq.isPunchSave) actionKind = "gk-punch";
       else actionKind = sq.outPt.py > 50 ? "gk-save-right" : "gk-save-left";
     } else if (sq && side === sq.shotSide && i === sq.shooterIdx && (sq.phase === "aim" || sq.phase === "fly")) {
       actionKind = sq.isRabona ? "rabona" : (sq.isVolley ? "volley" : "shot");
@@ -1163,6 +1206,9 @@ export function computeAmbientLivePlayers(homeSlots, awaySlots, ambientState, an
     restart: ambientState.restart,
     foulReaction: ambientState.foulReaction && ambientState.foulReaction.expiresAt > Date.now()
       ? ambientState.foulReaction
+      : null,
+    tacklerSlide: ambientState.tacklerSlide && ambientState.tacklerSlide.expiresAt > Date.now()
+      ? ambientState.tacklerSlide
       : null,
   };
 
