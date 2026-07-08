@@ -72,12 +72,14 @@ app.listen(port, () => {
  * MS_PER_GAME_DAY (~44 นาที) จะปิดจบ/คิกอฟรอบถัดไปช้าไปเกือบเท่าตัว (เคยเป็นแบบนั้นตอนยัง instant-sim
  * ทุกอย่างในทีเดียว ตอนนี้ต้อง poll ถี่ๆ แล้วปล่อยให้ throttle ภายในของ runDayTickForShard เป็นตัวคุมจังหวะแทน) */
 const DAY_TICK_POLL_MS = 30_000;
+console.log(`day-tick interval starting (poll every ${DAY_TICK_POLL_MS / 1000}s, disabled=${process.env.DAY_TICK_DISABLED === "1"})`);
 if (process.env.DAY_TICK_DISABLED !== "1") {
   setInterval(async () => {
     try {
       const results = await runDayTickAll();
       const active = results.filter((r) => r.action && r.action !== "throttled" && r.action !== "outside_match_window");
-      if (active.length) console.log("day-tick:", JSON.stringify(active));
+      // heartbeat เสมอ (ไม่ใช่แค่ตอน active) — เพื่อยืนยันว่า interval ยังรันอยู่จริง แม้ไม่มีอะไรเกิดขึ้น
+      console.log(`day-tick heartbeat: ${results.length} shard(s), ${active.length} active`, active.length ? JSON.stringify(active) : "");
     } catch (e) {
       console.error("day-tick error", e);
     }
