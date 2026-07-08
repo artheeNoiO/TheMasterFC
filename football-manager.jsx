@@ -11193,6 +11193,52 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
     }, 2200);
   }
 
+  // ยิงจริง — ตัดสินผล (เข้า/เซฟ/หลุด) แล้วเล่นสดผ่าน ambient เรียกได้ทั้งจากลูกเต๋าสุ่มรายทิค และจากเหตุการณ์
+  // "กองหน้าเพิ่งรับบอลในตำแหน่งอันตราย" โดยตรง (ผูกช็อตเข้ากับการเล่นจริงแทนที่จะเป็นแค่การสุ่มลอยๆ)
+  function fireShot(attackingHomeShot, zone) {
+    const scoreProb = attackingHomeShot ? xgRef.current.xgHome / 40 : xgRef.current.xgAway / 40;
+    const shotResult = resolveShotResult(scoreProb, zone);
+    const onTarget = shotResult === "goal" || shotResult === "save";
+    const isGoal = shotResult === "goal";
+    const gMin = gameMinRef.current;
+    const teamShort = attackingHomeShot ? homeTeam.short : awayTeam.short;
+    const shotSide = attackingHomeShot ? "home" : "away";
+    const xi = attackingHomeShot ? homeXI : awayXI;
+    const sq = attackingHomeShot ? homeSquad : awaySquad;
+    const shootingIsUser = attackingHomeShot === isUserHome;
+    const scorer = pickScorer(sq, xi, shootingIsUser ? null : prep.markPlayerId);
+    setStats((s) => attackingHomeShot
+      ? { ...s, shotsH: s.shotsH + 1, sotH: s.sotH + (onTarget ? 1 : 0) }
+      : { ...s, shotsA: s.shotsA + 1, sotA: s.sotA + (onTarget ? 1 : 0) });
+    if (scorer) bumpRating(scorer.id, isGoal ? 0.45 : onTarget ? 0.12 : -0.08);
+
+    const statusMsg = isGoal
+      ? `⚽ ${teamShort} ยิงเข้า! (นาที ${gMin}')`
+      : onTarget
+        ? `🧤 ${teamShort} ยิงตรงกรอบ แต่เซฟได้ (นาที ${gMin}')`
+        : `📐 ${teamShort} ยิงหลุดกรอบ (นาที ${gMin}')`;
+    pushCommentary(statusMsg, gMin);
+    if (!isGoal) setEvents((e) => [`${statusMsg.replace(/ \(นาที.*\)/, "")} — นาที ${gMin}'`, ...e]);
+
+    // ประตูนับผลทันที (สกอร์บอร์ดขึ้นก่อนภาพเล็กน้อย) — GOAL flash จะเด้งตอนบอลถึงตาข่ายจริงผ่าน pendingEvents
+    if (isGoal) {
+      if (attackingHomeShot) setHomeGoals((g) => g + 1); else setAwayGoals((g) => g + 1);
+      setGoalLog((g) => [{ minute: gMin, team: shotSide, player: scorer?.name || teamShort }, ...g].slice(0, 8));
+      setEvents((e) => [`⚽ ${gMin}' ประตู! ${scorer?.name || teamShort} (${teamShort})`, ...e]);
+    } else {
+      setHighlight({ team: shotSide, kind: shotResult === "save" ? "save" : "miss", minute: gMin });
+      setTimeout(() => setHighlight(null), 2200);
+    }
+
+    // ยิงสดในจอปกติ: สโลว์โมตั้งแต่เงื้อจนบอลถึงเป้า + เส้นปะวิถียิง (ambient จัดการเอง)
+    const ambShot = ambientRef.current;
+    if (ambShot && !ambShot.shotSeq && !ambShot.setPiece && !ambShot.celebration && !ambShot.restart) {
+      const outcome = isGoal ? "goal" : shotResult === "save" ? "save" : (Math.random() < 0.3 ? "post" : "wide");
+      lastShotMetaRef.current = { scorerName: scorer?.name, teamShort, shotSide };
+      beginAmbientShot(ambShot, { shotSide, outcome });
+    }
+  }
+
   function closeMatchReport() {
     setMatchReport(null);
     pendingFinishRef.current?.();
@@ -11259,6 +11305,14 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         list.forEach((ev) => {
           if (ev.type === "kickoffWhistle") {
             playWhistle();
+            return;
+          }
+          if (ev.type === "shotChance") {
+            // กองหน้าเพิ่งรับบอลในตำแหน่งอันตราย — ยิงต่อทันทีเลยส่วนใหญ่ (ไม่ใช่ทุกครั้ง กันดูเป็นสคริปต์ตายตัวเกินไป)
+            const amb = ambientRef.current;
+            if (amb && !amb.shotSeq && !amb.setPiece && !amb.celebration && !amb.restart && Math.random() < 0.6) {
+              fireShot(ev.side === "home", { inBox: true, inAttThird: true });
+            }
             return;
           }
           if (ev.type !== "shotResolved") return;
@@ -11350,14 +11404,14 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
 
       // corners / fouls flavor stats
       // ×speed ชดเชยจำนวนติ๊กที่หายไปตอนเร่งความเร็ว (เร็ว 6 เท่า = ติ๊กน้อยลง 6 เท่า) — จำนวน event ต่อแมตช์คงที่ทุกความเร็ว
-      if (tickRef.current % 5 === 0 && Math.random() < Math.min(0.8, 0.06 * effectiveSpeed)) {
+      if (tickRef.current % 5 === 0 && Math.random() < Math.min(0.8, 0.04 * effectiveSpeed)) {
         // ฝั่งที่ได้เตะมุมต้องตรงกับฝั่งที่ ambient คิดว่ากำลังถือบอล/บุกอยู่จริง (ไม่งั้นภาพจะตัดข้ามจังหวะที่กำลังเลี้ยงอยู่)
         const cornerRealSide = ambientRef.current?.possSide;
         const cornerHome = cornerRealSide ? cornerRealSide === "home" : Math.random() < homePressure;
-        // เตะมุมเกิดได้จริงแค่ตอนบอลอยู่ลึกในแดนสามของฝั่งที่บุกอยู่เท่านั้น (ใกล้เส้นประตูฝ่ายรับ)
-        // เดิมไม่เช็คตำแหน่งบอลเลย เลยเคยเกิดเตะมุมตัดฉากทั้งที่บอลอยู่อีกฝั่งสนามคนละที่กับประตูที่จะเตะมุม
+        // เตะมุมเกิดได้จริงแค่ตอนบอลอยู่ใกล้เส้นประตู/กรอบเขตโทษจริงๆ (ไม่ใช่แค่ "อยู่ในแดนสาม" ซึ่งกว้างเกินไป
+        // ครอบคลุมพื้นที่ที่เลี้ยงเปิดเกมอยู่ห่างจากประตูมากได้ด้วย) ต้องลึกกว่าเดิม ใกล้เคียงกรอบเขตโทษ
         const cornerBallPx = ballSimRef.current?.px ?? 50;
-        const cornerNearGoalLine = cornerHome ? cornerBallPx > 62 : cornerBallPx < 38;
+        const cornerNearGoalLine = cornerHome ? cornerBallPx > 78 : cornerBallPx < 22;
         if (cornerNearGoalLine) {
           if (cornerHome) setStats((s) => ({ ...s, cornersH: s.cornersH + 1 }));
           else setStats((s) => ({ ...s, cornersA: s.cornersA + 1 }));
@@ -11371,8 +11425,11 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       // ฟาวล์ต้องเกิดตอนมีจังหวะเข้าสกัดผู้ครองบอลจริงๆเท่านั้น (ฝ่ายรับมีคนอยู่ในระยะเข้าปะทะ) ไม่ใช่สุ่มลอยๆ
       // ทุก 6 tick แบบเดิม — เดิมไม่เช็คเลยว่ามีใครกำลังเข้าสกัดอยู่หรือเปล่า เลยเคยได้ฟรีคิกทั้งที่กำลังเลี้ยงเปิดโล่งๆ
       const pressSit = ambientRef.current ? currentPressSituation(ambientRef.current) : null;
-      const inTackleRange = pressSit && pressSit.presserIdx >= 0 && pressSit.dist < 4.2;
-      if (inTackleRange && tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.3 * effectiveSpeed)) {
+      // ระยะปะทะจริง (ไม่ใช่แค่ "อยู่แถวๆนั้น") — เข้มกว่าระยะ jockey/tackle ปกติที่ใช้เลือกท่าทาง (4)
+      // เพราะสถานการณ์ "มีคนประกบอยู่ใกล้ๆ" เกิดได้บ่อยมากตอนปีก/กองหน้าเลี้ยงเข้าใส่กองหลัง (ตามที่ตั้งใจให้เลี้ยงเยอะขึ้น)
+      // ถ้าใช้ probability เดิมจะกลายเป็นฟาวล์ถี่มากทุกครั้งที่มีการประกบต่อเนื่องหลาย tick
+      const inTackleRange = pressSit && pressSit.presserIdx >= 0 && pressSit.dist < 3.2;
+      if (inTackleRange && tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.045 * effectiveSpeed)) {
         const awayFouled = pressSit.attackSide === "home";
         if (awayFouled) setStats((s) => ({ ...s, foulsA: s.foulsA + 1 }));
         else setStats((s) => ({ ...s, foulsH: s.foulsH + 1 }));
@@ -11435,53 +11492,17 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         : zoneRealSide === "away" ? bs.px > 62
         : false;
       const highlightBias = getLiveHighlightBias(homeGoals, awayGoals, gameMin);
-      const shotBase = inOwnThird ? 0 : (inBox ? 0.16 : inAttThird ? 0.1 : 0.035) * highlightBias;
-      const shotChance = Math.min(0.85, (shotBase + Math.abs(pr) * 0.05) * effectiveSpeed);
+      // โซนกลางสนาม (ไม่ใช่แดนตัวเองและไม่ใช่แดนสาม) ลดโอกาสยิงลงมากจนแทบไม่เกิด — ของจริงแทบไม่มีใครยิงจากกลางสนาม
+      const shotBase = inOwnThird ? 0 : (inBox ? 0.16 : inAttThird ? 0.1 : 0.004) * highlightBias;
+      // ตัวบวกจากแรงกด (pr) เดิมบวกเข้าไปตรงๆไม่สนโซนเลย ทำให้แดนตัวเอง/กลางสนามก็ยังมีโอกาสยิงสูงอยู่ดีตอนเกมกดดันหนัก
+      // (เคยเป็นสาเหตุที่ห้ามยิงแดนตัวเองไปแล้วแต่ยังเห็นยิงจากกลางสนามอยู่) ต้องริบให้เหลือ 0 ตอนอยู่แดนตัวเอง และหักลงมากตอนกลางสนาม
+      const pressureAdd = inOwnThird ? 0 : (inAttThird || inBox ? 0.05 : 0.006) * Math.abs(pr);
+      const shotChance = Math.min(0.85, (shotBase + pressureAdd) * effectiveSpeed);
       if (tickRef.current % 3 === 0 && Math.random() < shotChance) {
         // คนยิงต้องเป็นฝั่งที่ ambient คิดว่าถือบอลอยู่จริง (ไม่งั้น shooterIdx จะไปตรงกับผู้เล่นคนละฝั่ง/คนละคนกับที่ยิงจริงในภาพ — เคยเกิดบั๊ก "กองหลังยิงประตูฝ่ายตรงข้าม")
         const shotRealSide = ambientRef.current?.possSide;
         const attackingHomeShot = shotRealSide ? shotRealSide === "home" : attackingHome;
-        const scoreProb = attackingHomeShot ? xgHome / 40 : xgAway / 40;
-        const zone = { inBox, inAttThird };
-        const shotResult = resolveShotResult(scoreProb, zone);
-        const onTarget = shotResult === "goal" || shotResult === "save";
-        const isGoal = shotResult === "goal";
-        const teamShort = attackingHomeShot ? homeTeam.short : awayTeam.short;
-        const shotSide = attackingHomeShot ? "home" : "away";
-        const xi = attackingHomeShot ? homeXI : awayXI;
-        const sq = attackingHomeShot ? homeSquad : awaySquad;
-        const shootingIsUser = attackingHomeShot === isUserHome;
-        const scorer = pickScorer(sq, xi, shootingIsUser ? null : prep.markPlayerId);
-        setStats((s) => attackingHomeShot
-          ? { ...s, shotsH: s.shotsH + 1, sotH: s.sotH + (onTarget ? 1 : 0) }
-          : { ...s, shotsA: s.shotsA + 1, sotA: s.sotA + (onTarget ? 1 : 0) });
-        if (scorer) bumpRating(scorer.id, isGoal ? 0.45 : onTarget ? 0.12 : -0.08);
-
-        const statusMsg = isGoal
-          ? `⚽ ${teamShort} ยิงเข้า! (นาที ${gameMin}')`
-          : onTarget
-            ? `🧤 ${teamShort} ยิงตรงกรอบ แต่เซฟได้ (นาที ${gameMin}')`
-            : `📐 ${teamShort} ยิงหลุดกรอบ (นาที ${gameMin}')`;
-        pushCommentary(statusMsg, gameMin);
-        if (!isGoal) setEvents((e) => [`${statusMsg.replace(/ \(นาที.*\)/, "")} — นาที ${gameMin}'`, ...e]);
-
-        // ประตูนับผลทันที (สกอร์บอร์ดขึ้นก่อนภาพเล็กน้อย) — GOAL flash จะเด้งตอนบอลถึงตาข่ายจริงผ่าน pendingEvents
-        if (isGoal) {
-          if (attackingHomeShot) setHomeGoals((g) => g + 1); else setAwayGoals((g) => g + 1);
-          setGoalLog((g) => [{ minute: gameMin, team: shotSide, player: scorer?.name || teamShort }, ...g].slice(0, 8));
-          setEvents((e) => [`⚽ ${gameMin}' ประตู! ${scorer?.name || teamShort} (${teamShort})`, ...e]);
-        } else {
-          setHighlight({ team: shotSide, kind: shotResult === "save" ? "save" : "miss", minute: gameMin });
-          setTimeout(() => setHighlight(null), 2200);
-        }
-
-        // ยิงสดในจอปกติ: สโลว์โมตั้งแต่เงื้อจนบอลถึงเป้า + เส้นปะวิถียิง (ambient จัดการเอง)
-        const ambShot = ambientRef.current;
-        if (ambShot && !ambShot.shotSeq && !ambShot.setPiece && !ambShot.celebration && !ambShot.restart) {
-          const outcome = isGoal ? "goal" : shotResult === "save" ? "save" : (Math.random() < 0.3 ? "post" : "wide");
-          lastShotMetaRef.current = { scorerName: scorer?.name, teamShort, shotSide };
-          beginAmbientShot(ambShot, { shotSide, outcome });
-        }
+        fireShot(attackingHomeShot, { inBox, inAttThird });
       }
 
       // dugout advice every ~20 ticks for user team

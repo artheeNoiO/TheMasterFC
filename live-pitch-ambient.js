@@ -828,6 +828,8 @@ function advanceOpenPlay(s, dt, pressure) {
   } else if (["pass", "through", "safe"].includes(b.phase)) {
     const done = tickPassFlight(b, possSide, dt);
     if (done) {
+      const wasThrough = b.phase === "through";
+      const recvSlot = slots[b.toCarrier];
       setCarrier(s, b.toCarrier);
       b.phase = "dribble";
       b.t = 1;
@@ -841,6 +843,15 @@ function advanceOpenPlay(s, dt, pressure) {
       b.windupT = 0;
       s.pendingPass = null;
       s.dribbleHold = 0;
+
+      // กองหน้าเพิ่งรับบอลในตำแหน่งอันตราย (แดนสาม/กรอบเขตโทษ) — ยิงต่อทันทีแทนรอสุ่มตามรอบ tick ปกติ
+      // (เดิมการได้บอลของกองหน้ากับการสุ่มยิงเป็นคนละระบบไม่เกี่ยวกัน เลยแทบไม่เห็นบอลทะลุช่อง/จ่ายแล้วยิงเข้า)
+      if (recvSlot?.pos === "FW") {
+        const zone = pitchZone(b.px, possSide);
+        if (zone === "attack") {
+          s.pendingEvents.push({ type: "shotChance", side: possSide, idx: b.toCarrier, wasThrough });
+        }
+      }
     }
   } else if (b.phase === "shot") {
     // ช็อตหลงมานอก shotSeq (ไม่ควรเกิด) — เก็บกลับเป็น dribble

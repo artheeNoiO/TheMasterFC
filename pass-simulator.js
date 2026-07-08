@@ -340,7 +340,9 @@ export function planNextPass({
   candidates.sort((a, b) => b.score - a.score);
   // ปกติตัวเลือกแย่เกินไปก็ไม่จ่าย (return null) แต่ถ้าถูกบังคับ (คนถือบอลติดค้างมาหลายรอบแล้วหาช่องไม่ได้จริงๆ)
   // ต้องยอมจ่ายให้ตัวที่ดีที่สุดเท่าที่มีไปเลย กันบอลค้างอยู่กับคนเดิมไม่ยอมจบเกม
-  if (!forceAny && candidates[0].score < 2) return null;
+  // กองหลัง/กองกลางเน้นถ่ายเทบอลเร็ว — ยอมจ่ายแม้ตัวเลือกไม่ได้ดีเลิศ ไม่ต้องรอช่องที่ "ดีจริง" เหมือนปีก/กองหน้าที่ควรเลี้ยงกินตัวได้
+  const passThreshold = carrierRole === "DF" || carrierRole === "MF" ? -10 : 2;
+  if (!forceAny && candidates[0].score < passThreshold) return null;
 
   // weighted-random จาก top 3-4 ตัวเลือก แทน argmax เป๊ะ — กันวนอยู่แค่คนเดิมๆ
   const pool = candidates
