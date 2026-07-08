@@ -50,8 +50,10 @@ router.post("/", requireAuth, createClubLimiter, async (req, res) => {
       shirtColor, shortsColor,
       logoIndex: logoIndex ?? 0,
     });
+    console.log(`club created: ${club.id} (${club.name}) user=${req.user.id} shard=${club.shardId}`);
     res.status(201).json({ club });
   } catch (err) {
+    console.error(`club create failed: user=${req.user.id}`, err);
     res.status(400).json({ error: err.message });
   }
 });

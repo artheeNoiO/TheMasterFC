@@ -101,9 +101,11 @@ router.post("/unlock-online", requireAuth, async (req, res) => {
   const { teamValue } = req.body ?? {};
   const betaFree = process.env.ONLINE_BETA_FREE === "1" || process.env.ONLINE_BETA_FREE === "true";
   if (typeof teamValue !== "number") {
+    console.warn(`unlock-online: teamValue ไม่ใช่ตัวเลข (user=${req.user.id}, teamValue=${JSON.stringify(teamValue)})`);
     return res.status(400).json({ error: "ต้องส่ง teamValue (มูลค่าสโมสรรวมทุกอย่าง)" });
   }
   if (!betaFree && teamValue < 50_000_000) {
+    console.warn(`unlock-online: teamValue ต่ำกว่าเกณฑ์ (user=${req.user.id}, teamValue=${teamValue})`);
     return res.status(400).json({ error: "มูลค่าสโมสรรวมยังไม่ถึง 50M" });
   }
   if (teamValue < 0) {
@@ -113,6 +115,7 @@ router.post("/unlock-online", requireAuth, async (req, res) => {
     where: { id: req.user.id },
     data: { onlineUnlocked: true, onlineUnlockedAt: new Date(), playMode: "online" },
   });
+  console.log(`unlock-online: ok (user=${req.user.id}, teamValue=${teamValue})`);
   res.json({ user: toPublicUser(user), ok: true });
 });
 

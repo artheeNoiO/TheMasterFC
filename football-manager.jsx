@@ -67,7 +67,7 @@ import {
 import {
   fetchShardMatchesToday, fetchLiveMatch, substitutePlayer, setMatchMentality as setOnlineMatchMentality,
 } from "@onlinematch";
-import { createOnlineClubDirect } from "@onlinesession";
+import { createOnlineClubDirect, bootstrapOnlineFromCareer } from "@onlinesession";
 import { fetchBattlePassStatus, claimBattlePassTier as claimOnlineBattlePassTier } from "@battlepass";
 import { pullOnlineStaffMachine } from "./client/src/lib/staff-machine.js";
 import {
@@ -4637,7 +4637,9 @@ export default function App({
     if (sync) {
       try {
         await sync(career);
-      } catch {
+      } catch (e) {
+        console.error("enterOnlineMode sync ล้มเหลว", e);
+        showToast(e?.message || "เชื่อมต่อเซิร์ฟเวอร์ออนไลน์ไม่สำเร็จ — ลองใหม่อีกครั้ง");
         return;
       }
     }
@@ -6866,7 +6868,7 @@ export default function App({
           <OnlineMarketView uiLang={uiLang} />
         )}
         {tab === "onlinematch" && (
-          <OnlineMatchCenterView uiLang={uiLang} />
+          <OnlineMatchCenterView uiLang={uiLang} career={career} />
         )}
         {tab === "battlepass" && (
           <BattlePassView uiLang={uiLang} />
@@ -8636,7 +8638,7 @@ function Dashboard({ career, uTeam, standings, userMatch, opponent, isHome, seas
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {career.playMode === "online" && <OnlineLiveHomeCard />}
+      {career.playMode === "online" && <OnlineLiveHomeCard career={career} />}
       <RoadmapDashboardPanel
         career={career} uTeam={uTeam}
         onPressChoice={onPressChoice}
@@ -14865,16 +14867,30 @@ function OnlineLiveMatchPanel({ matchId, myClubId, mySquad, onClose }) {
 }
 
 /** การ์ดกะทัดรัดบนหน้าหลัก (โหมดออนไลน์) — โชว์สถานะ/สกอร์ย่อ กดแล้วเปิดหน้าต่างดูแมทสดเต็มจอ */
-function OnlineLiveHomeCard() {
+function OnlineLiveHomeCard({ career }) {
   const [myClub, setMyClub] = useState(null);
   const [data, setData] = useState(null);
   const [dataFetchedAt, setDataFetchedAt] = useState(null);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const resyncingRef = useRef(false);
 
   async function poll() {
     try {
-      const club = await fetchMyShardClub();
+      let club = await fetchMyShardClub();
+      // playMode ในเซฟเครื่องบอกว่าออนไลน์แล้ว แต่เซิร์ฟเวอร์ไม่มีสโมสรตรงกัน (เช่น
+      // ฐานข้อมูลถูกล้าง/รีเซ็ต) — ลองสร้างสโมสรใหม่ให้อัตโนมัติแทนที่จะค้าง "ยังไม่ได้เชื่อมต่อ" เงียบๆ
+      if (!club && career?.playMode === "online" && !resyncingRef.current) {
+        resyncingRef.current = true;
+        try {
+          await bootstrapOnlineFromCareer(career);
+          club = await fetchMyShardClub();
+        } catch (e) {
+          console.error("online auto-resync ล้มเหลว", e);
+        } finally {
+          resyncingRef.current = false;
+        }
+      }
       setMyClub(club);
       if (club) {
         setData(await fetchShardMatchesToday());
@@ -14929,7 +14945,7 @@ function OnlineLiveHomeCard() {
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>✕</button>
             </div>
-            <OnlineMatchCenterView />
+            <OnlineMatchCenterView career={career} />
           </div>
         </div>
       )}
@@ -14937,18 +14953,30 @@ function OnlineLiveHomeCard() {
   );
 }
 
-function OnlineMatchCenterView({ uiLang = "th" }) {
+function OnlineMatchCenterView({ uiLang = "th", career }) {
   const [myClub, setMyClub] = useState(null);
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [openMatchId, setOpenMatchId] = useState(null);
+  const resyncingRef = useRef(false);
 
   async function load() {
     setLoading(true);
     setError("");
     try {
-      const club = await fetchMyShardClub();
+      let club = await fetchMyShardClub();
+      if (!club && career?.playMode === "online" && !resyncingRef.current) {
+        resyncingRef.current = true;
+        try {
+          await bootstrapOnlineFromCareer(career);
+          club = await fetchMyShardClub();
+        } catch (e) {
+          console.error("online auto-resync ล้มเหลว", e);
+        } finally {
+          resyncingRef.current = false;
+        }
+      }
       setMyClub(club);
       if (club) {
         const d = await fetchShardMatchesToday();
