@@ -114,7 +114,7 @@ function updateBuildStage(passSim, fromRole, toRole) {
  * คะแนนตามลำดับการเล่นจริง
  * หลัง→กลาง → กลาง→ปีก → ปีก→กลาง → กลาง→หน้า (เมื่อมีช่อง)
  */
-function buildUpPassScore(fromRole, toRole, passSim, zone, carrier, target, lateral, fwd, blocked) {
+function buildUpPassScore(fromRole, toRole, passSim, zone, carrier, target, lateral, fwd, blocked, pressure = 0) {
   let score = 0;
   const stage = passSim.buildStage;
 
@@ -129,6 +129,8 @@ function buildUpPassScore(fromRole, toRole, passSim, zone, carrier, target, late
   if (fromRole === "DF") {
     if (toRole === "MF") score += 26;
     else if (toRole === "DF") score += 6;
+    // จ่ายกลับผู้รักษาประตู — เรื่องปกติของกองหลังตอนโดนกดดัน/ไม่มีช่องไปข้างหน้า ไม่ควรโดนแบนเหมือนจ่ายมั่วมั่ว
+    else if (toRole === "GK") score += pressure > 0.3 ? 22 : 10;
     else if (toRole === "WING") score -= 4;
     else score -= 35;
     if (fwd > 14) score -= 12;
@@ -159,7 +161,8 @@ function buildUpPassScore(fromRole, toRole, passSim, zone, carrier, target, late
     if (toRole === "MF") score += 26;
     else if (toRole === "WING" && lateral > 20) score += 5;
     else if (toRole === "FW" && zone === "attack" && fwd > 2) score += 10;
-    else if (toRole === "DF") score -= 18;
+    // ปีกโดนบีบแล้วจ่ายกลับแบ็คตัวเอง — เกิดได้จริงบ่อยๆ ไม่ควรโดนหักหนักเท่าเดิม (เดิม -18 แทบตัดโอกาสทิ้งไปเลย)
+    else if (toRole === "DF") score -= 6;
     else score -= 12;
     return score;
   }

@@ -1083,7 +1083,10 @@ function updateTeamAmbient(teamArr, slots, side, ball, possSide, animTick, carri
       const flourishKinds = ["nutmeg", "stepover", "cruyff-turn", "zidane-turn", "elastico"];
       actionKind = nearGoal ? flourishKinds[(i + Math.floor(animTick / 90)) % flourishKinds.length] : "dribble";
     } else if (isPasser) {
-      actionKind = ball.phase === "through" || ball.passType === "long" ? "through" : "pass";
+      // ท่าเงื้อ-เตะ-follow-through ควรค้างแค่ช่วงสั้นๆ ตอนปล่อยบอลเท่านั้น ไม่ใช่ค้างตลอดที่บอลลอยอยู่กลางอากาศ
+      // (ยิ่งจ่ายไกล บอลยิ่งลอยนาน ถ้าค้างท่าเดิมทั้งเที่ยวบิน ท่าเตะจะวนซ้ำเรื่อยๆ ดูเหมือนบอลติดเท้าคนจ่ายไปตลอดทาง)
+      const justKicked = ball.phase === "windup" || (ball.t ?? 0) < 0.4;
+      actionKind = justKicked ? (ball.phase === "through" || ball.passType === "long" ? "through" : "pass") : null;
     } else if (isReceiver) {
       actionKind = "receive";
     } else if (isPresser) {

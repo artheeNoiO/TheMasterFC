@@ -11351,7 +11351,9 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       // corners / fouls flavor stats
       // ×speed ชดเชยจำนวนติ๊กที่หายไปตอนเร่งความเร็ว (เร็ว 6 เท่า = ติ๊กน้อยลง 6 เท่า) — จำนวน event ต่อแมตช์คงที่ทุกความเร็ว
       if (tickRef.current % 5 === 0 && Math.random() < Math.min(0.8, 0.06 * effectiveSpeed)) {
-        const cornerHome = Math.random() < homePressure;
+        // ฝั่งที่ได้เตะมุมต้องตรงกับฝั่งที่ ambient คิดว่ากำลังถือบอล/บุกอยู่จริง (ไม่งั้นภาพจะตัดข้ามจังหวะที่กำลังเลี้ยงอยู่)
+        const cornerRealSide = ambientRef.current?.possSide;
+        const cornerHome = cornerRealSide ? cornerRealSide === "home" : Math.random() < homePressure;
         if (cornerHome) setStats((s) => ({ ...s, cornersH: s.cornersH + 1 }));
         else setStats((s) => ({ ...s, cornersA: s.cornersA + 1 }));
         // ซีนเตะมุมเต็ม: บอลออกหลัง → วิ่งไปเตะมุมธง → ออกันหน้าโกล → เปิด → จบช็อต → กลับตำแหน่ง
@@ -11361,7 +11363,9 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         }
       }
       if (tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.14 * effectiveSpeed)) {
-        const awayFouled = Math.random() < homePressure;
+        // ผู้ที่โดนฟาวล์ (ได้ฟรีคิก/จุดโทษ) ต้องเป็นฝั่งที่ ambient คิดว่าถือบอลอยู่จริง (ฟาวล์เกิดกับคนถือบอล ไม่ใช่สุ่มฝั่งลอยๆ)
+        const foulRealSide = ambientRef.current?.possSide;
+        const awayFouled = foulRealSide ? foulRealSide === "home" : Math.random() < homePressure;
         if (awayFouled) setStats((s) => ({ ...s, foulsA: s.foulsA + 1 }));
         else setStats((s) => ({ ...s, foulsH: s.foulsH + 1 }));
         playWhistle();
@@ -11414,18 +11418,21 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
       const shotBase = (inBox ? 0.16 : inAttThird ? 0.1 : 0.035) * highlightBias;
       const shotChance = Math.min(0.85, (shotBase + Math.abs(pr) * 0.05) * effectiveSpeed);
       if (tickRef.current % 3 === 0 && Math.random() < shotChance) {
-        const scoreProb = attackingHome ? xgHome / 40 : xgAway / 40;
+        // คนยิงต้องเป็นฝั่งที่ ambient คิดว่าถือบอลอยู่จริง (ไม่งั้น shooterIdx จะไปตรงกับผู้เล่นคนละฝั่ง/คนละคนกับที่ยิงจริงในภาพ — เคยเกิดบั๊ก "กองหลังยิงประตูฝ่ายตรงข้าม")
+        const shotRealSide = ambientRef.current?.possSide;
+        const attackingHomeShot = shotRealSide ? shotRealSide === "home" : attackingHome;
+        const scoreProb = attackingHomeShot ? xgHome / 40 : xgAway / 40;
         const zone = { inBox, inAttThird };
         const shotResult = resolveShotResult(scoreProb, zone);
         const onTarget = shotResult === "goal" || shotResult === "save";
         const isGoal = shotResult === "goal";
-        const teamShort = attackingHome ? homeTeam.short : awayTeam.short;
-        const shotSide = attackingHome ? "home" : "away";
-        const xi = attackingHome ? homeXI : awayXI;
-        const sq = attackingHome ? homeSquad : awaySquad;
-        const shootingIsUser = attackingHome === isUserHome;
+        const teamShort = attackingHomeShot ? homeTeam.short : awayTeam.short;
+        const shotSide = attackingHomeShot ? "home" : "away";
+        const xi = attackingHomeShot ? homeXI : awayXI;
+        const sq = attackingHomeShot ? homeSquad : awaySquad;
+        const shootingIsUser = attackingHomeShot === isUserHome;
         const scorer = pickScorer(sq, xi, shootingIsUser ? null : prep.markPlayerId);
-        setStats((s) => attackingHome
+        setStats((s) => attackingHomeShot
           ? { ...s, shotsH: s.shotsH + 1, sotH: s.sotH + (onTarget ? 1 : 0) }
           : { ...s, shotsA: s.shotsA + 1, sotA: s.sotA + (onTarget ? 1 : 0) });
         if (scorer) bumpRating(scorer.id, isGoal ? 0.45 : onTarget ? 0.12 : -0.08);
@@ -11440,7 +11447,7 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
 
         // ประตูนับผลทันที (สกอร์บอร์ดขึ้นก่อนภาพเล็กน้อย) — GOAL flash จะเด้งตอนบอลถึงตาข่ายจริงผ่าน pendingEvents
         if (isGoal) {
-          if (attackingHome) setHomeGoals((g) => g + 1); else setAwayGoals((g) => g + 1);
+          if (attackingHomeShot) setHomeGoals((g) => g + 1); else setAwayGoals((g) => g + 1);
           setGoalLog((g) => [{ minute: gameMin, team: shotSide, player: scorer?.name || teamShort }, ...g].slice(0, 8));
           setEvents((e) => [`⚽ ${gameMin}' ประตู! ${scorer?.name || teamShort} (${teamShort})`, ...e]);
         } else {
