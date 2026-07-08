@@ -2270,12 +2270,22 @@ function buildSeasonFixtures(teamIds) {
 }
 
 /* เลือก 11 ตัวที่ดีที่สุดแบบรู้ตำแหน่งละเอียด — จับคู่ทีละช่องด้วย rating×ฟอร์ม×ความคุ้นเคยตำแหน่ง */
+// ลำดับ "ความหายาก" ต่อกลุ่มตำแหน่งตอนแย่งคนเข้าช่อง — FW ต้องได้ตัวก่อน MF เพราะ ST↔AMC/AML/AMR
+// ระยะห่าง row ใกล้กันมาก (penalty ต่ำ) ถ้าประมวลผลช่อง MF ก่อน กองหน้าตัวเก่งจะถูก "แย่ง" ไปอยู่ตำแหน่งรุกกลาง
+// ทำให้ช่อง ST จริงเหลือแต่ตัวสำรอง (บั๊กที่เจอจริง: "เอากองหน้ามาอยู่กองกลาง")
+const SLOT_FILL_PRIORITY = { GK: 0, DF: 1, FW: 2, MF: 3 };
 function getBestXI(squad, formationKey, { excludeInjured = true } = {}) {
   const slotDefs = FORMATIONS[resolveFormation(formationKey)].slots;
   const pool = squad.filter((p) => !excludeInjured || (p.injuryDays <= 0 && (p.suspendedMatches || 0) <= 0));
   const assigned = new Set();
-  const xi = [];
-  slotDefs.forEach((slot) => {
+  const xi = new Array(slotDefs.length).fill(null);
+  const order = slotDefs.map((slot, i) => i).sort((a, b) => {
+    const pa = SLOT_FILL_PRIORITY[slotDefs[a].pos] ?? 9;
+    const pb = SLOT_FILL_PRIORITY[slotDefs[b].pos] ?? 9;
+    return pa - pb;
+  });
+  order.forEach((i) => {
+    const slot = slotDefs[i];
     let best = null, bestScore = -1;
     pool.forEach((p) => {
       if (assigned.has(p.id)) return;
@@ -2283,9 +2293,9 @@ function getBestXI(squad, formationKey, { excludeInjured = true } = {}) {
       const score = p.rating * (p.stamina / 100 * 0.3 + 0.7) * fam;
       if (score > bestScore) { bestScore = score; best = p; }
     });
-    if (best) { assigned.add(best.id); xi.push(best.id); }
+    if (best) { assigned.add(best.id); xi[i] = best.id; }
   });
-  return xi;
+  return xi.filter(Boolean);
 }
 
 function topUpTeamSquad(players, teamId, tier, day, leagueId = "thailand", teams) {
