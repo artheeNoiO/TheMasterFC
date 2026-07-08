@@ -20,11 +20,18 @@ export const BOT_TEAM_DEFS = [
   { name: "น่าน โกลเด้น เกท", short: "NGG", color: "#8d5a97", tier: -3 },
 ];
 
+// ต้องมีครบทุกฟอร์เมชันที่ client (football-manager.jsx FORMATIONS) ให้ผู้เล่นเลือกได้ — ขาดตัวไหนไป
+// getBestXI จะ throw ตอนคิกอฟออนไลน์ (FORMATIONS[key] undefined) ทำให้แมทของทีมที่เลือกฟอร์เมชันนั้นค้าง
+// "รอคิกอฟ"/"กำลังจะเริ่ม" ตลอดกาล (บั๊กที่เจอจริง) — นับ GK/DF/MF/FW ให้ตรงกับ POS_GROUP ฝั่ง client เป๊ะ
 export const FORMATIONS = {
   "4-4-2": { label: "4-4-2", counts: { GK: 1, DF: 4, MF: 4, FW: 2 } },
   "4-3-3": { label: "4-3-3", counts: { GK: 1, DF: 4, MF: 3, FW: 3 } },
   "3-5-2": { label: "3-5-2", counts: { GK: 1, DF: 3, MF: 5, FW: 2 } },
   "5-3-2": { label: "5-3-2", counts: { GK: 1, DF: 5, MF: 3, FW: 2 } },
+  "4-2-3-1": { label: "4-2-3-1", counts: { GK: 1, DF: 4, MF: 5, FW: 1 } },
+  "4-1-4-1": { label: "4-1-4-1", counts: { GK: 1, DF: 4, MF: 5, FW: 1 } },
+  "3-4-3": { label: "3-4-3", counts: { GK: 1, DF: 3, MF: 6, FW: 1 } },
+  "3-4-2-1": { label: "3-4-2-1", counts: { GK: 1, DF: 3, MF: 6, FW: 1 } },
 };
 
 export const FORMATION_KEYS = Object.keys(FORMATIONS);

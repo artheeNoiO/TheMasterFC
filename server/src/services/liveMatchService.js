@@ -73,35 +73,46 @@ export async function kickOffRoundMatches(shardId, dayNumber) {
   const clubsById = Object.fromEntries(clubs.map((c) => [c.id, c]));
   const now = new Date();
 
+  let kicked = 0;
+  const failed = [];
   for (const match of matches) {
-    const homeClub = clubsById[match.homeClubId];
-    const awayClub = clubsById[match.awayClubId];
-    const homePlayers = homeClub.players.map(playerToEngine);
-    const awayPlayers = awayClub.players.map(playerToEngine);
-    const homeXI = resolveXI(homeClub, homePlayers);
-    const awayXI = resolveXI(awayClub, awayPlayers);
-    const { homeGoals, awayGoals, xgHome, xgAway } = simulateInstant(
-      clubToEngine(homeClub), homePlayers, homeXI,
-      clubToEngine(awayClub), awayPlayers, awayXI,
-      homeClub.chemistry, awayClub.chemistry,
-    );
-    const events = generateEventScript({ homeGoals, awayGoals, fromMinute: 0 });
-    await prisma.match.update({
-      where: { id: match.id },
-      data: {
-        status: "live",
-        kickoffAt: now,
-        eventsJson: JSON.stringify(events),
-        homeXIJson: JSON.stringify(homeXI),
-        awayXIJson: JSON.stringify(awayXI),
-        homeGoals,
-        awayGoals,
-        // เก็บ xG ไว้ใน events ชั่วคราวไม่ได้ (ใช้ที่อื่นผ่าน roadmap เดิม) — ปล่อยให้ finalize อ่านจาก homeGoals/awayGoals ที่ล็อกไว้ตรงนี้
-      },
-    });
-    void xgHome; void xgAway; // xG ไม่ได้ persist ในรอบนี้ — ของเดิม (finishUserLiveMatch) เก็บผ่าน pendingXg คนละกลไก ไม่ผูกกับ auto-kickoff รอบแรก
+    // แยก try/catch ต่อแมท — แมทเดียวข้อมูลพัง (ทีม/นักเตะหาย, JSON เพี้ยน ฯลฯ) ต้องไม่ทำให้แมทอื่น
+    // ในชาร์ด/วันเดียวกันคิกอฟไม่ได้ไปด้วย (บั๊กที่เจอจริง: ทีมผู้ใช้ค้าง "รอคิกอฟ" ตลอดกาลเพราะแมทตัวเองพัง)
+    try {
+      const homeClub = clubsById[match.homeClubId];
+      const awayClub = clubsById[match.awayClubId];
+      if (!homeClub || !awayClub) throw new Error(`missing club data (home=${!!homeClub}, away=${!!awayClub})`);
+      const homePlayers = homeClub.players.map(playerToEngine);
+      const awayPlayers = awayClub.players.map(playerToEngine);
+      const homeXI = resolveXI(homeClub, homePlayers);
+      const awayXI = resolveXI(awayClub, awayPlayers);
+      const { homeGoals, awayGoals, xgHome, xgAway } = simulateInstant(
+        clubToEngine(homeClub), homePlayers, homeXI,
+        clubToEngine(awayClub), awayPlayers, awayXI,
+        homeClub.chemistry, awayClub.chemistry,
+      );
+      const events = generateEventScript({ homeGoals, awayGoals, fromMinute: 0 });
+      await prisma.match.update({
+        where: { id: match.id },
+        data: {
+          status: "live",
+          kickoffAt: now,
+          eventsJson: JSON.stringify(events),
+          homeXIJson: JSON.stringify(homeXI),
+          awayXIJson: JSON.stringify(awayXI),
+          homeGoals,
+          awayGoals,
+          // เก็บ xG ไว้ใน events ชั่วคราวไม่ได้ (ใช้ที่อื่นผ่าน roadmap เดิม) — ปล่อยให้ finalize อ่านจาก homeGoals/awayGoals ที่ล็อกไว้ตรงนี้
+        },
+      });
+      void xgHome; void xgAway; // xG ไม่ได้ persist ในรอบนี้ — ของเดิม (finishUserLiveMatch) เก็บผ่าน pendingXg คนละกลไก ไม่ผูกกับ auto-kickoff รอบแรก
+      kicked++;
+    } catch (e) {
+      console.error(`kickoff error (match ${match.id}, ${match.homeClubId} vs ${match.awayClubId})`, e);
+      failed.push({ matchId: match.id, error: e.message });
+    }
   }
-  return { kicked: matches.length };
+  return { kicked, failed };
 }
 
 function applyStandingResult(standing, gf, ga) {
