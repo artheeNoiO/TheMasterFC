@@ -11354,12 +11354,18 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         // ฝั่งที่ได้เตะมุมต้องตรงกับฝั่งที่ ambient คิดว่ากำลังถือบอล/บุกอยู่จริง (ไม่งั้นภาพจะตัดข้ามจังหวะที่กำลังเลี้ยงอยู่)
         const cornerRealSide = ambientRef.current?.possSide;
         const cornerHome = cornerRealSide ? cornerRealSide === "home" : Math.random() < homePressure;
-        if (cornerHome) setStats((s) => ({ ...s, cornersH: s.cornersH + 1 }));
-        else setStats((s) => ({ ...s, cornersA: s.cornersA + 1 }));
-        // ซีนเตะมุมเต็ม: บอลออกหลัง → วิ่งไปเตะมุมธง → ออกันหน้าโกล → เปิด → จบช็อต → กลับตำแหน่ง
-        const ambC = ambientRef.current;
-        if (ambC && !ambC.shotSeq && !ambC.setPiece && !ambC.celebration && !ambC.restart) {
-          startCornerScene(ambC, cornerHome ? "home" : "away");
+        // เตะมุมเกิดได้จริงแค่ตอนบอลอยู่ลึกในแดนสามของฝั่งที่บุกอยู่เท่านั้น (ใกล้เส้นประตูฝ่ายรับ)
+        // เดิมไม่เช็คตำแหน่งบอลเลย เลยเคยเกิดเตะมุมตัดฉากทั้งที่บอลอยู่อีกฝั่งสนามคนละที่กับประตูที่จะเตะมุม
+        const cornerBallPx = ballSimRef.current?.px ?? 50;
+        const cornerNearGoalLine = cornerHome ? cornerBallPx > 62 : cornerBallPx < 38;
+        if (cornerNearGoalLine) {
+          if (cornerHome) setStats((s) => ({ ...s, cornersH: s.cornersH + 1 }));
+          else setStats((s) => ({ ...s, cornersA: s.cornersA + 1 }));
+          // ซีนเตะมุมเต็ม: บอลออกหลัง → วิ่งไปเตะมุมธง → ออกันหน้าโกล → เปิด → จบช็อต → กลับตำแหน่ง
+          const ambC = ambientRef.current;
+          if (ambC && !ambC.shotSeq && !ambC.setPiece && !ambC.celebration && !ambC.restart) {
+            startCornerScene(ambC, cornerHome ? "home" : "away");
+          }
         }
       }
       if (tickRef.current % 6 === 0 && Math.random() < Math.min(0.8, 0.14 * effectiveSpeed)) {
@@ -11398,9 +11404,11 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
         }
 
         // ฟาวล์ในกรอบเขตโทษ = จุดโทษ, นอกกรอบ = ฟรีคิกเหมือนเดิม
+        // ต้องเช็คกรอบเขตโทษของฝั่งที่ได้ประโยชน์ (fkSide) เท่านั้น — เดิมเช็คกรอบฝั่งไหนก็ได้ เลยเคยได้จุดโทษ/ฟรีคิก
+        // ทั้งที่บอลอยู่อีกฝั่งสนาม (กรอบเขตโทษของอีกทีม) ไปจากตำแหน่งจริงคนละที่
         const fkSide = awayFouled ? "home" : "away";
         const amb = ambientRef.current;
-        const foulInBox = ballSimRef.current.px > 74 || ballSimRef.current.px < 26;
+        const foulInBox = fkSide === "home" ? ballSimRef.current.px > 74 : ballSimRef.current.px < 26;
         if (amb && !amb.shotSeq && !amb.setPiece && !amb.celebration && !amb.restart) {
           if (foulInBox) {
             startPenaltyScene(amb, fkSide);
@@ -11412,8 +11420,16 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
 
       // ช็อต — engine อัตโนมัติ (แบบ FM: ดราม่ามากขึ้นเมื่อเกมสูสี) เล่นสดในจอปกติทุกลูก (สโลว์โมในตัว)
       const bs = ballSimRef.current;
-      const inAttThird = bs.px > 62 || bs.px < 38;
-      const inBox = bs.px > 74 || bs.px < 26;
+      // เดิมเช็ค px ใกล้ปลายสนามฝั่งไหนก็ได้แบบไม่สนว่าใครถือบอล — ทำให้ฝั่งที่กำลังเลี้ยงออกจากกรอบเขตโทษ/แดนตัวเอง
+      // ก็โดนนับเป็น "อยู่ในกรอบ/แดนสาม" ไปด้วย เกิดช็อตยิงข้ามสนามที่ไม่สมจริง (ยิงจากอีกฝั่ง/ยิงไกลบ่อยผิดปกติ)
+      // ต้องเช็คสัมพัทธ์กับฝั่งที่ถือบอลจริง (ambient) ว่าลึกเข้าไปในแดนสามของฝั่งตรงข้ามจริงหรือเปล่า
+      const zoneRealSide = ambientRef.current?.possSide;
+      const inAttThird = zoneRealSide === "home" ? bs.px > 62
+        : zoneRealSide === "away" ? bs.px < 38
+        : (bs.px > 62 || bs.px < 38);
+      const inBox = zoneRealSide === "home" ? bs.px > 74
+        : zoneRealSide === "away" ? bs.px < 26
+        : (bs.px > 74 || bs.px < 26);
       const highlightBias = getLiveHighlightBias(homeGoals, awayGoals, gameMin);
       const shotBase = (inBox ? 0.16 : inAttThird ? 0.1 : 0.035) * highlightBias;
       const shotChance = Math.min(0.85, (shotBase + Math.abs(pr) * 0.05) * effectiveSpeed);
