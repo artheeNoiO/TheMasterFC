@@ -11687,10 +11687,11 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
               <span style={{ fontSize: 10, color: C.textDim }}>โมเมนตัม</span>
               <span style={{ fontSize: 10, color: C.textDim, fontFamily: MONO_FONT }}>{possHomePct}% — {possAwayPct}%</span>
             </div>
-            <div style={{ display: "flex", alignItems: "center", height: 22, gap: 1, marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", height: 46, gap: 2, marginBottom: 12, padding: "0 2px" }}>
               {momentum.length === 0 && <div style={{ fontSize: 10, color: C.textDim }}>รอข้อมูล...</div>}
-              {momentum.slice(-18).map((v, i) => (
+              {momentum.slice(-24).map((v, i) => (
                 <div key={i} style={{ flex: 1, height: "100%", position: "relative" }}>
+                  <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: "rgba(255,255,255,.1)" }} />
                   <div style={{
                     position: "absolute", left: 0, right: 0, height: `${Math.abs(v) / 2}%`,
                     background: v >= 0 ? "#ffd54f" : "#64b5f6",
@@ -11701,9 +11702,15 @@ function LiveMatchModal({ career, liveMatch, userAutoMode, onFinish, suggestTact
               ))}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px" }}>
+              <StatRow label="ครองบอล" home={possHomePct} away={possAwayPct} />
               <StatRow label="ยิงประตู" home={stats.shotsH} away={stats.shotsA} />
               <StatRow label="ยิงตรงกรอบ" home={stats.sotH} away={stats.sotA} />
+              <StatRow
+                label="ยิงแม่นยำ%"
+                home={stats.shotsH ? Math.round((stats.sotH / stats.shotsH) * 100) : 0}
+                away={stats.shotsA ? Math.round((stats.sotA / stats.shotsA) * 100) : 0}
+              />
               <StatRow label="เตะมุม" home={stats.cornersH} away={stats.cornersA} />
               <StatRow label="ฟาวล์" home={stats.foulsH} away={stats.foulsA} />
               <StatRow label="ใบเหลือง/แดง" home={stats.cardsH} away={stats.cardsA} />
