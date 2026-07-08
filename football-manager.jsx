@@ -14873,6 +14873,7 @@ function OnlineLiveHomeCard({ career }) {
   const [dataFetchedAt, setDataFetchedAt] = useState(null);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [resyncError, setResyncError] = useState("");
   const resyncingRef = useRef(false);
 
   async function poll() {
@@ -14885,8 +14886,11 @@ function OnlineLiveHomeCard({ career }) {
         try {
           await bootstrapOnlineFromCareer(career);
           club = await fetchMyShardClub();
+          setResyncError("");
         } catch (e) {
           console.error("online auto-resync ล้มเหลว", e);
+          // ลีคออนไลน์รับสมาชิกใหม่เฉพาะช่วง 20:00-09:00 — ไม่ใช่บั๊ก แค่ต้องรอรอบถัดไป
+          setResyncError(e?.message || "");
         } finally {
           resyncingRef.current = false;
         }
@@ -14910,7 +14914,7 @@ function OnlineLiveHomeCard({ career }) {
     ? data.nextKickoffEtaMs - (now - dataFetchedAt)
     : null;
   const statusLabel = !myClub
-    ? "ยังไม่ได้เชื่อมต่อสโมสรออนไลน์"
+    ? (resyncError || "ยังไม่ได้เชื่อมต่อสโมสรออนไลน์")
     : isLive
       ? `🔴 สด — ${myMatch.homeGoals}-${myMatch.awayGoals}`
       : isScheduled
@@ -14966,6 +14970,7 @@ function OnlineMatchCenterView({ uiLang = "th", career }) {
     setError("");
     try {
       let club = await fetchMyShardClub();
+      let resyncErr = "";
       if (!club && career?.playMode === "online" && !resyncingRef.current) {
         resyncingRef.current = true;
         try {
@@ -14973,11 +14978,13 @@ function OnlineMatchCenterView({ uiLang = "th", career }) {
           club = await fetchMyShardClub();
         } catch (e) {
           console.error("online auto-resync ล้มเหลว", e);
+          resyncErr = e?.message || "";
         } finally {
           resyncingRef.current = false;
         }
       }
       setMyClub(club);
+      if (!club && resyncErr) setError(resyncErr);
       if (club) {
         const d = await fetchShardMatchesToday();
         setData(d);
