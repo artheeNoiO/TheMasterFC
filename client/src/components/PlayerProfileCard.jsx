@@ -56,7 +56,7 @@ export default function PlayerProfileCard({
             alt=""
             draggable={false}
             style={{
-              width: "100%", height: "100%", objectFit: "cover", objectPosition: "center 14%",
+              width: "100%", height: "100%", objectFit: "cover", objectPosition: "center 32%",
               pointerEvents: "none",
             }}
           />

@@ -9026,7 +9026,7 @@ function MiniPortraitAvatar({ player, size = 30 }) {
       alt=""
       draggable={false}
       style={{
-        width: size, height: size, borderRadius: "50%", objectFit: "cover", objectPosition: "center 12%",
+        width: size, height: size, borderRadius: "50%", objectFit: "cover", objectPosition: "center 30%",
         flexShrink: 0, border: `1.5px solid ${C.steel}`, boxShadow: "0 1px 3px rgba(0,0,0,.3)",
       }}
     />
@@ -10773,7 +10773,7 @@ function FormationMiniBoard({ team, formationKey, xi, squad, ratings }) {
   const shirt = teamShirtColor(team);
   const trim = team?.secondaryColor || "#f2f0e6";
   return (
-    <Panel style={{ padding: 6, maxWidth: 190, margin: "0 auto" }}>
+    <Panel style={{ padding: 6, width: "100%", maxWidth: 280, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
         <span style={{ fontSize: 9.5, fontWeight: 800, color: C.chalk }}>{team?.short || team?.name}</span>
         <span style={{ fontSize: 8, color: C.textDim, fontFamily: MONO_FONT }}>{formation.label}</span>
@@ -10791,13 +10791,13 @@ function FormationMiniBoard({ team, formationKey, xi, squad, ratings }) {
           return (
             <div key={i} style={{ position: "absolute", left: `${slot.x}%`, top: `${slot.y}%`, transform: "translate(-50%, -50%)", display: "flex", flexDirection: "column", alignItems: "center" }}>
               <div style={{
-                width: 15, height: 15, borderRadius: "50%", background: shirt, border: `1px solid ${trim}`,
-                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 6.5, fontWeight: 800, color: "#08150e",
+                width: 19, height: 19, borderRadius: "50%", background: shirt, border: `1px solid ${trim}`,
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 7.5, fontWeight: 800, color: "#08150e",
                 fontFamily: MONO_FONT, boxShadow: "0 1px 2px rgba(0,0,0,.4)",
               }}>
                 {rating != null ? Math.round(rating * 10) / 10 : ""}
               </div>
-              <div style={{ fontSize: 6.5, color: C.chalk, marginTop: 1, maxWidth: 34, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              <div style={{ fontSize: 7.5, color: C.chalk, marginTop: 1, maxWidth: 46, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {p ? (p.name.split(" ")[1] || p.name) : "?"}
               </div>
             </div>
